@@ -1,7 +1,7 @@
 import { CooccurrenceGraph } from "./cooccurrence-graph.js";
 
 export class BoundedGraph extends CooccurrenceGraph {
-  private maxNodes: number;
+  private readonly maxNodes: number;
 
   constructor(maxNodes = 10000) {
     super();
@@ -15,9 +15,10 @@ export class BoundedGraph extends CooccurrenceGraph {
 
     const excess = nodes.length - this.maxNodes;
 
-    for (let i = 0; i < excess; i++) {
-      const node = nodes[i];
-      (this as any).adjacency.delete(node);
+    for (let index = 0; index < excess; index += 1) {
+      const node = nodes[index];
+      if (!node) continue;
+      this.removeNode(node);
     }
   }
 }
