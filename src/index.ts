@@ -14,3 +14,9 @@ export * from "./graph/cooccurrence-graph.js";
 export * from "./graph/ingest.js";
 export * from "./graph/louvain.js";
 export * from "./graph/community-mapping.js";
+
+// Production hardening
+export * from "./graph/bounded-graph.js";
+export * from "./graph/pruning.js";
+export * from "./graph/serialization.js";
+export * from "./graph/replay.js";
