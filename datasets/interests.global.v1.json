@@ -1,0 +1,649 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "open-interest-clusters-global",
+  "dataset_version": "2026-04-19",
+  "locale_default": "en",
+  "normalization": {
+    "unicode_form": "NFKC",
+    "casefold": true,
+    "strip_leading_hash_for_storage": true
+  },
+  "clusters": [
+    {
+      "id": "technology.apple",
+      "status": "active",
+      "display": {
+        "label": "Apple",
+        "short_description": "Apple ecosystem including iPhone, Mac, iPad, software, events, and Apple-related news",
+        "category": "Technology",
+        "subcategory": "Apple Ecosystem"
+      },
+      "anchor": {
+        "hashtag": "Apple",
+        "follow_by_default_if_interest_selected": true
+      },
+      "follow_behavior": {
+        "mode": "anchor_only",
+        "allow_user_opt_in_related_hashtags": false,
+        "max_auto_follow_hashtags": 1
+      },
+      "taxonomy": {
+        "parent_id": "technology.general",
+        "primary_subcategories": [
+          "technology.apple.iphone",
+          "technology.apple.mac",
+          "technology.apple.ipad",
+          "technology.apple.software",
+          "technology.apple.events",
+          "technology.apple.services"
+        ],
+        "related_cluster_ids": [
+          "technology.general",
+          "technology.mobile",
+          "artificial.intelligence"
+        ]
+      },
+      "hashtags": {
+        "anchor": [
+          "Apple"
+        ],
+        "aliases": [
+          "AppleInc",
+          "AppleNews",
+          "AppleEvent",
+          "AppleKeynote",
+          "AppleFedi",
+          "Applesky",
+          "Applestr"
+        ],
+        "adjacent": [
+          "iPhone",
+          "iOS",
+          "iPad",
+          "Mac",
+          "MacBook",
+          "AppleWatch",
+          "AppleVisionPro",
+          "visionOS",
+          "WWDC",
+          "AppleIntelligence",
+          "Siri",
+          "AppleAI",
+          "AppleSilicon",
+          "MacRumors",
+          "AppleLeaks"
+        ],
+        "excluded": [
+          "AppleFruit",
+          "AppleRecipes"
+        ]
+      },
+      "keywords": {
+        "high_value": [
+          "apple inc",
+          "iphone",
+          "macbook",
+          "ios update",
+          "wwdc",
+          "apple keynote",
+          "apple silicon"
+        ],
+        "secondary": [
+          "tim cook keynote",
+          "apple ecosystem",
+          "macos update",
+          "ipad os",
+          "apple services",
+          "apple event livestream"
+        ],
+        "negative": [
+          "apple pie",
+          "apple fruit nutrition",
+          "apple orchard"
+        ]
+      },
+      "entities": {
+        "brands": [
+          {
+            "label": "Apple Inc.",
+            "wikidata_id": "Q312",
+            "dbpedia_resource": "https://dbpedia.org/resource/Apple_Inc."
+          }
+        ],
+        "products": [
+          {
+            "label": "iPhone",
+            "wikidata_id": "Q4845",
+            "dbpedia_resource": "https://dbpedia.org/resource/IPhone"
+          }
+        ],
+        "people_or_orgs": [
+          {
+            "label": "Tim Cook",
+            "wikidata_id": "Q265852",
+            "dbpedia_resource": "https://dbpedia.org/resource/Tim_Cook"
+          }
+        ]
+      },
+      "multilingual": {
+        "language_variants": {
+          "en": {
+            "hashtags": [
+              "Apple",
+              "iPhone"
+            ],
+            "keywords": [
+              "apple keynote",
+              "ios update"
+            ]
+          },
+          "es": {
+            "keywords": [
+              "iphone",
+              "evento apple"
+            ]
+          },
+          "ja": {
+            "keywords": [
+              "アップル",
+              "iphone"
+            ]
+          }
+        },
+        "transliteration_enabled": true,
+        "embedding_profile": "multilingual-general-v1"
+      },
+      "retrieval": {
+        "expand_hashtags_for_matching": true,
+        "expand_keywords_for_matching": true,
+        "expand_entities_for_matching": true,
+        "allow_embedding_expansion": true,
+        "embedding_only_requires_min_confidence": 0.8
+      },
+      "ranking_hints": {
+        "freshness_half_life_hours": 18,
+        "featured_tag_boost": 1.4,
+        "pinned_post_keyword_boost": 1.25,
+        "profile_bio_keyword_boost": 1.15
+      },
+      "privacy": {
+        "respect_discoverable_false": true,
+        "respect_indexable_false": true,
+        "exclude_if_profile_or_posts_contain_opt_out_terms": true,
+        "opt_out_terms": [
+          "NoAI",
+          "NoBot",
+          "NoBots",
+          "NoCrawl",
+          "NoCrawling",
+          "NoIndex",
+          "NoIndexing",
+          "NoSearch",
+          "NoScrape",
+          "NoScraping",
+          "NoLLM",
+          "NoLLMs",
+          "Robotxt"
+        ]
+      },
+      "sources": {
+        "curated_by": "memory-core",
+        "seed_method": "fediverse-observed + curated",
+        "last_reviewed_at": "2026-04-19"
+      }
+    },
+    {
+      "id": "gaming.console",
+      "status": "active",
+      "display": {
+        "label": "Gaming",
+        "short_description": "Console gaming, game news, publishers, awards, major releases, and gaming culture",
+        "category": "Gaming",
+        "subcategory": "Console & General Gaming"
+      },
+      "anchor": {
+        "hashtag": "Gaming",
+        "follow_by_default_if_interest_selected": true
+      },
+      "follow_behavior": {
+        "mode": "anchor_only",
+        "allow_user_opt_in_related_hashtags": false,
+        "max_auto_follow_hashtags": 1
+      },
+      "taxonomy": {
+        "parent_id": "gaming.general",
+        "primary_subcategories": [
+          "gaming.console.playstation",
+          "gaming.console.xbox",
+          "gaming.console.nintendo",
+          "gaming.console.jrpg",
+          "gaming.console.indie",
+          "gaming.console.publishers"
+        ],
+        "related_cluster_ids": [
+          "gaming.pc",
+          "gaming.esports",
+          "entertainment.anime",
+          "sports.esports"
+        ]
+      },
+      "hashtags": {
+        "anchor": [
+          "Gaming"
+        ],
+        "aliases": [
+          "GameNews",
+          "GamingNews",
+          "FediGamer",
+          "Gamesky",
+          "Gamestr",
+          "ConsoleGaming",
+          "VideoGames"
+        ],
+        "adjacent": [
+          "PlayStation",
+          "PS5",
+          "PlayStation5",
+          "PS5Pro",
+          "PS5Slim",
+          "Xbox",
+          "XboxSeriesX",
+          "XboxSeriesS",
+          "Nintendo",
+          "Switch",
+          "GameInformer",
+          "PlaystationBlog",
+          "VideoGameAwards",
+          "VGA",
+          "RPG",
+          "JRPG",
+          "FPS",
+          "IndieGame",
+          "IndieGames",
+          "Madden",
+          "EASports",
+          "Hades",
+          "Balatro",
+          "NBA2K",
+          "AnimalCrossing",
+          "BattleRoyale",
+          "CallOfDuty",
+          "Fortnite",
+          "SquareEnix",
+          "YoshiP"
+        ],
+        "excluded": [
+          "Gamification",
+          "MindGames",
+          "GameNightBoardGames",
+          "HungerGames"
+        ]
+      },
+      "keywords": {
+        "high_value": [
+          "video game",
+          "video games",
+          "console gaming",
+          "gaming news",
+          "game awards",
+          "playstation",
+          "xbox",
+          "nintendo",
+          "jrpg",
+          "indie game"
+        ],
+        "secondary": [
+          "new game release",
+          "gaming showcase",
+          "console generation",
+          "game trailer",
+          "day one patch",
+          "digital deluxe",
+          "physical edition",
+          "frame rate",
+          "performance mode",
+          "story driven game"
+        ],
+        "negative": [
+          "game theory mathematics",
+          "wild game recipe",
+          "hunting game season",
+          "board game night",
+          "gamified learning",
+          "mind games relationship"
+        ]
+      },
+      "entities": {
+        "brands": [
+          {
+            "label": "PlayStation",
+            "wikidata_id": "Q10683",
+            "dbpedia_resource": "https://dbpedia.org/resource/PlayStation"
+          }
+        ],
+        "products": [
+          {
+            "label": "PlayStation 5",
+            "wikidata_id": "Q63184502",
+            "dbpedia_resource": "https://dbpedia.org/resource/PlayStation_5",
+            "aliases": [
+              "PS5",
+              "PlayStation5"
+            ]
+          }
+        ],
+        "people_or_orgs": [
+          {
+            "label": "Naoki Yoshida",
+            "wikidata_id": "Q11733267",
+            "dbpedia_resource": "https://dbpedia.org/resource/Naoki_Yoshida",
+            "aliases": [
+              "YoshiP"
+            ]
+          }
+        ]
+      },
+      "multilingual": {
+        "language_variants": {
+          "en": {
+            "hashtags": [
+              "Gaming",
+              "GameNews",
+              "PlayStation",
+              "Xbox",
+              "JRPG"
+            ],
+            "keywords": [
+              "video games",
+              "console gaming",
+              "gaming news"
+            ]
+          },
+          "es": {
+            "hashtags": [
+              "Videojuegos"
+            ],
+            "keywords": [
+              "videojuegos",
+              "juegos de consola",
+              "noticias de videojuegos"
+            ]
+          },
+          "ja": {
+            "keywords": [
+              "ゲーム",
+              "家庭用ゲーム",
+              "ゲームニュース",
+              "プレイステーション"
+            ]
+          }
+        },
+        "transliteration_enabled": true,
+        "embedding_profile": "multilingual-general-v1"
+      },
+      "retrieval": {
+        "expand_hashtags_for_matching": true,
+        "expand_keywords_for_matching": true,
+        "expand_entities_for_matching": true,
+        "allow_embedding_expansion": true,
+        "embedding_only_requires_min_confidence": 0.79
+      },
+      "ranking_hints": {
+        "freshness_half_life_hours": 24,
+        "featured_tag_boost": 1.35,
+        "pinned_post_keyword_boost": 1.2,
+        "profile_bio_keyword_boost": 1.1
+      },
+      "privacy": {
+        "respect_discoverable_false": true,
+        "respect_indexable_false": true,
+        "exclude_if_profile_or_posts_contain_opt_out_terms": true,
+        "opt_out_terms": [
+          "NoAI",
+          "NoBot",
+          "NoBots",
+          "NoCrawl",
+          "NoCrawling",
+          "NoIndex",
+          "NoIndexing",
+          "NoSearch",
+          "NoScrape",
+          "NoScraping",
+          "NoLLM",
+          "NoLLMs",
+          "Robotxt"
+        ]
+      },
+      "sources": {
+        "curated_by": "memory-core",
+        "seed_method": "fediverse-observed + curated",
+        "last_reviewed_at": "2026-04-19"
+      }
+    },
+    {
+      "id": "sports.nfl",
+      "status": "active",
+      "display": {
+        "label": "NFL",
+        "short_description": "National Football League news, games, teams, draft, player discussion, highlights, and NFL culture",
+        "category": "Sports",
+        "subcategory": "American Football"
+      },
+      "anchor": {
+        "hashtag": "NFL",
+        "follow_by_default_if_interest_selected": true
+      },
+      "follow_behavior": {
+        "mode": "anchor_only",
+        "allow_user_opt_in_related_hashtags": false,
+        "max_auto_follow_hashtags": 1
+      },
+      "taxonomy": {
+        "parent_id": "sports.general",
+        "primary_subcategories": [
+          "sports.nfl.games",
+          "sports.nfl.draft",
+          "sports.nfl.teams",
+          "sports.nfl.players",
+          "sports.nfl.fantasy",
+          "sports.nfl.playoffs"
+        ],
+        "related_cluster_ids": [
+          "sports.americanfootball",
+          "sports.cfb",
+          "sports.fantasysports"
+        ]
+      },
+      "hashtags": {
+        "anchor": [
+          "NFL"
+        ],
+        "aliases": [
+          "NationalFootballLeague",
+          "NFLSky",
+          "NFLstr",
+          "NFLonFedi",
+          "NFLonMastodon",
+          "AmericanFootball"
+        ],
+        "adjacent": [
+          "NFLDraft",
+          "NFLHighlights",
+          "NFLCombine",
+          "SeniorBowl",
+          "Shrinegame",
+          "Quarterback",
+          "Quaterbacks",
+          "Runningback",
+          "WideReceiver",
+          "TightEnd",
+          "OffensiveLine",
+          "DefensiveEnd",
+          "DefensiveTackle",
+          "Safety",
+          "Cornerback",
+          "SpecialTeams",
+          "SuperBowl",
+          "TNF",
+          "MNF",
+          "Touchdown",
+          "Fumble",
+          "FantasyFootball",
+          "NFLFantasy",
+          "NFLFantasyFootball",
+          "GoodMorningFootball",
+          "NFLNetwork",
+          "KansasCityChiefs",
+          "PhiladelphiaEagles",
+          "PittsburgSteelers",
+          "SanFransisco49ers",
+          "SeattleSeahawks",
+          "WashingtonCommanders"
+        ],
+        "excluded": [
+          "NFLStreet",
+          "FantasyPremierLeague",
+          "CollegeFootballOnly"
+        ]
+      },
+      "keywords": {
+        "high_value": [
+          "nfl",
+          "national football league",
+          "american football",
+          "nfl draft",
+          "nfl playoffs",
+          "super bowl",
+          "fantasy football",
+          "nfl highlights",
+          "nfl combine",
+          "nfl network"
+        ],
+        "secondary": [
+          "mock draft",
+          "free agency",
+          "salary cap",
+          "quarterback play",
+          "red zone",
+          "film room",
+          "all pro selection",
+          "training camp",
+          "draft board",
+          "trade rumors"
+        ],
+        "negative": [
+          "nfl street",
+          "football manager",
+          "fantasy premier league",
+          "soccer transfer window",
+          "college football only",
+          "rugby league"
+        ]
+      },
+      "entities": {
+        "brands": [
+          {
+            "label": "National Football League",
+            "wikidata_id": "Q1215884",
+            "dbpedia_resource": "https://dbpedia.org/resource/National_Football_League",
+            "aliases": [
+              "NFL"
+            ]
+          }
+        ],
+        "products": [
+          {
+            "label": "Super Bowl",
+            "wikidata_id": "Q181597",
+            "dbpedia_resource": "https://dbpedia.org/resource/Super_Bowl"
+          }
+        ],
+        "people_or_orgs": [
+          {
+            "label": "Kansas City Chiefs",
+            "wikidata_id": "Q319447",
+            "dbpedia_resource": "https://dbpedia.org/resource/Kansas_City_Chiefs"
+          }
+        ]
+      },
+      "multilingual": {
+        "language_variants": {
+          "en": {
+            "hashtags": [
+              "NFL",
+              "NFLDraft",
+              "SuperBowl",
+              "FantasyFootball"
+            ],
+            "keywords": [
+              "national football league",
+              "american football",
+              "nfl playoffs"
+            ]
+          },
+          "es": {
+            "keywords": [
+              "futbol americano",
+              "super bowl",
+              "draft de la nfl"
+            ]
+          },
+          "pt": {
+            "keywords": [
+              "futebol americano",
+              "nfl",
+              "super bowl"
+            ]
+          },
+          "ja": {
+            "keywords": [
+              "nfl",
+              "アメリカンフットボール",
+              "スーパーボウル"
+            ]
+          }
+        },
+        "transliteration_enabled": true,
+        "embedding_profile": "multilingual-general-v1"
+      },
+      "retrieval": {
+        "expand_hashtags_for_matching": true,
+        "expand_keywords_for_matching": true,
+        "expand_entities_for_matching": true,
+        "allow_embedding_expansion": true,
+        "embedding_only_requires_min_confidence": 0.81
+      },
+      "ranking_hints": {
+        "freshness_half_life_hours": 12,
+        "featured_tag_boost": 1.4,
+        "pinned_post_keyword_boost": 1.2,
+        "profile_bio_keyword_boost": 1.1
+      },
+      "privacy": {
+        "respect_discoverable_false": true,
+        "respect_indexable_false": true,
+        "exclude_if_profile_or_posts_contain_opt_out_terms": true,
+        "opt_out_terms": [
+          "NoAI",
+          "NoBot",
+          "NoBots",
+          "NoCrawl",
+          "NoCrawling",
+          "NoIndex",
+          "NoIndexing",
+          "NoSearch",
+          "NoScrape",
+          "NoScraping",
+          "NoLLM",
+          "NoLLMs",
+          "Robotxt"
+        ]
+      },
+      "sources": {
+        "curated_by": "memory-core",
+        "seed_method": "fediverse-observed + curated",
+        "last_reviewed_at": "2026-04-19"
+      }
+    }
+  ]
+}

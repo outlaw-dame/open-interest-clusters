@@ -1,0 +1,598 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory.example/schemas/interest-cluster.schema.json",
+  "title": "Interest Cluster Dataset",
+  "description": "Portable schema for canonical hashtag interest clusters used for onboarding, hashtag-follow seeding, retrieval expansion, recommendations, and privacy-aware discovery.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "dataset_version",
+    "locale_default",
+    "normalization",
+    "clusters"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Version of the schema contract.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "dataset_id": {
+      "type": "string",
+      "description": "Stable identifier for the dataset."
+    },
+    "dataset_version": {
+      "type": "string",
+      "description": "Version or release date of the dataset."
+    },
+    "locale_default": {
+      "type": "string",
+      "description": "Default BCP 47 locale for human-readable strings.",
+      "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+    },
+    "normalization": {
+      "$ref": "#/$defs/NormalizationSettings"
+    },
+    "clusters": {
+      "type": "array",
+      "description": "Canonical interest clusters.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/InterestCluster"
+      }
+    }
+  },
+  "$defs": {
+    "NormalizedHashtag": {
+      "type": "string",
+      "description": "Normalized hashtag value without the leading #.",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?!#)\\S+$"
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "StringArrayUnique": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "NormalizationSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unicode_form",
+        "casefold",
+        "strip_leading_hash_for_storage"
+      ],
+      "properties": {
+        "unicode_form": {
+          "type": "string",
+          "enum": [
+            "NFC",
+            "NFD",
+            "NFKC",
+            "NFKD"
+          ]
+        },
+        "casefold": {
+          "type": "boolean"
+        },
+        "strip_leading_hash_for_storage": {
+          "type": "boolean"
+        }
+      }
+    },
+    "DisplayInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "category"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "short_description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "category": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "subcategory": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "Anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hashtag",
+        "follow_by_default_if_interest_selected"
+      ],
+      "properties": {
+        "hashtag": {
+          "$ref": "#/$defs/NormalizedHashtag"
+        },
+        "follow_by_default_if_interest_selected": {
+          "type": "boolean"
+        }
+      }
+    },
+    "FollowBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "allow_user_opt_in_related_hashtags",
+        "max_auto_follow_hashtags"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "anchor_only",
+            "anchor_plus_related",
+            "manual_only"
+          ]
+        },
+        "allow_user_opt_in_related_hashtags": {
+          "type": "boolean"
+        },
+        "max_auto_follow_hashtags": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50
+        }
+      }
+    },
+    "Taxonomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_subcategories"
+      ],
+      "properties": {
+        "parent_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$"
+        },
+        "primary_subcategories": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$"
+          }
+        },
+        "related_cluster_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$"
+          }
+        }
+      }
+    },
+    "HashtagGroups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor",
+        "aliases",
+        "adjacent",
+        "excluded"
+      ],
+      "properties": {
+        "anchor": {
+          "type": "array",
+          "description": "Preferred primary hashtag(s); most clusters should use exactly one.",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NormalizedHashtag"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "description": "Near-equivalent hashtags for normalization and recall.",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NormalizedHashtag"
+          }
+        },
+        "adjacent": {
+          "type": "array",
+          "description": "Related but not always equivalent hashtags used for retrieval expansion.",
+          "maxItems": 40,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NormalizedHashtag"
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "description": "Hashtags that look similar but must not be absorbed into the cluster.",
+          "maxItems": 40,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NormalizedHashtag"
+          }
+        }
+      }
+    },
+    "KeywordGroups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "high_value",
+        "secondary",
+        "negative"
+      ],
+      "properties": {
+        "high_value": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "secondary": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "negative": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      }
+    },
+    "WikidataId": {
+      "type": "string",
+      "pattern": "^Q[1-9][0-9]*$"
+    },
+    "DBpediaResourceUri": {
+      "type": "string",
+      "pattern": "^https?://([a-z]+\\.)?dbpedia\\.org/resource/.+$"
+    },
+    "EntityReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "wikidata_id": {
+          "$ref": "#/$defs/WikidataId"
+        },
+        "dbpedia_resource": {
+          "$ref": "#/$defs/DBpediaResourceUri"
+        },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "wikidata_id"
+              ]
+            },
+            {
+              "required": [
+                "dbpedia_resource"
+              ]
+            },
+            {
+              "required": [
+                "aliases"
+              ]
+            },
+            {
+              "required": [
+                "label"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Entities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brands": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/EntityReference"
+          }
+        },
+        "products": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/EntityReference"
+          }
+        },
+        "people_or_orgs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/EntityReference"
+          }
+        },
+        "custom": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/EntityReference"
+          }
+        }
+      }
+    },
+    "LanguageVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hashtags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NormalizedHashtag"
+          }
+        },
+        "keywords": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      }
+    },
+    "Multilingual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language_variants",
+        "transliteration_enabled",
+        "embedding_profile"
+      ],
+      "properties": {
+        "language_variants": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/LanguageVariant"
+          }
+        },
+        "transliteration_enabled": {
+          "type": "boolean"
+        },
+        "embedding_profile": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "Retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expand_hashtags_for_matching",
+        "expand_keywords_for_matching",
+        "expand_entities_for_matching",
+        "allow_embedding_expansion",
+        "embedding_only_requires_min_confidence"
+      ],
+      "properties": {
+        "expand_hashtags_for_matching": {
+          "type": "boolean"
+        },
+        "expand_keywords_for_matching": {
+          "type": "boolean"
+        },
+        "expand_entities_for_matching": {
+          "type": "boolean"
+        },
+        "allow_embedding_expansion": {
+          "type": "boolean"
+        },
+        "embedding_only_requires_min_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      }
+    },
+    "RankingHints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "freshness_half_life_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "featured_tag_boost": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pinned_post_keyword_boost": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "profile_bio_keyword_boost": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "Privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "respect_discoverable_false",
+        "respect_indexable_false",
+        "exclude_if_profile_or_posts_contain_opt_out_terms",
+        "opt_out_terms"
+      ],
+      "properties": {
+        "respect_discoverable_false": {
+          "type": "boolean"
+        },
+        "respect_indexable_false": {
+          "type": "boolean"
+        },
+        "exclude_if_profile_or_posts_contain_opt_out_terms": {
+          "type": "boolean"
+        },
+        "opt_out_terms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      }
+    },
+    "SourceMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "curated_by",
+        "seed_method",
+        "last_reviewed_at"
+      ],
+      "properties": {
+        "curated_by": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "seed_method": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "last_reviewed_at": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "InterestCluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "display",
+        "anchor",
+        "follow_behavior",
+        "taxonomy",
+        "hashtags",
+        "keywords",
+        "privacy",
+        "sources"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable canonical identifier for the cluster.",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "deprecated",
+            "experimental"
+          ]
+        },
+        "display": {
+          "$ref": "#/$defs/DisplayInfo"
+        },
+        "anchor": {
+          "$ref": "#/$defs/Anchor"
+        },
+        "follow_behavior": {
+          "$ref": "#/$defs/FollowBehavior"
+        },
+        "taxonomy": {
+          "$ref": "#/$defs/Taxonomy"
+        },
+        "hashtags": {
+          "$ref": "#/$defs/HashtagGroups"
+        },
+        "keywords": {
+          "$ref": "#/$defs/KeywordGroups"
+        },
+        "entities": {
+          "$ref": "#/$defs/Entities"
+        },
+        "multilingual": {
+          "$ref": "#/$defs/Multilingual"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/Retrieval"
+        },
+        "ranking_hints": {
+          "$ref": "#/$defs/RankingHints"
+        },
+        "privacy": {
+          "$ref": "#/$defs/Privacy"
+        },
+        "sources": {
+          "$ref": "#/$defs/SourceMetadata"
+        }
+      },
+      "allOf": [
+        {
+          "properties": {
+            "hashtags": {
+              "properties": {
+                "anchor": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
