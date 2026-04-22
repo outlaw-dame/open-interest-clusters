@@ -34,3 +34,6 @@ export * from "./entities/cluster-entity-index.js";
 export * from "./scoring/hybrid.js";
 export * from "./scoring/bandit.js";
 export * from "./scoring/feedback-store.js";
+export * from "./scoring/context.js";
+export * from "./scoring/contextual-store.js";
+export * from "./scoring/session.js";
