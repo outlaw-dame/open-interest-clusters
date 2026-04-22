@@ -7,6 +7,8 @@ export interface HybridScoreInput {
   entityMatches?: readonly ClusterEntityMatch[];
   graphBoost?: Map<string, number>;
   banditStates?: Map<string, BanditArmState>;
+  contextualBanditStates?: Map<string, BanditArmState>;
+  sessionBanditStates?: Map<string, BanditArmState>;
   totalBanditObservations?: number;
 }
 
@@ -18,7 +20,16 @@ export interface HybridScoreResult {
     entity: number;
     graph: number;
     bandit: number;
+    contextual: number;
+    session: number;
   };
+}
+
+function sumObservations(states?: Map<string, BanditArmState>): number {
+  if (!states) return 0;
+  let total = 0;
+  for (const s of states.values()) total += getBanditObservationCount(s);
+  return total;
 }
 
 export function hybridScore(input: HybridScoreInput): HybridScoreResult[] {
@@ -29,7 +40,7 @@ export function hybridScore(input: HybridScoreInput): HybridScoreResult[] {
       scores.set(clusterId, {
         clusterId,
         score,
-        components: { deterministic: score, entity: 0, graph: 0, bandit: 0 }
+        components: { deterministic: score, entity: 0, graph: 0, bandit: 0, contextual: 0, session: 0 }
       });
     }
   }
@@ -39,12 +50,11 @@ export function hybridScore(input: HybridScoreInput): HybridScoreResult[] {
       const existing = scores.get(match.clusterId) ?? {
         clusterId: match.clusterId,
         score: 0,
-        components: { deterministic: 0, entity: 0, graph: 0, bandit: 0 }
+        components: { deterministic: 0, entity: 0, graph: 0, bandit: 0, contextual: 0, session: 0 }
       };
 
       existing.components.entity += match.score;
       existing.score += match.score;
-
       scores.set(match.clusterId, existing);
     }
   }
@@ -53,30 +63,43 @@ export function hybridScore(input: HybridScoreInput): HybridScoreResult[] {
     for (const [clusterId, boost] of input.graphBoost.entries()) {
       const existing = scores.get(clusterId);
       if (!existing) continue;
-
       existing.components.graph += boost;
       existing.score += boost;
     }
   }
 
+  const totalObs = input.totalBanditObservations
+    ?? sumObservations(input.banditStates)
+    + sumObservations(input.contextualBanditStates)
+    + sumObservations(input.sessionBanditStates);
+
   if (input.banditStates) {
-    let totalObs = input.totalBanditObservations;
-
-    if (!totalObs) {
-      totalObs = 0;
-      for (const state of input.banditStates.values()) {
-        totalObs += getBanditObservationCount(state);
-      }
-    }
-
     for (const [clusterId, state] of input.banditStates.entries()) {
-      const banditScore = scoreBanditState(state, totalObs);
-
+      const score = scoreBanditState(state, totalObs);
       const existing = scores.get(clusterId);
       if (!existing) continue;
+      existing.components.bandit += score;
+      existing.score += score;
+    }
+  }
 
-      existing.components.bandit += banditScore;
-      existing.score += banditScore;
+  if (input.contextualBanditStates) {
+    for (const [clusterId, state] of input.contextualBanditStates.entries()) {
+      const score = scoreBanditState(state, totalObs) * 0.7;
+      const existing = scores.get(clusterId);
+      if (!existing) continue;
+      existing.components.contextual += score;
+      existing.score += score;
+    }
+  }
+
+  if (input.sessionBanditStates) {
+    for (const [clusterId, state] of input.sessionBanditStates.entries()) {
+      const score = scoreBanditState(state, totalObs) * 0.5;
+      const existing = scores.get(clusterId);
+      if (!existing) continue;
+      existing.components.session += score;
+      existing.score += score;
     }
   }
 
