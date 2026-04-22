@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { EntityGraphResolver, EntityRelation, EntityRelationEdge } from "./types.js";
+import type { EntityGraphCacheStore } from "./cache.js";
 
 interface ResolverCacheEntry {
   edges: EntityRelationEdge[];
@@ -27,6 +28,7 @@ export interface WikidataGraphResolverOptions {
   timeoutMs?: number;
   hopDecay?: number;
   fetchImpl?: FetchLike;
+  persistentCache?: EntityGraphCacheStore;
 }
 
 const ENTITY_ID_PATTERN = /^Q[1-9][0-9]*$/;
@@ -69,6 +71,7 @@ export class WikidataGraphResolver implements EntityGraphResolver {
   private readonly timeoutMs: number;
   private readonly hopDecay: number;
   private readonly fetchImpl: FetchLike;
+  private readonly persistentCache?: EntityGraphCacheStore;
   private readonly cache = new Map<string, ResolverCacheEntry>();
 
   public constructor(options: WikidataGraphResolverOptions = {}) {
@@ -84,6 +87,7 @@ export class WikidataGraphResolver implements EntityGraphResolver {
     this.timeoutMs = Math.max(100, options.timeoutMs ?? 5_000);
     this.hopDecay = Math.min(1, Math.max(0, options.hopDecay ?? 0.75));
     this.fetchImpl = options.fetchImpl ?? (fetch as unknown as FetchLike);
+    this.persistentCache = options.persistentCache;
   }
 
   public async resolveNeighbors(entityIds: readonly string[]): Promise<EntityRelationEdge[]> {
@@ -134,6 +138,7 @@ export class WikidataGraphResolver implements EntityGraphResolver {
     const staleFallback = new Map<string, EntityRelationEdge[]>();
     const now = Date.now();
 
+    // 1. memory cache
     for (const entityId of entityIds) {
       const cached = this.cache.get(entityId);
       if (cached && cached.expiresAt > now) {
@@ -144,13 +149,39 @@ export class WikidataGraphResolver implements EntityGraphResolver {
       }
     }
 
-    for (let index = 0; index < pending.length; index += this.maxBatchSize) {
-      const batch = pending.slice(index, index + this.maxBatchSize);
+    // 2. persistent cache
+    if (this.persistentCache && pending.length > 0) {
+      const diskEntries = await this.persistentCache.getMany(pending);
+      for (const [entityId, entry] of diskEntries.entries()) {
+        if (entry.expiresAt > now) {
+          result.set(entityId, cloneEdges(entry.edges));
+          this.cache.set(entityId, entry);
+        }
+      }
+    }
+
+    const stillPending = entityIds.filter((id) => !result.has(id));
+
+    for (let index = 0; index < stillPending.length; index += this.maxBatchSize) {
+      const batch = stillPending.slice(index, index + this.maxBatchSize);
       try {
         const fetched = await this.fetchEntityRelations(batch);
+
+        const persistBatch = new Map<string, ResolverCacheEntry>();
+
         for (const [entityId, edges] of fetched.entries()) {
+          const entry = {
+            edges: cloneEdges(edges),
+            expiresAt: Date.now() + this.cacheTtlMs
+          };
+
           result.set(entityId, cloneEdges(edges));
-          this.setCache(entityId, edges);
+          this.cache.set(entityId, entry);
+          persistBatch.set(entityId, entry);
+        }
+
+        if (this.persistentCache) {
+          await this.persistentCache.setMany(persistBatch);
         }
       } catch {
         for (const entityId of batch) {
@@ -260,17 +291,5 @@ export class WikidataGraphResolver implements EntityGraphResolver {
     }
 
     return output;
-  }
-
-  private setCache(entityId: string, edges: readonly EntityRelationEdge[]): void {
-    this.cache.set(entityId, {
-      edges: cloneEdges(edges),
-      expiresAt: Date.now() + this.cacheTtlMs
-    });
-
-    if (this.cache.size <= this.maxCacheEntries) return;
-
-    const oldest = this.cache.keys().next().value;
-    if (typeof oldest === "string") this.cache.delete(oldest);
   }
 }
