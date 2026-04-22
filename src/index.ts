@@ -32,3 +32,5 @@ export * from "./entities/cluster-entity-index.js";
 
 // Scoring
 export * from "./scoring/hybrid.js";
+export * from "./scoring/bandit.js";
+export * from "./scoring/feedback-store.js";
