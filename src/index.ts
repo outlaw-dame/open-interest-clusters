@@ -21,9 +21,14 @@ export * from "./graph/pruning.js";
 export * from "./graph/serialization.js";
 export * from "./graph/replay.js";
 
-// Entities (NEW)
+// Entities
 export * from "./entities/types.js";
 export * from "./entities/extractor.js";
 export * from "./entities/pipeline.js";
 export * from "./entities/cluster-mapper.js";
 export * from "./entities/wikidata-graph-resolver.js";
+export * from "./entities/cache.js";
+export * from "./entities/cluster-entity-index.js";
+
+// Scoring
+export * from "./scoring/hybrid.js";
