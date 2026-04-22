@@ -26,3 +26,4 @@ export * from "./entities/types.js";
 export * from "./entities/extractor.js";
 export * from "./entities/pipeline.js";
 export * from "./entities/cluster-mapper.js";
+export * from "./entities/wikidata-graph-resolver.js";
