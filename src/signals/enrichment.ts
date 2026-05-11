@@ -19,14 +19,17 @@ export interface EnrichedSignalResult {
   linkedEntities: LinkedEntity[];
 }
 
-const TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
+const WORD_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
 
 function extractKeywords(text: string, maxKeywords: number): string[] {
   const seen = new Set<string>();
   const keywords: string[] = [];
 
-  for (const match of text.matchAll(TOKEN_PATTERN)) {
-    const value = normalizeString(match[0]);
+  for (const match of text.matchAll(WORD_PATTERN)) {
+    const lexeme = match[0];
+    if (!lexeme) continue;
+
+    const value = normalizeString(lexeme);
     if (value.length < 2 || seen.has(value)) continue;
     seen.add(value);
     keywords.push(value);
