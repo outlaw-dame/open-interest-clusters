@@ -4,6 +4,11 @@ export * from "./normalization/hashtags.js";
 export * from "./loaders/dataset-loader.js";
 export * from "./loaders/remote-loader.js";
 
+// Signals
+export * from "./signals/types.js";
+export * from "./signals/activitypub.js";
+export * from "./signals/atproto.js";
+
 // Matching layer
 export * from "./matching/index.js";
 export * from "./matching/resolve-hashtag.js";
