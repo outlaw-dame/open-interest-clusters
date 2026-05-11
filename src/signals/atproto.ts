@@ -32,13 +32,11 @@ export function normalizeATProtoSignal(input: Record<string, unknown>): UnifiedS
     ? record.tags.filter((tag): tag is string => typeof tag === "string")
     : [];
 
-  return {
+  const signal: UnifiedSignal = {
     id: String(input.uri ?? input.cid ?? "unknown"),
-    canonicalUrl: typeof input.uri === "string" ? input.uri : undefined,
     kind: "post",
     nativeProtocol: "atproto",
     authorId: String(input.did ?? input.authorDid ?? input.author ?? "unknown"),
-    authorHandle: typeof input.handle === "string" ? input.handle : undefined,
     text: typeof record.text === "string" ? record.text : "",
     hashtags,
     keywords: [],
@@ -51,4 +49,14 @@ export function normalizeATProtoSignal(input: Record<string, unknown>): UnifiedS
     indexable: true,
     discoverableAuthor: true
   };
+
+  if (typeof input.uri === "string") {
+    signal.canonicalUrl = input.uri;
+  }
+
+  if (typeof input.handle === "string") {
+    signal.authorHandle = input.handle;
+  }
+
+  return signal;
 }
