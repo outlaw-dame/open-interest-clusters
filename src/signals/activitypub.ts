@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { UnifiedSignal, SignalKind, SignalVisibility } from "./types.js";
 
 function inferKind(activityType?: string, objectType?: string): SignalKind {
@@ -42,7 +44,7 @@ export function normalizeActivityPubSignal(input: Record<string, unknown>): Unif
     : [];
 
   return {
-    id: String(input.id ?? crypto.randomUUID()),
+    id: String(input.id ?? randomUUID()),
     kind: inferKind(
       typeof input.type === "string" ? input.type : undefined,
       typeof object?.type === "string" ? object.type : undefined
