@@ -3,13 +3,17 @@ import assert from "node:assert/strict";
 
 import { rerankMultiObjective } from "../src/scoring/multi-objective.js";
 
-test("boosts novelty for unseen clusters", () => {
+test("adds a positive novelty component for unseen clusters", () => {
   const ranked = rerankMultiObjective([
     { clusterId: "gaming", score: 10, category: "gaming", seenRecently: true },
     { clusterId: "fitness", score: 9, category: "fitness", seenRecently: false }
   ]);
 
-  assert.equal(ranked[0]?.clusterId, "fitness");
+  const fitness = ranked.find((item) => item.clusterId === "fitness");
+  const gaming = ranked.find((item) => item.clusterId === "gaming");
+
+  assert.equal(fitness?.components.novelty, 0.15);
+  assert.equal(gaming?.components.novelty, 0);
 });
 
 test("applies diversity penalties for repeated categories", () => {
