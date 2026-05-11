@@ -25,12 +25,25 @@ jobs:
       - name: Configure npm registry
         run: |
           npm config set registry https://registry.npmjs.org/
-          npm config set replace-registry-host always
+          npm config delete replace-registry-host || true
           npm config set fetch-retries 5
           npm config set fetch-retry-factor 2
           npm config set fetch-retry-mintimeout 20000
           npm config set fetch-retry-maxtimeout 120000
           npm config set prefer-online true
+
+      - name: Normalize lockfile registry URLs
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'package-lock.json';
+          const lockfile = fs.readFileSync(path, 'utf8');
+          const normalized = lockfile.replaceAll(
+            'https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/',
+            'https://registry.npmjs.org/'
+          );
+          fs.writeFileSync(path, normalized);
+          NODE
 
       - name: Install
         run: |
