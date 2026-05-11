@@ -16,18 +16,18 @@ import {
 const cluster: InterestCluster = {
   id: "gaming.console",
   status: "active",
-  follow_behavior: "opt_in",
-  privacy: {
-    indexable: true,
-    discoverable: true
-  },
-  sources: [],
   display: {
     label: "Console Gaming",
     category: "gaming"
   },
   anchor: {
-    hashtag: "#PS5"
+    hashtag: "#PS5",
+    follow_by_default_if_interest_selected: true
+  },
+  follow_behavior: {
+    mode: "anchor_plus_related",
+    allow_user_opt_in_related_hashtags: true,
+    max_auto_follow_hashtags: 8
   },
   taxonomy: {
     primary_subcategories: ["PlayStation", "PlayStation"]
@@ -35,11 +35,24 @@ const cluster: InterestCluster = {
   hashtags: {
     anchor: ["PS5"],
     aliases: ["PS5", "PlayStation5"],
-    adjacent: []
+    adjacent: [],
+    excluded: []
   },
   keywords: {
     high_value: ["PS5"],
-    secondary: ["Console Gaming"]
+    secondary: ["Console Gaming"],
+    negative: []
+  },
+  privacy: {
+    respect_discoverable_false: true,
+    respect_indexable_false: true,
+    exclude_if_profile_or_posts_contain_opt_out_terms: true,
+    opt_out_terms: ["#NoAI", "#NoIndex"]
+  },
+  sources: {
+    curated_by: "test",
+    seed_method: "manual",
+    last_reviewed_at: "2026-01-01T00:00:00.000Z"
   }
 };
 
@@ -50,7 +63,8 @@ const dataset: InterestClusterDataset = {
   locale_default: "en-US",
   normalization: {
     unicode_form: "NFKC",
-    case_sensitive: false
+    casefold: true,
+    strip_leading_hash_for_storage: true
   },
   clusters: [cluster]
 };
