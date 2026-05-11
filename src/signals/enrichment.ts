@@ -77,9 +77,18 @@ export async function enrichSignal(
   const textKeywords = options.includeTextKeywords === false ? [] : extractKeywords(input.text, maxKeywords);
   const keywords = Array.from(new Set([...existingKeywords, ...textKeywords])).slice(0, maxKeywords);
 
-  const linkedEntities = options.extractor
-    ? await extractAndLinkEntities(input.text, { extractor: options.extractor, linker: options.linker })
-    : [];
+  let linkedEntities: LinkedEntity[] = [];
+
+  if (options.extractor) {
+    linkedEntities = options.linker
+      ? await extractAndLinkEntities(input.text, {
+          extractor: options.extractor,
+          linker: options.linker
+        })
+      : await extractAndLinkEntities(input.text, {
+          extractor: options.extractor
+        });
+  }
 
   if (options.graph) {
     ingestPostIntoGraph(normalizedHashtags, options.graph);
