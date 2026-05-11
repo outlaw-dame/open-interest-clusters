@@ -15,6 +15,8 @@ export * from "./signals/enrichment.js";
 export * from "./embedding/types.js";
 export * from "./embedding/similarity.js";
 export * from "./embedding/cluster-embedding-index.js";
+export * from "./embedding/text.js";
+export * from "./embedding/orchestrator.js";
 
 // Matching layer
 export * from "./matching/index.js";
