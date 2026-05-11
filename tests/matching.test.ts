@@ -8,13 +8,13 @@ import datasetJson from "../datasets/interests.global.v1.json" with { type: "jso
 
 const dataset = datasetJson as InterestClusterDataset;
 
-test("resolveClustersFromHashtag resolves gaming hashtag", () => {
+test("resolveClustersFromHashtag resolves PS5 to the console gaming cluster", () => {
   const index = buildClusterIndex(dataset);
   const result = resolveClustersFromHashtag("#PS5", index);
-  assert.ok(result.includes("gaming"));
+  assert.ok(result.includes("gaming.console"));
 });
 
-test("matchTextToClusters matches gaming context", () => {
+test("matchTextToClusters matches PS5 context to console gaming", () => {
   const index = buildClusterIndex(dataset);
 
   const results = matchTextToClusters(
@@ -24,7 +24,7 @@ test("matchTextToClusters matches gaming context", () => {
   );
 
   assert.ok(results[0]);
-  assert.equal(results[0]?.clusterId, "gaming");
+  assert.equal(results[0]?.clusterId, "gaming.console");
 });
 
 test("negative keywords suppress incorrect matches", () => {
