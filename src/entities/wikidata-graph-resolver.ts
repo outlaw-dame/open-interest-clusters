@@ -71,7 +71,7 @@ export class WikidataGraphResolver implements EntityGraphResolver {
   private readonly timeoutMs: number;
   private readonly hopDecay: number;
   private readonly fetchImpl: FetchLike;
-  private readonly persistentCache?: EntityGraphCacheStore;
+  private readonly persistentCache: EntityGraphCacheStore | undefined;
   private readonly cache = new Map<string, ResolverCacheEntry>();
 
   public constructor(options: WikidataGraphResolverOptions = {}) {
@@ -87,7 +87,10 @@ export class WikidataGraphResolver implements EntityGraphResolver {
     this.timeoutMs = Math.max(100, options.timeoutMs ?? 5_000);
     this.hopDecay = Math.min(1, Math.max(0, options.hopDecay ?? 0.75));
     this.fetchImpl = options.fetchImpl ?? (fetch as unknown as FetchLike);
-    this.persistentCache = options.persistentCache;
+
+    if (options.persistentCache) {
+      this.persistentCache = options.persistentCache;
+    }
   }
 
   public async resolveNeighbors(entityIds: readonly string[]): Promise<EntityRelationEdge[]> {
@@ -138,7 +141,6 @@ export class WikidataGraphResolver implements EntityGraphResolver {
     const staleFallback = new Map<string, EntityRelationEdge[]>();
     const now = Date.now();
 
-    // 1. memory cache
     for (const entityId of entityIds) {
       const cached = this.cache.get(entityId);
       if (cached && cached.expiresAt > now) {
@@ -149,7 +151,6 @@ export class WikidataGraphResolver implements EntityGraphResolver {
       }
     }
 
-    // 2. persistent cache
     if (this.persistentCache && pending.length > 0) {
       const diskEntries = await this.persistentCache.getMany(pending);
       for (const [entityId, entry] of diskEntries.entries()) {
@@ -213,7 +214,7 @@ export class WikidataGraphResolver implements EntityGraphResolver {
       try {
         const response = await this.fetchImpl(url.toString(), {
           method: "GET",
-          headers: { "Accept": "application/json" },
+          headers: { Accept: "application/json" },
           signal: controller.signal
         });
 
