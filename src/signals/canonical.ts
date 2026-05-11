@@ -41,7 +41,19 @@ function copyStrings(values: readonly string[] | undefined): string[] {
 }
 
 function copyEntities(values: readonly SignalEntityReference[] | undefined): SignalEntityReference[] {
-  return values ? values.map((entity) => ({ ...entity, aliases: entity.aliases ? [...entity.aliases] : undefined })) : [];
+  if (!values) return [];
+
+  return values.map((entity) => {
+    const copied: SignalEntityReference = {
+      label: entity.label
+    };
+
+    if (entity.wikidataId) copied.wikidataId = entity.wikidataId;
+    if (entity.dbpediaResource) copied.dbpediaResource = entity.dbpediaResource;
+    if (entity.aliases) copied.aliases = [...entity.aliases];
+
+    return copied;
+  });
 }
 
 function copyLinks(values: readonly SignalFacetLink[] | undefined): SignalFacetLink[] {
