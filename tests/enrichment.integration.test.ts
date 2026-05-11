@@ -55,7 +55,7 @@ test("enriches ActivityPub signals consistently", async () => {
   assert.equal(enriched.signal.hashtags[0], "ps5");
   assert.ok(enriched.signal.keywords.includes("playstation"));
   assert.equal(enriched.signal.entities[0]?.wikidataId, "Q10683");
-  assert.ok(graph.hasNode("ps5"));
+  assert.ok(graph.getNeighbors("ps5")?.has("playstation5"));
 });
 
 test("enriches ATProto signals consistently", async () => {
