@@ -37,3 +37,5 @@ export * from "./scoring/feedback-store.js";
 export * from "./scoring/context.js";
 export * from "./scoring/contextual-store.js";
 export * from "./scoring/session.js";
+export * from "./scoring/multi-objective.js";
+export * from "./scoring/reward-normalization.js";
