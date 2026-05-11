@@ -21,6 +21,7 @@ export * from "./embedding/similarity.js";
 export * from "./embedding/cluster-embedding-index.js";
 export * from "./embedding/text.js";
 export * from "./embedding/orchestrator.js";
+export * from "./embedding/retrieval.js";
 
 // Matching layer
 export * from "./matching/index.js";
