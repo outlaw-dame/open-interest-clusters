@@ -23,6 +23,14 @@ export class ClusterEmbeddingIndex {
     });
   }
 
+  delete(clusterId: string): boolean {
+    return this.vectors.delete(clusterId);
+  }
+
+  has(clusterId: string): boolean {
+    return this.vectors.has(clusterId);
+  }
+
   get(clusterId: string): EmbeddingVector | undefined {
     const vector = this.vectors.get(clusterId);
     if (!vector) return undefined;
