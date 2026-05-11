@@ -36,6 +36,20 @@ function extractKeywords(text: string, maxKeywords: number): string[] {
   return keywords;
 }
 
+function cloneSignalEntities(entities: readonly SignalEntityReference[]): SignalEntityReference[] {
+  return entities.map((entity) => {
+    const cloned: SignalEntityReference = {
+      label: entity.label
+    };
+
+    if (entity.wikidataId) cloned.wikidataId = entity.wikidataId;
+    if (entity.dbpediaResource) cloned.dbpediaResource = entity.dbpediaResource;
+    if (entity.aliases) cloned.aliases = [...entity.aliases];
+
+    return cloned;
+  });
+}
+
 function toSignalEntities(entities: readonly LinkedEntity[]): SignalEntityReference[] {
   return entities.map((entity) => {
     const signalEntity: SignalEntityReference = {
@@ -75,7 +89,7 @@ export async function enrichSignal(
     ...input,
     hashtags: normalizedHashtags,
     keywords,
-    entities: linkedEntities.length > 0 ? toSignalEntities(linkedEntities) : input.entities.map((entity) => ({ ...entity, aliases: entity.aliases ? [...entity.aliases] : undefined })),
+    entities: linkedEntities.length > 0 ? toSignalEntities(linkedEntities) : cloneSignalEntities(input.entities),
     links: input.links.map((link) => ({ ...link }))
   };
 
