@@ -32,6 +32,15 @@ export class ClusterEmbeddingIndex {
     };
   }
 
+  toEmbeddings(): ClusterEmbedding[] {
+    return Array.from(this.vectors.entries(), ([clusterId, vector]) => ({
+      clusterId,
+      vector: {
+        values: [...vector.values]
+      }
+    }));
+  }
+
   size(): number {
     return this.vectors.size;
   }
