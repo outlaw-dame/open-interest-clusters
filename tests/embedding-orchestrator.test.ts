@@ -1,40 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { EmbeddingProvider, EmbeddingResult } from "../src/index.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingResult,
+  InterestCluster,
+  InterestClusterDataset
+} from "../src/index.js";
 import {
   EmbeddingOrchestrator,
   clusterToEmbeddingText,
   signalToEmbeddingText
 } from "../src/index.js";
 
-const dataset = {
-  version: "1",
-  clusters: [
-    {
-      id: "gaming.console",
-      display: {
-        label: "Console Gaming",
-        category: "gaming"
-      },
-      anchor: {
-        hashtag: "#PS5"
-      },
-      taxonomy: {
-        primary_subcategories: ["PlayStation", "PlayStation"]
-      },
-      hashtags: {
-        anchor: ["PS5"],
-        aliases: ["PS5", "PlayStation5"],
-        adjacent: []
-      },
-      keywords: {
-        high_value: ["PS5"],
-        secondary: ["Console Gaming"]
-      }
-    }
-  ]
-} as const;
+const cluster: InterestCluster = {
+  id: "gaming.console",
+  status: "active",
+  follow_behavior: "opt_in",
+  privacy: {
+    indexable: true,
+    discoverable: true
+  },
+  sources: [],
+  display: {
+    label: "Console Gaming",
+    category: "gaming"
+  },
+  anchor: {
+    hashtag: "#PS5"
+  },
+  taxonomy: {
+    primary_subcategories: ["PlayStation", "PlayStation"]
+  },
+  hashtags: {
+    anchor: ["PS5"],
+    aliases: ["PS5", "PlayStation5"],
+    adjacent: []
+  },
+  keywords: {
+    high_value: ["PS5"],
+    secondary: ["Console Gaming"]
+  }
+};
+
+const dataset: InterestClusterDataset = {
+  schema_version: "1.0.0",
+  dataset_id: "test-dataset",
+  dataset_version: "1.0.0",
+  locale_default: "en-US",
+  normalization: {
+    unicode_form: "NFKC",
+    case_sensitive: false
+  },
+  clusters: [cluster]
+};
 
 function embedding(text: string): EmbeddingResult {
   return {
@@ -93,7 +112,7 @@ test("embedding orchestrator rejects cardinality mismatches", async () => {
 });
 
 test("embedding text normalization removes duplicate noisy values", () => {
-  const text = clusterToEmbeddingText(dataset.clusters[0]);
+  const text = clusterToEmbeddingText(cluster);
 
   assert.ok(text.includes("playstation"));
   assert.ok(!text.includes("PlayStation; PlayStation"));
