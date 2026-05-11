@@ -1,5 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { sanitizeUrlList } from "./url-sanitizer.js";
+
 export interface SafeBrowsingThreat {
   threatType: string;
   platformType: string;
@@ -35,6 +37,27 @@ function jitteredBackoff(delayMs: number, maxDelayMs: number): number {
   return Math.min(maxDelayMs, delayMs + jitter);
 }
 
+function normalizeEndpoint(endpoint: string): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new Error("Safe Browsing endpoint must be a valid URL");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Safe Browsing endpoint must use HTTPS");
+  }
+
+  parsed.search = "";
+  parsed.hash = "";
+  parsed.username = "";
+  parsed.password = "";
+
+  return parsed.toString();
+}
+
 export class GoogleSafeBrowsingClient {
   private readonly apiKey: string;
   private readonly endpoint: string;
@@ -45,8 +68,14 @@ export class GoogleSafeBrowsingClient {
   private readonly fetchImpl: typeof fetch;
 
   public constructor(options: GoogleSafeBrowsingOptions) {
-    this.apiKey = options.apiKey;
-    this.endpoint = options.endpoint ?? DEFAULT_ENDPOINT;
+    const apiKey = options.apiKey.trim();
+
+    if (!apiKey) {
+      throw new Error("Safe Browsing API key is required");
+    }
+
+    this.apiKey = apiKey;
+    this.endpoint = normalizeEndpoint(options.endpoint ?? DEFAULT_ENDPOINT);
     this.timeoutMs = Math.max(100, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     this.retryAttempts = Math.max(1, Math.min(8, options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS));
     this.initialRetryDelayMs = Math.max(10, options.initialRetryDelayMs ?? DEFAULT_INITIAL_RETRY_DELAY_MS);
@@ -55,7 +84,8 @@ export class GoogleSafeBrowsingClient {
   }
 
   public async checkUrls(urls: readonly string[]): Promise<SafeBrowsingResult[]> {
-    const deduped = Array.from(new Set(urls)).slice(0, MAX_BATCH_SIZE);
+    const sanitized = sanitizeUrlList(urls).slice(0, MAX_BATCH_SIZE);
+    const deduped = sanitized.map((link) => link.url);
 
     if (deduped.length === 0) {
       return [];
@@ -129,7 +159,10 @@ export class GoogleSafeBrowsingClient {
       const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
       try {
-        const response = await this.fetchImpl(`${this.endpoint}?key=${encodeURIComponent(this.apiKey)}`, {
+        const url = new URL(this.endpoint);
+        url.searchParams.set("key", this.apiKey);
+
+        const response = await this.fetchImpl(url.toString(), {
           method: "POST",
           headers: {
             "content-type": "application/json"
