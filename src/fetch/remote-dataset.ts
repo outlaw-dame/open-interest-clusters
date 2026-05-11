@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 200;
 
@@ -13,7 +11,7 @@ export async function fetchDatasetWithBackoff(url: string): Promise<unknown> {
 
   while (attempt < MAX_RETRIES) {
     try {
-      const response = await fetch(url, {
+      const response: Response = await globalThis.fetch(url, {
         headers: lastEtag ? { "If-None-Match": lastEtag } : {}
       });
 
@@ -25,16 +23,18 @@ export async function fetchDatasetWithBackoff(url: string): Promise<unknown> {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const etag = response.headers.get("etag");
-      if (etag) lastEtag = etag;
+      const etag: string | null = response.headers.get("etag");
+      if (etag) {
+        lastEtag = etag;
+      }
 
-      const json = await response.json();
+      const json: unknown = await response.json();
       return json;
-    } catch (error) {
-      attempt++;
+    } catch {
+      attempt += 1;
 
       if (attempt >= MAX_RETRIES) {
-        throw new Error("Failed to fetch dataset after maximum retries");
+        throw new Error("Failed to load dataset after maximum retries");
       }
 
       const backoff = BASE_DELAY_MS * Math.pow(2, attempt);
