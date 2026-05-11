@@ -1,4 +1,4 @@
-import type { LinkedEntity, EntityGraphResolver, ClusterEntityMatch } from "./types.js";
+import type { LinkedEntity, EntityGraphResolver, ClusterEntityMatch, EntityRelationEdge } from "./types.js";
 import type { InterestCluster } from "../types/schema.js";
 
 function collectClusterEntityIds(cluster: InterestCluster): string[] {
@@ -39,7 +39,7 @@ export async function mapEntitiesToClusters(
     .map((e) => e.wikidataId)
     .filter((id): id is string => Boolean(id));
 
-  let relations = [];
+  let relations: EntityRelationEdge[] = [];
   if (resolver && entityIds.length > 0) {
     relations = await resolver.resolveNeighbors(entityIds);
   }
@@ -51,9 +51,8 @@ export async function mapEntitiesToClusters(
 
     let score = 0;
     const matched: string[] = [];
-    const relationHits = [];
+    const relationHits: EntityRelationEdge[] = [];
 
-    // direct match
     for (const entity of entities) {
       if (entity.wikidataId && clusterIds.includes(entity.wikidataId)) {
         score += 5;
@@ -61,7 +60,6 @@ export async function mapEntitiesToClusters(
       }
     }
 
-    // relation match
     for (const edge of relations) {
       if (clusterIds.includes(edge.targetId)) {
         score += edge.weight;
