@@ -12,13 +12,12 @@ import {
 class TestEmbeddingProvider implements EmbeddingProvider {
   public async embedOne(text: string): Promise<EmbeddingResult> {
     return {
+      text,
       vector: {
-        values: text.includes("playstation")
+        values: text.toLowerCase().includes("playstation")
           ? [1, 0]
           : [0, 1]
-      },
-      dimensions: 2,
-      model: "test"
+      }
     };
   }
 
@@ -31,21 +30,19 @@ function createSignal(text: string): UnifiedSignal {
   return {
     id: "signal-1",
     canonicalUrl: "https://example.com/post/1",
+    kind: "post",
     nativeProtocol: "activitypub",
     upstreamOrigin: "activitypub",
-    kind: "post",
-    actorId: "https://example.com/users/test",
-    actorHandle: "@test@example.com",
+    authorId: "https://example.com/users/test",
+    authorHandle: "@test@example.com",
     text,
-    hashtags: [],
-    links: [],
-    mentions: [],
-    createdAt: new Date().toISOString(),
-    indexedAt: new Date().toISOString(),
     language: "en",
+    hashtags: [],
+    keywords: [],
+    entities: [],
+    links: [],
+    createdAt: new Date(0).toISOString(),
     visibility: "public",
-    nsfw: false,
-    reply: false,
     discoverableAuthor: true,
     indexable: true
   };
@@ -75,4 +72,5 @@ test("semantic retrieval returns ranked embedding matches", async () => {
 
   assert.equal(result.matches[0]?.clusterId, "gaming");
   assert.ok((result.matches[0]?.similarity ?? 0) > (result.matches[1]?.similarity ?? 0));
+  assert.equal(result.scores[0]?.clusterId, "gaming");
 });
