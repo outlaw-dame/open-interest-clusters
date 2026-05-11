@@ -109,6 +109,10 @@ export class CooccurrenceGraph {
     this.adjacency.delete(node);
   }
 
+  deleteNode(node: NodeId): void {
+    this.removeNode(node);
+  }
+
   protected upsertEdge(node: NodeId, neighbor: NodeId, edge: Edge): void {
     let neighbors = this.adjacency.get(node);
     if (!neighbors) {
