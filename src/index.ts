@@ -9,6 +9,12 @@ export * from "./signals/types.js";
 export * from "./signals/canonical.js";
 export * from "./signals/activitypub.js";
 export * from "./signals/atproto.js";
+export * from "./signals/enrichment.js";
+
+// Embeddings
+export * from "./embedding/types.js";
+export * from "./embedding/similarity.js";
+export * from "./embedding/cluster-embedding-index.js";
 
 // Matching layer
 export * from "./matching/index.js";
