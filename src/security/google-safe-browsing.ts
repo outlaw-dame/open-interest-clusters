@@ -99,14 +99,17 @@ export class GoogleSafeBrowsingClient {
       }
 
       const existing = threatMap.get(url) ?? [];
-
-      existing.push({
+      const safeThreat: SafeBrowsingThreat = {
         threatType: typeof match.threatType === "string" ? match.threatType : "UNKNOWN",
         platformType: typeof match.platformType === "string" ? match.platformType : "UNKNOWN",
-        threatEntryType: typeof match.threatEntryType === "string" ? match.threatEntryType : "UNKNOWN",
-        cacheDuration: typeof match.cacheDuration === "string" ? match.cacheDuration : undefined
-      });
+        threatEntryType: typeof match.threatEntryType === "string" ? match.threatEntryType : "UNKNOWN"
+      };
 
+      if (typeof match.cacheDuration === "string") {
+        safeThreat.cacheDuration = match.cacheDuration;
+      }
+
+      existing.push(safeThreat);
       threatMap.set(url, existing);
     }
 
