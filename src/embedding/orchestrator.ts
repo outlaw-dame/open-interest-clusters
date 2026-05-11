@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { InterestClusterDataset } from "../types/schema.js";
+import type { InterestCluster, InterestClusterDataset } from "../types/schema.js";
 import type { EmbeddingProvider, EmbeddingResult } from "./types.js";
 import { clusterToEmbeddingText } from "./text.js";
 
@@ -58,7 +58,12 @@ export class EmbeddingOrchestrator {
   public async generateClusterEmbeddings(
     dataset: InterestClusterDataset
   ): Promise<ClusterEmbeddingDocument[]> {
-    const clusters = dataset.clusters;
+    return this.generateClusterEmbeddingsForClusters(dataset.clusters);
+  }
+
+  public async generateClusterEmbeddingsForClusters(
+    clusters: readonly InterestCluster[]
+  ): Promise<ClusterEmbeddingDocument[]> {
     const documents: ClusterEmbeddingDocument[] = [];
 
     for (let index = 0; index < clusters.length; index += this.batchSize * this.maxConcurrentBatches) {
@@ -85,7 +90,7 @@ export class EmbeddingOrchestrator {
     return documents;
   }
 
-  private async embedClusterBatch(clusters: InterestClusterDataset["clusters"]): Promise<ClusterEmbeddingDocument[]> {
+  private async embedClusterBatch(clusters: readonly InterestCluster[]): Promise<ClusterEmbeddingDocument[]> {
     const texts = clusters.map((cluster) => clusterToEmbeddingText(cluster));
     const embeddings = await this.embedBatchWithRetry(texts);
 
