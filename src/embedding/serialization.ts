@@ -52,9 +52,17 @@ export function snapshotEmbeddingIndex(index: ClusterEmbeddingIndex): EmbeddingI
     throw new Error("Embedding index snapshot exceeds maximum embedding count");
   }
 
+  const seen = new Set<string>();
+
   for (const embedding of embeddings) {
     validateClusterId(embedding.clusterId);
     validateVector(embedding.vector);
+
+    if (seen.has(embedding.clusterId)) {
+      throw new Error(`Duplicate embedding cluster id: ${embedding.clusterId}`);
+    }
+
+    seen.add(embedding.clusterId);
   }
 
   return {
@@ -62,6 +70,32 @@ export function snapshotEmbeddingIndex(index: ClusterEmbeddingIndex): EmbeddingI
     generatedAt: new Date().toISOString(),
     embeddings
   };
+}
+
+export function mergeEmbeddingSnapshots(
+  base: ClusterEmbeddingIndex,
+  updates: readonly ClusterEmbedding[],
+  activeClusterIds?: readonly string[]
+): ClusterEmbeddingIndex {
+  const merged = new ClusterEmbeddingIndex(base.toEmbeddings());
+
+  for (const embedding of updates) {
+    validateClusterId(embedding.clusterId);
+    validateVector(embedding.vector);
+    merged.set(embedding.clusterId, embedding.vector);
+  }
+
+  if (activeClusterIds) {
+    const active = new Set(activeClusterIds);
+
+    for (const embedding of merged.toEmbeddings()) {
+      if (!active.has(embedding.clusterId)) {
+        merged.delete(embedding.clusterId);
+      }
+    }
+  }
+
+  return merged;
 }
 
 export function restoreEmbeddingIndex(snapshot: EmbeddingIndexSnapshot): ClusterEmbeddingIndex {
