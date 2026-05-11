@@ -12,7 +12,10 @@ export class SimpleEntityExtractor implements EntityExtractor {
       const clean = token.replace(/[^a-zA-Z0-9]/g, "");
       if (!clean) continue;
 
-      const isCapitalized = clean[0] === clean[0].toUpperCase();
+      const first = clean.at(0);
+      if (!first) continue;
+
+      const isCapitalized = first === first.toUpperCase();
 
       if (isCapitalized && clean.length >= 3) {
         buffer.push(clean);
