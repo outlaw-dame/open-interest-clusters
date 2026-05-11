@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { buildClusterIndex } from "../src/matching/index.js";
 import { resolveClustersFromHashtag } from "../src/matching/resolve-hashtag.js";
 import { matchTextToClusters } from "../src/matching/match-text.js";
-import dataset from "../datasets/interests.global.v1.json" assert { type: "json" };
+import type { InterestClusterDataset } from "../src/types/schema.js";
+import datasetJson from "../datasets/interests.global.v1.json" with { type: "json" };
+
+const dataset = datasetJson as InterestClusterDataset;
 
 test("resolveClustersFromHashtag resolves gaming hashtag", () => {
   const index = buildClusterIndex(dataset);
@@ -20,7 +23,8 @@ test("matchTextToClusters matches gaming context", () => {
     index
   );
 
-  assert.equal(results[0].clusterId, "gaming");
+  assert.ok(results[0]);
+  assert.equal(results[0]?.clusterId, "gaming");
 });
 
 test("negative keywords suppress incorrect matches", () => {
@@ -32,5 +36,5 @@ test("negative keywords suppress incorrect matches", () => {
     index
   );
 
-  assert.ok(!results.some(r => r.clusterId === "technology.apple"));
+  assert.ok(!results.some((result) => result.clusterId === "technology.apple"));
 });
