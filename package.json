@@ -24,7 +24,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "lint:types": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/tests/**/*.test.js",
+    "test": "npm run build && node --test dist/tests/*.test.js",
     "validate:dataset": "tsx scripts/validate-dataset.ts datasets/interests.global.v1.json",
     "normalize:dataset": "tsx scripts/normalize-dataset.ts datasets/interests.global.v1.json",
     "prepare": "npm run build"
