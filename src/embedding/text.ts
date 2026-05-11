@@ -8,9 +8,32 @@ export interface EmbeddingTextOptions {
 
 const DEFAULT_MAX_LENGTH = 4096;
 
+function normalizeText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function appendPart(parts: string[], value: string | undefined): void {
-  const normalized = value?.trim();
-  if (normalized) parts.push(normalized);
+  if (!value) return;
+
+  const normalized = normalizeText(value);
+
+  if (normalized) {
+    parts.push(normalized);
+  }
+}
+
+function dedupe(values: readonly string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeText(value).toLowerCase())
+        .filter(Boolean)
+    )
+  );
 }
 
 function boundedJoin(parts: readonly string[], maxLength: number): string {
@@ -24,16 +47,19 @@ export function signalToEmbeddingText(signal: UnifiedSignal, options: EmbeddingT
 
   appendPart(parts, signal.text);
 
-  if (signal.hashtags.length > 0) {
-    appendPart(parts, `hashtags: ${signal.hashtags.join(" ")}`);
+  const hashtags = dedupe(signal.hashtags);
+  if (hashtags.length > 0) {
+    appendPart(parts, `hashtags: ${hashtags.join(" ")}`);
   }
 
-  if (signal.keywords.length > 0) {
-    appendPart(parts, `keywords: ${signal.keywords.join(" ")}`);
+  const keywords = dedupe(signal.keywords);
+  if (keywords.length > 0) {
+    appendPart(parts, `keywords: ${keywords.join(" ")}`);
   }
 
-  if (signal.entities.length > 0) {
-    appendPart(parts, `entities: ${signal.entities.map((entity) => entity.label).join("; ")}`);
+  const entities = dedupe(signal.entities.map((entity) => entity.label));
+  if (entities.length > 0) {
+    appendPart(parts, `entities: ${entities.join("; ")}`);
   }
 
   if (options.includeProtocolHints) {
@@ -54,23 +80,23 @@ export function clusterToEmbeddingText(cluster: InterestCluster, options: Embedd
   appendPart(parts, `anchor: ${cluster.anchor.hashtag}`);
 
   if (cluster.taxonomy.primary_subcategories.length > 0) {
-    appendPart(parts, `subcategories: ${cluster.taxonomy.primary_subcategories.join("; ")}`);
+    appendPart(parts, `subcategories: ${dedupe(cluster.taxonomy.primary_subcategories).join("; ")}`);
   }
 
-  const hashtags = [
+  const hashtags = dedupe([
     ...cluster.hashtags.anchor,
     ...cluster.hashtags.aliases,
     ...cluster.hashtags.adjacent
-  ];
+  ]);
 
   if (hashtags.length > 0) {
     appendPart(parts, `hashtags: ${hashtags.join(" ")}`);
   }
 
-  const keywords = [
+  const keywords = dedupe([
     ...cluster.keywords.high_value,
     ...cluster.keywords.secondary
-  ];
+  ]);
 
   if (keywords.length > 0) {
     appendPart(parts, `keywords: ${keywords.join("; ")}`);
