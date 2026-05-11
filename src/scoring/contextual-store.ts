@@ -1,6 +1,6 @@
 import type { BanditArmState } from "./bandit.js";
 import { FileBanditStore } from "./feedback-store.js";
-import { contextualArmKey, type RankingContext } from "./context.js";
+import { contextKey, contextualArmKey, type RankingContext } from "./context.js";
 
 export class ContextualBanditStore {
   private readonly base: FileBanditStore;
@@ -12,11 +12,12 @@ export class ContextualBanditStore {
   public async getContextStates(context: RankingContext): Promise<Map<string, BanditArmState>> {
     const all = await this.base.getAll();
     const output = new Map<string, BanditArmState>();
+    const expectedContextKey = contextKey(context);
 
     for (const [key, state] of all.entries()) {
       if (!key.includes("@@")) continue;
       const [clusterId, ctx] = key.split("@@");
-      if (ctx === contextKey(context)) {
+      if (clusterId && ctx === expectedContextKey) {
         output.set(clusterId, state);
       }
     }
@@ -28,8 +29,4 @@ export class ContextualBanditStore {
     const key = contextualArmKey(clusterId, context);
     await this.base.upsert(key, state);
   }
-}
-
-function contextKey(context: RankingContext): string {
-  return `timeline:${context.timeline}|protocol:${context.protocol}|time:${context.timeBucket}`;
 }
