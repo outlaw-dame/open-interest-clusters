@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   ClusterEmbeddingIndex,
+  mergeEmbeddingSnapshots,
   restoreEmbeddingIndex,
   snapshotEmbeddingIndex
 } from "../src/index.js";
@@ -41,5 +42,26 @@ test("embedding snapshot rejects invalid schema version", () => {
       generatedAt: new Date().toISOString(),
       embeddings: []
     });
+  });
+});
+
+test("merge embedding snapshots updates existing vectors", () => {
+  const base = new ClusterEmbeddingIndex();
+
+  base.set("gaming", {
+    values: [1, 0]
+  });
+
+  const merged = mergeEmbeddingSnapshots(base, [
+    {
+      clusterId: "gaming",
+      vector: {
+        values: [2, 0]
+      }
+    }
+  ]);
+
+  assert.deepEqual(merged.get("gaming"), {
+    values: [2, 0]
   });
 });
