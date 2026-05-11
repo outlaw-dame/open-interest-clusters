@@ -22,6 +22,7 @@ export * from "./embedding/cluster-embedding-index.js";
 export * from "./embedding/text.js";
 export * from "./embedding/orchestrator.js";
 export * from "./embedding/retrieval.js";
+export * from "./embedding/serialization.js";
 
 // Matching layer
 export * from "./matching/index.js";
