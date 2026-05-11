@@ -17,7 +17,7 @@ export function pruneGraph(graph: CooccurrenceGraph, maxAgeMs: number): void {
     }
 
     if (neighbors.size === 0) {
-      (graph as any).removeNode?.(node);
+      graph.deleteNode(node);
     }
   }
 }
