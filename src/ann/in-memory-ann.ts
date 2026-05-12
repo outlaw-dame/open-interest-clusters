@@ -100,4 +100,15 @@ export class InMemoryAnnProvider implements AnnProvider {
       dimensions: this.dimensions
     };
   }
+
+  public snapshotEntries(): { clusterId: string; vector: EmbeddingVector }[] {
+    return [...this.vectors.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([clusterId, vector]) => ({
+        clusterId,
+        vector: {
+          values: [...vector.values]
+        }
+      }));
+  }
 }
