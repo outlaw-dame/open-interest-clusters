@@ -18,9 +18,31 @@ export interface PgVectorMigrationPlan {
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MIN_DIMENSIONS = 1;
 const MAX_DIMENSIONS = 16_384;
+const MAX_IDENTIFIER_LENGTH = 63;
+const RESERVED_IDENTIFIERS = new Set([
+  "select",
+  "insert",
+  "update",
+  "delete",
+  "drop",
+  "table",
+  "index",
+  "where",
+  "from",
+  "join",
+  "public"
+]);
 
 export function assertPgVectorIdentifier(value: string, label: string): void {
-  if (!IDENTIFIER_PATTERN.test(value)) {
+  const normalized = value.trim();
+
+  if (
+    normalized !== value ||
+    normalized.length === 0 ||
+    normalized.length > MAX_IDENTIFIER_LENGTH ||
+    RESERVED_IDENTIFIERS.has(normalized.toLowerCase()) ||
+    !IDENTIFIER_PATTERN.test(normalized)
+  ) {
     throw new Error(`Invalid pgvector ${label} identifier`);
   }
 }
@@ -31,7 +53,9 @@ export function normalizePgVectorConfig(config: PgVectorAnnConfig): Required<PgV
   assertPgVectorIdentifier(config.vectorColumn, "vector column");
 
   const schemaName = config.schemaName ?? "public";
-  assertPgVectorIdentifier(schemaName, "schema");
+  if (schemaName !== "public") {
+    assertPgVectorIdentifier(schemaName, "schema");
+  }
 
   if (!Number.isInteger(config.dimensions) || config.dimensions < MIN_DIMENSIONS || config.dimensions > MAX_DIMENSIONS) {
     throw new Error("Invalid pgvector dimensions");
