@@ -21,6 +21,8 @@ export * from "./embedding/refresh.js";
 export * from "./local-preferences/types.js";
 export * from "./local-preferences/profile.js";
 export * from "./local-preferences/semantic-profile.js";
+export * from "./local-preferences/decay.js";
+export * from "./local-preferences/serialization.js";
 export * from "./matching/index.js";
 export * from "./matching/resolve-hashtag.js";
 export * from "./matching/match-text.js";
