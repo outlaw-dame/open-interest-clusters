@@ -21,6 +21,7 @@ export * from "./embedding/refresh.js";
 export * from "./ann/types.js";
 export * from "./ann/in-memory-ann.js";
 export * from "./ann/serialization.js";
+export * from "./adapters/pgvector/types.js";
 export * from "./workers/semantic-refresh.js";
 export * from "./local-preferences/types.js";
 export * from "./local-preferences/profile.js";
