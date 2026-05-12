@@ -50,7 +50,13 @@ export class InMemoryAnnProvider implements AnnProvider {
 
   async delete(clusterId: string): Promise<boolean> {
     validateClusterId(clusterId);
-    return this.vectors.delete(clusterId);
+    const deleted = this.vectors.delete(clusterId);
+
+    if (this.vectors.size === 0) {
+      this.dimensions = 0;
+    }
+
+    return deleted;
   }
 
   async search(
@@ -58,6 +64,10 @@ export class InMemoryAnnProvider implements AnnProvider {
     options: AnnSearchOptions = {}
   ): Promise<AnnSearchResult[]> {
     validateVector(vector);
+
+    if (this.dimensions !== 0 && vector.values.length !== this.dimensions) {
+      throw new Error("ANN query vector dimensions mismatch");
+    }
 
     const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 20), MAX_RESULTS));
     const minSimilarity = Number.isFinite(options.minSimilarity)
