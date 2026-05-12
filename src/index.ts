@@ -25,6 +25,10 @@ export * from "./embedding/retrieval.js";
 export * from "./embedding/serialization.js";
 export * from "./embedding/refresh.js";
 
+// Local-first personalization
+export * from "./local-preferences/types.js";
+export * from "./local-preferences/profile.js";
+
 // Matching layer
 export * from "./matching/index.js";
 export * from "./matching/resolve-hashtag.js";
