@@ -10,7 +10,7 @@ import {
 const executor: PgVectorQueryExecutor = {
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(): Promise<PgVectorQueryResult<Row>> {
     return {
-      rows: [{ size: 12 } as Row]
+      rows: [{ size: 12 } as unknown as Row]
     };
   }
 };
