@@ -1,5 +1,5 @@
-import type { HybridScoreResult } from "../scoring/hybrid.js";
 import type { RecommendationExplanation } from "../local-preferences/explanations.js";
+import type { HybridScoreResult } from "../scoring/hybrid.js";
 
 export interface CandidateServingRequest {
   requestId: string;
@@ -64,14 +64,20 @@ export function serveCandidates(request: CandidateServingRequest): CandidateServ
     const score = normalizeScore(candidate.score);
     if (score === null || score < minScore) continue;
 
-    seen.add(candidate.clusterId);
-    served.push({
+    const item: ServedCandidate = {
       clusterId: candidate.clusterId,
       score,
       rank: served.length + 1,
-      components: candidate.components,
-      explanation: request.explanations?.get(candidate.clusterId)
-    });
+      components: candidate.components
+    };
+
+    const explanation = request.explanations?.get(candidate.clusterId);
+    if (explanation) {
+      item.explanation = explanation;
+    }
+
+    seen.add(candidate.clusterId);
+    served.push(item);
   }
 
   return {
