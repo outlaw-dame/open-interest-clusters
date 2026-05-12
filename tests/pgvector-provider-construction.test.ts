@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PgVectorAnnProvider } from "../src/adapters/pgvector/provider.js";
+import {
+  PgVectorAnnProvider,
+  type PgVectorQueryExecutor,
+  type PgVectorQueryResult
+} from "../src/index.js";
 
-const executor = {
-  async query() {
+const executor: PgVectorQueryExecutor = {
+  async query<Row extends Record<string, unknown> = Record<string, unknown>>(): Promise<PgVectorQueryResult<Row>> {
     return {
-      rows: [{ size: 12 }]
+      rows: [{ size: 12 } as Row]
     };
   }
 };
