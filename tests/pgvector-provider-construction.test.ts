@@ -47,7 +47,63 @@ test("pgvector provider bounds max search results", () => {
   assert.equal(provider.maxSearchResults, 1000);
 });
 
-test("pgvector provider throws for unimplemented methods in slice 1", async () => {
+test("pgvector provider delete returns true when rows deleted", async () => {
+  const deletingExecutor: PgVectorQueryExecutor = {
+    async query<Row extends Record<string, unknown> = Record<string, unknown>>(): Promise<PgVectorQueryResult<Row>> {
+      return {
+        rows: [],
+        rowCount: 1
+      };
+    }
+  };
+
+  const provider = new PgVectorAnnProvider(deletingExecutor, {
+    tableName: "cluster_vectors",
+    idColumn: "cluster_id",
+    vectorColumn: "embedding",
+    dimensions: 768,
+    distanceMetric: "cosine"
+  });
+
+  const deleted = await provider.delete("gaming");
+  assert.equal(deleted, true);
+});
+
+test("pgvector provider rejects invalid cluster ids", async () => {
+  const provider = new PgVectorAnnProvider(executor, {
+    tableName: "cluster_vectors",
+    idColumn: "cluster_id",
+    vectorColumn: "embedding",
+    dimensions: 768,
+    distanceMetric: "cosine"
+  });
+
+  await assert.rejects(() => provider.delete(""));
+});
+
+test("pgvector provider does not retry non retryable errors", async () => {
+  let attempts = 0;
+
+  const failingExecutor: PgVectorQueryExecutor = {
+    async query() {
+      attempts += 1;
+      throw Object.assign(new Error("bad sql"), { code: "42601" });
+    }
+  };
+
+  const provider = new PgVectorAnnProvider(failingExecutor, {
+    tableName: "cluster_vectors",
+    idColumn: "cluster_id",
+    vectorColumn: "embedding",
+    dimensions: 768,
+    distanceMetric: "cosine"
+  });
+
+  await assert.rejects(() => provider.stats());
+  assert.equal(attempts, 1);
+});
+
+test("pgvector provider throws for unimplemented methods in current slices", async () => {
   const provider = new PgVectorAnnProvider(executor, {
     tableName: "cluster_vectors",
     idColumn: "cluster_id",
@@ -57,6 +113,5 @@ test("pgvector provider throws for unimplemented methods in slice 1", async () =
   });
 
   await assert.rejects(() => provider.upsert("gaming", { values: [1] }));
-  await assert.rejects(() => provider.delete("gaming"));
   await assert.rejects(() => provider.search({ values: [1] }));
 });
