@@ -35,6 +35,20 @@ test("in-memory ANN rejects vector dimension mismatch", async () => {
   });
 });
 
+test("in-memory ANN rejects query vector dimension mismatch", async () => {
+  const provider = new InMemoryAnnProvider();
+
+  await provider.upsert("gaming", {
+    values: [1, 0]
+  });
+
+  await assert.rejects(async () => {
+    await provider.search({
+      values: [1, 0, 0]
+    });
+  });
+});
+
 test("in-memory ANN rejects malformed cluster ids", async () => {
   const provider = new InMemoryAnnProvider();
 
