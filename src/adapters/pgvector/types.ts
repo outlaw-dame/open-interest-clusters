@@ -15,6 +15,15 @@ export interface PgVectorMigrationPlan {
   indexSql: string;
 }
 
+export interface PgVectorSchemaPlan {
+  extensionSql: string;
+  tableSql: string;
+}
+
+export interface PgVectorIndexPlan {
+  indexSql: string;
+}
+
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MIN_DIMENSIONS = 1;
 const MAX_VECTOR_DIMENSIONS = 2_000;
@@ -82,12 +91,9 @@ function vectorOperatorClass(metric: PgVectorDistanceMetric): string {
   }
 }
 
-export function createPgVectorMigrationPlan(config: PgVectorAnnConfig): PgVectorMigrationPlan {
+export function createPgVectorSchemaPlan(config: PgVectorAnnConfig): PgVectorSchemaPlan {
   const normalized = normalizePgVectorConfig(config);
   const table = qualifiedTableName(normalized);
-  const indexName = `${normalized.tableName}_${normalized.vectorColumn}_hnsw_idx`;
-
-  assertPgVectorIdentifier(indexName, "index");
 
   return {
     extensionSql: "CREATE EXTENSION IF NOT EXISTS vector;",
@@ -97,7 +103,28 @@ export function createPgVectorMigrationPlan(config: PgVectorAnnConfig): PgVector
       `  "${normalized.vectorColumn}" vector(${normalized.dimensions}) NOT NULL,`,
       "  updated_at timestamptz NOT NULL DEFAULT now()",
       ");"
-    ].join("\n"),
+    ].join("\n")
+  };
+}
+
+export function createPgVectorIndexPlan(config: PgVectorAnnConfig): PgVectorIndexPlan {
+  const normalized = normalizePgVectorConfig(config);
+  const table = qualifiedTableName(normalized);
+  const indexName = `${normalized.tableName}_${normalized.vectorColumn}_hnsw_idx`;
+
+  assertPgVectorIdentifier(indexName, "index");
+
+  return {
     indexSql: `CREATE INDEX IF NOT EXISTS "${indexName}" ON ${table} USING hnsw ("${normalized.vectorColumn}" ${vectorOperatorClass(normalized.distanceMetric)});`
+  };
+}
+
+export function createPgVectorMigrationPlan(config: PgVectorAnnConfig): PgVectorMigrationPlan {
+  const schemaPlan = createPgVectorSchemaPlan(config);
+  const indexPlan = createPgVectorIndexPlan(config);
+
+  return {
+    ...schemaPlan,
+    ...indexPlan
   };
 }
