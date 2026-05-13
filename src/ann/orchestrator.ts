@@ -10,6 +10,7 @@ export interface AnnProviderCandidate {
   name: string;
   provider: AnnProvider;
   priority?: number;
+  healthCheck?: (provider: AnnProvider) => Promise<boolean>;
 }
 
 export interface AnnOrchestratorOptions {
@@ -24,6 +25,15 @@ export interface AnnProviderSelection {
 
 function sortedCandidates(candidates: readonly AnnProviderCandidate[]): AnnProviderCandidate[] {
   return [...candidates].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+async function isHealthy(candidate: AnnProviderCandidate): Promise<boolean> {
+  if (candidate.healthCheck !== undefined) {
+    return candidate.healthCheck(candidate.provider);
+  }
+
+  await candidate.provider.stats();
+  return true;
 }
 
 export class AnnProviderOrchestrator implements AnnProvider {
@@ -58,9 +68,10 @@ export class AnnProviderOrchestrator implements AnnProvider {
       }
 
       try {
-        await candidate.provider.stats();
-        this.active = candidate;
-        return candidate;
+        if (await isHealthy(candidate)) {
+          this.active = candidate;
+          return candidate;
+        }
       } catch {
         continue;
       }
@@ -85,7 +96,10 @@ export class AnnProviderOrchestrator implements AnnProvider {
         }
 
         try {
-          await candidate.provider.stats();
+          if (!(await isHealthy(candidate))) {
+            continue;
+          }
+
           this.active = candidate;
           return await operation(candidate.provider);
         } catch {
