@@ -116,10 +116,21 @@ export class PgVectorAnnProvider implements AnnProvider {
     );
   }
 
-  async upsert(_clusterId: string, _vector: EmbeddingVector): Promise<void> {
-    void validatePgVectorEmbedding;
-    void serializePgVectorEmbedding;
-    throw new Error("PgVectorAnnProvider upsert is not implemented in this slice");
+  async upsert(clusterId: string, vector: EmbeddingVector): Promise<void> {
+    validateClusterId(clusterId);
+    validatePgVectorEmbedding(vector, this.config.dimensions);
+
+    await this.queryWithRetry(
+      [
+        `INSERT INTO "${this.config.schemaName}"."${this.config.tableName}"`,
+        `("${this.config.idColumn}", "${this.config.vectorColumn}")`,
+        "VALUES ($1, $2::vector)",
+        `ON CONFLICT ("${this.config.idColumn}") DO UPDATE SET`,
+        `"${this.config.vectorColumn}" = EXCLUDED."${this.config.vectorColumn}",`,
+        "updated_at = now();"
+      ].join(" "),
+      [clusterId, serializePgVectorEmbedding(vector)]
+    );
   }
 
   async delete(clusterId: string): Promise<boolean> {
