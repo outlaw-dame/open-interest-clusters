@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import type {
   AnnIndexStats,
   AnnProvider,
@@ -104,7 +102,9 @@ function retryDelay(baseDelayMs: number, maxDelayMs: number, random: () => numbe
 }
 
 async function defaultSleeper(delayMs: number): Promise<void> {
-  await sleep(delayMs);
+  await new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, delayMs);
+  });
 }
 
 export class AnnProviderOrchestrator implements AnnProvider {
@@ -121,7 +121,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
   private readonly isRetryable: (error: unknown, operation: AnnOperation) => boolean;
   private readonly retrySleeper: (delayMs: number) => Promise<void>;
   private readonly random: () => number;
-  private readonly onEvent?: (event: AnnProviderEvent) => void | Promise<void>;
+  private readonly onEvent: ((event: AnnProviderEvent) => void | Promise<void>) | undefined;
   private readonly failures = new Map<string, ProviderFailureState>();
 
   constructor(candidates: readonly AnnProviderCandidate[], options: AnnOrchestratorOptions = {}) {
@@ -161,7 +161,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
     return state.retryAfter > this.now();
   }
 
-  private async recordFailure(candidate: AnnProviderCandidate, operation?: AnnOperation, error?: unknown): Promise<void> {
+  private async recordFailure(candidate: AnnProviderCandidate, operation: AnnOperation, error: unknown): Promise<void> {
     const existing = this.failures.get(candidate.name);
     const failures = (existing?.failures ?? 0) + 1;
 
@@ -233,7 +233,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
     operationName: AnnOperation,
     operation: (provider: AnnProvider) => Promise<T>
   ): Promise<T> {
-    const allowRetry = (this.retryWrites || (operationName !== "upsert" && operationName !== "delete"));
+    const allowRetry = this.retryWrites || (operationName !== "upsert" && operationName !== "delete");
     let delayMs = this.initialRetryDelayMs;
     let lastError: unknown;
 
