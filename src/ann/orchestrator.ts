@@ -41,11 +41,36 @@ export interface AnnOrchestratorOptions {
   retrySleeper?: (delayMs: number) => Promise<void>;
   random?: () => number;
   onEvent?: (event: AnnProviderEvent) => void | Promise<void>;
+  eventHistoryLimit?: number;
 }
 
 export interface AnnProviderSelection {
   activeProvider: string;
   attemptedProviders: string[];
+}
+
+export interface AnnProviderHealthState {
+  provider: string;
+  priority: number;
+  active: boolean;
+  circuitOpen: boolean;
+  failureCount: number;
+  retryAfter: number;
+  cooldownRemainingMs: number;
+}
+
+export interface AnnCircuitState {
+  activeProvider: string | null;
+  openProviders: string[];
+  providers: AnnProviderHealthState[];
+}
+
+export interface AnnRetryMetrics {
+  providerSelections: number;
+  providerFailures: number;
+  providerRecoveries: number;
+  providerRetries: number;
+  fallbackActivations: number;
 }
 
 interface ProviderFailureState {
@@ -56,6 +81,7 @@ interface ProviderFailureState {
 const DEFAULT_RETRY_ATTEMPTS = 1;
 const DEFAULT_INITIAL_RETRY_DELAY_MS = 100;
 const DEFAULT_MAX_RETRY_DELAY_MS = 2_000;
+const DEFAULT_EVENT_HISTORY_LIMIT = 100;
 
 function sortedCandidates(candidates: readonly AnnProviderCandidate[]): AnnProviderCandidate[] {
   return [...candidates].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -107,6 +133,10 @@ async function defaultSleeper(delayMs: number): Promise<void> {
   });
 }
 
+function cloneEvent(event: AnnProviderEvent): AnnProviderEvent {
+  return { ...event };
+}
+
 export class AnnProviderOrchestrator implements AnnProvider {
   private active: AnnProviderCandidate | null = null;
   private readonly candidates: AnnProviderCandidate[];
@@ -122,7 +152,16 @@ export class AnnProviderOrchestrator implements AnnProvider {
   private readonly retrySleeper: (delayMs: number) => Promise<void>;
   private readonly random: () => number;
   private readonly onEvent: ((event: AnnProviderEvent) => void | Promise<void>) | undefined;
+  private readonly eventHistoryLimit: number;
   private readonly failures = new Map<string, ProviderFailureState>();
+  private readonly events: AnnProviderEvent[] = [];
+  private readonly metrics: AnnRetryMetrics = {
+    providerSelections: 0,
+    providerFailures: 0,
+    providerRecoveries: 0,
+    providerRetries: 0,
+    fallbackActivations: 0
+  };
 
   constructor(candidates: readonly AnnProviderCandidate[], options: AnnOrchestratorOptions = {}) {
     if (candidates.length === 0) {
@@ -142,6 +181,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
     this.retrySleeper = options.retrySleeper ?? defaultSleeper;
     this.random = options.random ?? Math.random;
     this.onEvent = options.onEvent;
+    this.eventHistoryLimit = boundedPositiveInteger(options.eventHistoryLimit, DEFAULT_EVENT_HISTORY_LIMIT, 0, 10_000);
   }
 
   private now(): number {
@@ -149,6 +189,13 @@ export class AnnProviderOrchestrator implements AnnProvider {
   }
 
   private async emit(event: AnnProviderEvent): Promise<void> {
+    if (this.eventHistoryLimit > 0) {
+      this.events.push(cloneEvent(event));
+      while (this.events.length > this.eventHistoryLimit) {
+        this.events.shift();
+      }
+    }
+
     await this.onEvent?.(event);
   }
 
@@ -159,6 +206,22 @@ export class AnnProviderOrchestrator implements AnnProvider {
     }
 
     return state.retryAfter > this.now();
+  }
+
+  private providerHealthState(candidate: AnnProviderCandidate): AnnProviderHealthState {
+    const state = this.failures.get(candidate.name);
+    const retryAfter = state?.retryAfter ?? 0;
+    const cooldownRemainingMs = Math.max(0, retryAfter - this.now());
+
+    return {
+      provider: candidate.name,
+      priority: candidate.priority ?? 0,
+      active: this.active?.name === candidate.name,
+      circuitOpen: cooldownRemainingMs > 0,
+      failureCount: state?.failures ?? 0,
+      retryAfter,
+      cooldownRemainingMs
+    };
   }
 
   private async recordFailure(candidate: AnnProviderCandidate, operation: AnnOperation, error: unknown): Promise<void> {
@@ -174,6 +237,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
       this.active = null;
     }
 
+    this.metrics.providerFailures += 1;
     await this.emit({
       type: "provider_failure",
       provider: candidate.name,
@@ -185,6 +249,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
   private async clearFailure(candidate: AnnProviderCandidate): Promise<void> {
     if (this.failures.has(candidate.name)) {
       this.failures.delete(candidate.name);
+      this.metrics.providerRecoveries += 1;
       await this.emit({
         type: "provider_recovered",
         provider: candidate.name
@@ -208,6 +273,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
 
       if (!this.healthCheckOnInit) {
         this.active = candidate;
+        this.metrics.providerSelections += 1;
         await this.emit({ type: "provider_selected", provider: candidate.name });
         return candidate;
       }
@@ -216,6 +282,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
         if (await isHealthy(candidate)) {
           await this.clearFailure(candidate);
           this.active = candidate;
+          this.metrics.providerSelections += 1;
           await this.emit({ type: "provider_selected", provider: candidate.name });
           return candidate;
         }
@@ -248,6 +315,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
         }
 
         const nextDelayMs = retryDelay(delayMs, this.maxRetryDelayMs, this.random);
+        this.metrics.providerRetries += 1;
         await this.emit({
           type: "provider_retry",
           provider: candidate.name,
@@ -290,6 +358,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
 
           await this.clearFailure(candidate);
           this.active = candidate;
+          this.metrics.fallbackActivations += 1;
           return await this.runWithRetry(candidate, operationName, operation);
         } catch (candidateError) {
           await this.recordFailure(candidate, operationName, candidateError);
@@ -324,5 +393,27 @@ export class AnnProviderOrchestrator implements AnnProvider {
       activeProvider: active.name,
       attemptedProviders: this.candidates.map((candidate) => candidate.name)
     };
+  }
+
+  getProviderHealth(): AnnProviderHealthState[] {
+    return this.candidates.map((candidate) => this.providerHealthState(candidate));
+  }
+
+  getCircuitState(): AnnCircuitState {
+    const providers = this.getProviderHealth();
+
+    return {
+      activeProvider: this.active?.name ?? null,
+      openProviders: providers.filter((provider) => provider.circuitOpen).map((provider) => provider.provider),
+      providers
+    };
+  }
+
+  getRetryMetrics(): AnnRetryMetrics {
+    return { ...this.metrics };
+  }
+
+  getRecentEvents(): AnnProviderEvent[] {
+    return this.events.map(cloneEvent);
   }
 }
