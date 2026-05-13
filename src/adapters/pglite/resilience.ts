@@ -1,6 +1,10 @@
-import type { AnnProvider, AnnIndexStats } from "../../ann/types.js";
+import type { AnnIndexStats, AnnProvider } from "../../ann/types.js";
 import type { AnnSnapshot } from "../../ann/serialization.js";
-import { restorePgVectorSnapshot, type RestorePgVectorSnapshotResult } from "../pgvector/snapshot.js";
+import {
+  restorePgVectorSnapshot,
+  type RestorePgVectorSnapshotOptions,
+  type RestorePgVectorSnapshotResult
+} from "../pgvector/snapshot.js";
 
 export interface PGliteHealthCheckResult {
   ok: boolean;
@@ -21,6 +25,20 @@ export interface RebuildPGliteFromSnapshotResult extends RestorePgVectorSnapshot
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown PGlite health check error";
+}
+
+function restoreOptions(options: RebuildPGliteFromSnapshotOptions): RestorePgVectorSnapshotOptions {
+  const result: RestorePgVectorSnapshotOptions = {};
+
+  if (options.batchSize !== undefined) {
+    result.batchSize = options.batchSize;
+  }
+
+  if (options.onBatchRestored !== undefined) {
+    result.onBatchRestored = options.onBatchRestored;
+  }
+
+  return result;
 }
 
 export async function checkPGliteAnnHealth(provider: AnnProvider): Promise<PGliteHealthCheckResult> {
@@ -52,10 +70,7 @@ export async function rebuildPGliteFromSnapshot(
     throw new Error("PGlite snapshot does not contain the minimum required entries");
   }
 
-  const result = await restorePgVectorSnapshot(provider, snapshot, {
-    batchSize: options.batchSize,
-    onBatchRestored: options.onBatchRestored
-  });
+  const result = await restorePgVectorSnapshot(provider, snapshot, restoreOptions(options));
 
   return {
     ...result,
