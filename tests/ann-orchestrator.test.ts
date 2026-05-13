@@ -10,7 +10,15 @@ import {
   type AnnProvider
 } from "../src/index.js";
 
-function provider(name: string, options: { failSearch?: boolean; failStats?: boolean; transientSearchFailures?: number } = {}): AnnProvider {
+function provider(
+  name: string,
+  options: {
+    failSearch?: boolean;
+    failStats?: boolean;
+    transientSearchFailures?: number;
+    hangingHealthCheck?: boolean;
+  } = {}
+): AnnProvider {
   let transientFailures = options.transientSearchFailures ?? 0;
 
   return {
@@ -33,6 +41,10 @@ function provider(name: string, options: { failSearch?: boolean; failStats?: boo
       return [{ clusterId: name, similarity: 1 }];
     },
     async stats() {
+      if (options.hangingHealthCheck === true) {
+        return new Promise(() => undefined);
+      }
+
       if (options.failStats === true) {
         throw new Error(`${name} stats failed`);
       }
@@ -87,10 +99,80 @@ test("ANN orchestrator retries transient read failures with observability", asyn
   });
 
   const results = await orchestrator.search({ values: [1, 2, 3] });
+  const metrics = orchestrator.getRetryMetrics();
 
   assert.deepEqual(results, [{ clusterId: "primary", similarity: 1 }]);
   assert.deepEqual(delays, [100]);
   assert.ok(events.includes("provider_retry"));
+  assert.equal(metrics.providerRetries, 1);
+});
+
+test("ANN orchestrator opens circuit and reports health state", async () => {
+  const orchestrator = new AnnProviderOrchestrator([
+    {
+      name: "primary",
+      provider: provider("primary", { failSearch: true })
+    }
+  ], {
+    failOpen: false,
+    circuitBreakerThreshold: 1,
+    failureCooldownMs: 10_000
+  });
+
+  await assert.rejects(() => orchestrator.search({ values: [1, 2, 3] }));
+
+  const circuit = orchestrator.getCircuitState();
+  const health = orchestrator.getProviderHealth()[0];
+
+  assert.deepEqual(circuit.openProviders, ["primary"]);
+  assert.equal(health.circuitOpen, true);
+  assert.equal(health.failureCount, 1);
+});
+
+test("ANN event history remains bounded and immutable", async () => {
+  const orchestrator = new AnnProviderOrchestrator([
+    {
+      name: "primary",
+      provider: provider("primary", { transientSearchFailures: 3 })
+    }
+  ], {
+    eventHistoryLimit: 2,
+    retryPolicy: {
+      attempts: 4
+    },
+    random: () => 0,
+    retrySleeper: async () => undefined
+  });
+
+  await orchestrator.search({ values: [1, 2, 3] });
+
+  const first = orchestrator.getRecentEvents();
+  assert.equal(first.length, 2);
+
+  first[0].provider = "tampered";
+
+  const second = orchestrator.getRecentEvents();
+  assert.notEqual(second[0].provider, "tampered");
+});
+
+test("ANN health probe timeout skips hanging providers", async () => {
+  const orchestrator = new AnnProviderOrchestrator([
+    {
+      name: "hung",
+      provider: provider("hung", { hangingHealthCheck: true }),
+      priority: 10
+    },
+    {
+      name: "fallback",
+      provider: provider("fallback"),
+      priority: 1
+    }
+  ], {
+    healthProbeTimeoutMs: 1
+  });
+
+  const selection = await orchestrator.selection();
+  assert.equal(selection.activeProvider, "fallback");
 });
 
 test("ANN orchestrator promotes fallback when active provider fails", async () => {
@@ -109,9 +191,11 @@ test("ANN orchestrator promotes fallback when active provider fails", async () =
 
   const results = await orchestrator.search({ values: [1, 2, 3] });
   const selection = await orchestrator.selection();
+  const metrics = orchestrator.getRetryMetrics();
 
   assert.deepEqual(results, [{ clusterId: "fallback", similarity: 1 }]);
   assert.equal(selection.activeProvider, "fallback");
+  assert.equal(metrics.fallbackActivations, 1);
 });
 
 test("ANN profile helpers construct expected stacks", async () => {
