@@ -25,6 +25,7 @@ export * from "./adapters/pgvector/types.js";
 export * from "./adapters/pgvector/provider.js";
 export * from "./adapters/pgvector/executor.js";
 export * from "./adapters/pgvector/snapshot.js";
+export * from "./adapters/pglite/executor.js";
 export * from "./workers/semantic-refresh.js";
 export * from "./local-preferences/types.js";
 export * from "./local-preferences/profile.js";
