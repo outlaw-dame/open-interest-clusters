@@ -12,6 +12,11 @@ import {
   type PgVectorAnnConfig
 } from "./types.js";
 import {
+  parsePgVectorSearchRows,
+  pgVectorSimilarityExpression,
+  type PgVectorSearchRow
+} from "./search-utils.js";
+import {
   serializePgVectorEmbedding,
   validatePgVectorEmbedding
 } from "./vector-utils.js";
@@ -80,6 +85,14 @@ function retryDelayMs(baseDelayMs: number, maxDelayMs: number): number {
   return Math.min(maxDelayMs, baseDelayMs + jitter);
 }
 
+function normalizeMinSimilarity(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  return value ?? Number.NEGATIVE_INFINITY;
+}
+
 export class PgVectorAnnProvider implements AnnProvider {
   public readonly config: Required<PgVectorAnnConfig>;
   public readonly maxSearchResults: number;
@@ -145,10 +158,30 @@ export class PgVectorAnnProvider implements AnnProvider {
   }
 
   async search(
-    _vector: EmbeddingVector,
-    _options: AnnSearchOptions = {}
+    vector: EmbeddingVector,
+    options: AnnSearchOptions = {}
   ): Promise<AnnSearchResult[]> {
-    throw new Error("PgVectorAnnProvider search is not implemented in this slice");
+    validatePgVectorEmbedding(vector, this.config.dimensions);
+
+    const limit = boundedPositiveInteger(options.limit, 10, 1, this.maxSearchResults);
+    const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
+    const similarityExpression = pgVectorSimilarityExpression(
+      this.config.distanceMetric,
+      this.config.vectorColumn
+    );
+
+    const result = await this.queryWithRetry<PgVectorSearchRow>(
+      [
+        `SELECT "${this.config.idColumn}" AS cluster_id,`,
+        `${similarityExpression} AS similarity`,
+        `FROM "${this.config.schemaName}"."${this.config.tableName}"`,
+        "ORDER BY similarity DESC, cluster_id ASC",
+        "LIMIT $2;"
+      ].join(" "),
+      [serializePgVectorEmbedding(vector), limit]
+    );
+
+    return parsePgVectorSearchRows(result.rows, minSimilarity);
   }
 
   async stats(): Promise<AnnIndexStats> {
