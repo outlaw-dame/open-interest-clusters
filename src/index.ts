@@ -24,6 +24,7 @@ export * from "./ann/serialization.js";
 export * from "./ann/orchestrator.js";
 export * from "./ann/capabilities.js";
 export * from "./ann/capability-runner.js";
+export * from "./ann/capability-orchestrator.js";
 export * from "./ann/profiles.js";
 export * from "./adapters/pgvector/types.js";
 export * from "./adapters/pgvector/provider.js";
