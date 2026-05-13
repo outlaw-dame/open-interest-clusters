@@ -47,6 +47,47 @@ test("pgvector provider bounds max search results", () => {
   assert.equal(provider.maxSearchResults, 1000);
 });
 
+test("pgvector provider upsert validates vectors and executes", async () => {
+  const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+
+  const recordingExecutor: PgVectorQueryExecutor = {
+    async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+      sql: string,
+      params: readonly unknown[]
+    ): Promise<PgVectorQueryResult<Row>> {
+      calls.push({ sql, params });
+      return { rows: [] };
+    }
+  };
+
+  const provider = new PgVectorAnnProvider(recordingExecutor, {
+    tableName: "cluster_vectors",
+    idColumn: "cluster_id",
+    vectorColumn: "embedding",
+    dimensions: 3,
+    distanceMetric: "cosine"
+  });
+
+  await provider.upsert("gaming", { values: [1, 2, 3] });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /INSERT INTO/);
+  assert.deepEqual(calls[0].params, ["gaming", "[1,2,3]"]);
+});
+
+test("pgvector provider rejects invalid vectors", async () => {
+  const provider = new PgVectorAnnProvider(executor, {
+    tableName: "cluster_vectors",
+    idColumn: "cluster_id",
+    vectorColumn: "embedding",
+    dimensions: 3,
+    distanceMetric: "cosine"
+  });
+
+  await assert.rejects(() => provider.upsert("gaming", { values: [1, 2] }));
+  await assert.rejects(() => provider.upsert("gaming", { values: [1, Number.NaN, 3] }));
+});
+
 test("pgvector provider delete returns true when rows deleted", async () => {
   const deletingExecutor: PgVectorQueryExecutor = {
     async query<Row extends Record<string, unknown> = Record<string, unknown>>(): Promise<PgVectorQueryResult<Row>> {
@@ -103,7 +144,7 @@ test("pgvector provider does not retry non retryable errors", async () => {
   assert.equal(attempts, 1);
 });
 
-test("pgvector provider throws for unimplemented methods in current slices", async () => {
+test("pgvector provider search remains intentionally unimplemented", async () => {
   const provider = new PgVectorAnnProvider(executor, {
     tableName: "cluster_vectors",
     idColumn: "cluster_id",
@@ -112,6 +153,5 @@ test("pgvector provider throws for unimplemented methods in current slices", asy
     distanceMetric: "cosine"
   });
 
-  await assert.rejects(() => provider.upsert("gaming", { values: [1] }));
   await assert.rejects(() => provider.search({ values: [1] }));
 });
