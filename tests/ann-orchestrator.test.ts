@@ -10,13 +10,22 @@ import {
   type AnnProvider
 } from "../src/index.js";
 
-function provider(name: string, options: { failSearch?: boolean; failStats?: boolean } = {}): AnnProvider {
+function provider(name: string, options: { failSearch?: boolean; failStats?: boolean; transientSearchFailures?: number } = {}): AnnProvider {
+  let transientFailures = options.transientSearchFailures ?? 0;
+
   return {
     async upsert() {},
     async delete() {
       return true;
     },
     async search() {
+      if (transientFailures > 0) {
+        transientFailures -= 1;
+        const error = new Error(`${name} transient failure`) as Error & { code?: string };
+        error.code = "ECONNRESET";
+        throw error;
+      }
+
       if (options.failSearch === true) {
         throw new Error(`${name} search failed`);
       }
@@ -53,6 +62,35 @@ test("ANN orchestrator respects custom health checks", async () => {
 
   assert.equal(selection.activeProvider, "fallback");
   assert.deepEqual(results, [{ clusterId: "fallback", similarity: 1 }]);
+});
+
+test("ANN orchestrator retries transient read failures with observability", async () => {
+  const events: string[] = [];
+  const delays: number[] = [];
+
+  const orchestrator = new AnnProviderOrchestrator([
+    {
+      name: "primary",
+      provider: provider("primary", { transientSearchFailures: 1 })
+    }
+  ], {
+    retryPolicy: {
+      attempts: 2
+    },
+    random: () => 0,
+    retrySleeper: async (delayMs) => {
+      delays.push(delayMs);
+    },
+    onEvent: async (event) => {
+      events.push(event.type);
+    }
+  });
+
+  const results = await orchestrator.search({ values: [1, 2, 3] });
+
+  assert.deepEqual(results, [{ clusterId: "primary", similarity: 1 }]);
+  assert.deepEqual(delays, [100]);
+  assert.ok(events.includes("provider_retry"));
 });
 
 test("ANN orchestrator promotes fallback when active provider fails", async () => {
