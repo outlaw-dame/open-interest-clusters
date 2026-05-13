@@ -57,7 +57,7 @@ test("restorePgVectorSnapshot restores in bounded batches with progress", async 
 
   const result = await restorePgVectorSnapshot(provider, snapshot, {
     batchSize: 2,
-    onBatchRestored(restoredCount, total) {
+    onBatchRestored(restoredCount: number, total: number) {
       progress.push([restoredCount, total]);
     }
   });
