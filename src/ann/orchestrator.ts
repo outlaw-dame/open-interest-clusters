@@ -60,6 +60,12 @@ export interface AnnProviderHealthState {
   cooldownRemainingMs: number;
 }
 
+export interface AnnProviderProbeResult extends AnnProviderHealthState {
+  healthy: boolean;
+  durationMs: number;
+  error: string | null;
+}
+
 export interface AnnCircuitState {
   activeProvider: string | null;
   openProviders: string[];
@@ -221,6 +227,30 @@ export class AnnProviderOrchestrator implements AnnProvider {
       this.healthProbeTimeoutMs,
       `ANN provider health probe timed out: ${candidate.name}`
     );
+  }
+
+  private async probeCandidate(candidate: AnnProviderCandidate): Promise<AnnProviderProbeResult> {
+    const startedAt = this.now();
+    const state = this.providerHealthState(candidate);
+
+    try {
+      const healthy = await this.checkHealthy(candidate);
+      const durationMs = Math.max(0, this.now() - startedAt);
+
+      return {
+        ...state,
+        healthy,
+        durationMs,
+        error: healthy ? null : "Health check returned false"
+      };
+    } catch (error) {
+      return {
+        ...state,
+        healthy: false,
+        durationMs: Math.max(0, this.now() - startedAt),
+        error: errorMessage(error)
+      };
+    }
   }
 
   private recordEvent(event: AnnProviderEvent): void {
@@ -468,5 +498,9 @@ export class AnnProviderOrchestrator implements AnnProvider {
     }
 
     return ordered;
+  }
+
+  async probeProviders(): Promise<AnnProviderProbeResult[]> {
+    return Promise.all(this.candidates.map((candidate) => this.probeCandidate(candidate)));
   }
 }
