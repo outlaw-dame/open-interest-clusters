@@ -17,6 +17,7 @@
     "dist",
     "schema",
     "datasets",
+    "docs",
     "README.md",
     "LICENSE"
   ],
