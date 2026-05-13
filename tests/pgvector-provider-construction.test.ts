@@ -71,8 +71,10 @@ test("pgvector provider upsert validates vectors and executes", async () => {
   await provider.upsert("gaming", { values: [1, 2, 3] });
 
   assert.equal(calls.length, 1);
-  assert.match(calls[0].sql, /INSERT INTO/);
-  assert.deepEqual(calls[0].params, ["gaming", "[1,2,3]"]);
+  const call = calls[0];
+  assert.ok(call);
+  assert.match(call.sql, /INSERT INTO/);
+  assert.deepEqual(call.params, ["gaming", "[1,2,3]"]);
 });
 
 test("pgvector provider rejects invalid vectors", async () => {
