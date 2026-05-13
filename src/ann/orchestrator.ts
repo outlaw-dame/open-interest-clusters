@@ -16,11 +16,18 @@ export interface AnnProviderCandidate {
 export interface AnnOrchestratorOptions {
   failOpen?: boolean;
   healthCheckOnInit?: boolean;
+  failureCooldownMs?: number;
+  circuitBreakerThreshold?: number;
 }
 
 export interface AnnProviderSelection {
   activeProvider: string;
   attemptedProviders: string[];
+}
+
+interface ProviderFailureState {
+  failures: number;
+  retryAfter: number;
 }
 
 function sortedCandidates(candidates: readonly AnnProviderCandidate[]): AnnProviderCandidate[] {
@@ -41,6 +48,9 @@ export class AnnProviderOrchestrator implements AnnProvider {
   private readonly candidates: AnnProviderCandidate[];
   private readonly failOpen: boolean;
   private readonly healthCheckOnInit: boolean;
+  private readonly failureCooldownMs: number;
+  private readonly circuitBreakerThreshold: number;
+  private readonly failures = new Map<string, ProviderFailureState>();
 
   constructor(candidates: readonly AnnProviderCandidate[], options: AnnOrchestratorOptions = {}) {
     if (candidates.length === 0) {
@@ -50,16 +60,53 @@ export class AnnProviderOrchestrator implements AnnProvider {
     this.candidates = sortedCandidates(candidates);
     this.failOpen = options.failOpen ?? true;
     this.healthCheckOnInit = options.healthCheckOnInit ?? true;
+    this.failureCooldownMs = Math.max(0, options.failureCooldownMs ?? 5_000);
+    this.circuitBreakerThreshold = Math.max(1, options.circuitBreakerThreshold ?? 3);
+  }
+
+  private now(): number {
+    return Date.now();
+  }
+
+  private isCircuitOpen(candidate: AnnProviderCandidate): boolean {
+    const state = this.failures.get(candidate.name);
+    if (state === undefined) {
+      return false;
+    }
+
+    return state.retryAfter > this.now();
+  }
+
+  private recordFailure(candidate: AnnProviderCandidate): void {
+    const existing = this.failures.get(candidate.name);
+    const failures = (existing?.failures ?? 0) + 1;
+
+    this.failures.set(candidate.name, {
+      failures,
+      retryAfter: failures >= this.circuitBreakerThreshold ? this.now() + this.failureCooldownMs : 0
+    });
+
+    if (this.active?.name === candidate.name) {
+      this.active = null;
+    }
+  }
+
+  private clearFailure(candidate: AnnProviderCandidate): void {
+    this.failures.delete(candidate.name);
   }
 
   private async selectProvider(): Promise<AnnProviderCandidate> {
-    if (this.active !== null) {
+    if (this.active !== null && !this.isCircuitOpen(this.active)) {
       return this.active;
     }
 
     const attempted: string[] = [];
 
     for (const candidate of this.candidates) {
+      if (this.isCircuitOpen(candidate)) {
+        continue;
+      }
+
       attempted.push(candidate.name);
 
       if (!this.healthCheckOnInit) {
@@ -69,10 +116,12 @@ export class AnnProviderOrchestrator implements AnnProvider {
 
       try {
         if (await isHealthy(candidate)) {
+          this.clearFailure(candidate);
           this.active = candidate;
           return candidate;
         }
       } catch {
+        this.recordFailure(candidate);
         continue;
       }
     }
@@ -84,14 +133,18 @@ export class AnnProviderOrchestrator implements AnnProvider {
     const primary = await this.selectProvider();
 
     try {
-      return await operation(primary.provider);
+      const result = await operation(primary.provider);
+      this.clearFailure(primary);
+      return result;
     } catch (error) {
+      this.recordFailure(primary);
+
       if (!this.failOpen) {
         throw error;
       }
 
       for (const candidate of this.candidates) {
-        if (candidate.name === primary.name) {
+        if (candidate.name === primary.name || this.isCircuitOpen(candidate)) {
           continue;
         }
 
@@ -100,9 +153,11 @@ export class AnnProviderOrchestrator implements AnnProvider {
             continue;
           }
 
+          this.clearFailure(candidate);
           this.active = candidate;
           return await operation(candidate.provider);
         } catch {
+          this.recordFailure(candidate);
           continue;
         }
       }
