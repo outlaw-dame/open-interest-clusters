@@ -11,6 +11,10 @@ import {
   normalizePgVectorConfig,
   type PgVectorAnnConfig
 } from "./types.js";
+import {
+  serializePgVectorEmbedding,
+  validatePgVectorEmbedding
+} from "./vector-utils.js";
 
 export interface PgVectorQueryResult<Row extends Record<string, unknown> = Record<string, unknown>> {
   rows: Row[];
@@ -113,6 +117,8 @@ export class PgVectorAnnProvider implements AnnProvider {
   }
 
   async upsert(_clusterId: string, _vector: EmbeddingVector): Promise<void> {
+    void validatePgVectorEmbedding;
+    void serializePgVectorEmbedding;
     throw new Error("PgVectorAnnProvider upsert is not implemented in this slice");
   }
 
