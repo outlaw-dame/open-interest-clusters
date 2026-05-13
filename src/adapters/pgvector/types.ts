@@ -17,7 +17,7 @@ export interface PgVectorMigrationPlan {
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MIN_DIMENSIONS = 1;
-const MAX_DIMENSIONS = 16_384;
+const MAX_VECTOR_DIMENSIONS = 2_000;
 const MAX_IDENTIFIER_LENGTH = 63;
 const RESERVED_IDENTIFIERS = new Set([
   "select",
@@ -57,7 +57,7 @@ export function normalizePgVectorConfig(config: PgVectorAnnConfig): Required<PgV
     assertPgVectorIdentifier(schemaName, "schema");
   }
 
-  if (!Number.isInteger(config.dimensions) || config.dimensions < MIN_DIMENSIONS || config.dimensions > MAX_DIMENSIONS) {
+  if (!Number.isInteger(config.dimensions) || config.dimensions < MIN_DIMENSIONS || config.dimensions > MAX_VECTOR_DIMENSIONS) {
     throw new Error("Invalid pgvector dimensions");
   }
 
