@@ -57,24 +57,22 @@ export class CapabilityAwareAnnOrchestrator {
     vector: EmbeddingVector,
     options?: AnnSearchOptions
   ): Promise<CapabilityAwareAnnExecutionResult<AnnSearchResult[]>> {
-    const result = await this.orchestrator.search(vector, options);
-    const selection = await this.orchestrator.selection();
+    const execution = await this.orchestrator.searchWithProvider(vector, options);
 
     return {
-      provider: selection.activeProvider,
-      capabilities: capabilitiesFor(this.candidates, selection.activeProvider),
-      result
+      provider: execution.provider,
+      capabilities: capabilitiesFor(this.candidates, execution.provider),
+      result: execution.result
     };
   }
 
   async stats(): Promise<CapabilityAwareAnnExecutionResult<AnnIndexStats>> {
-    const result = await this.orchestrator.stats();
-    const selection = await this.orchestrator.selection();
+    const execution = await this.orchestrator.statsWithProvider();
 
     return {
-      provider: selection.activeProvider,
-      capabilities: capabilitiesFor(this.candidates, selection.activeProvider),
-      result
+      provider: execution.provider,
+      capabilities: capabilitiesFor(this.candidates, execution.provider),
+      result: execution.result
     };
   }
 
