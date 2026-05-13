@@ -35,6 +35,7 @@ export interface AnnProviderEvent {
 export interface AnnOrchestratorOptions {
   failOpen?: boolean;
   healthCheckOnInit?: boolean;
+  healthProbeTimeoutMs?: number;
   failureCooldownMs?: number;
   circuitBreakerThreshold?: number;
   retryPolicy?: AnnRetryPolicy;
@@ -82,6 +83,7 @@ const DEFAULT_RETRY_ATTEMPTS = 1;
 const DEFAULT_INITIAL_RETRY_DELAY_MS = 100;
 const DEFAULT_MAX_RETRY_DELAY_MS = 2_000;
 const DEFAULT_EVENT_HISTORY_LIMIT = 100;
+const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 5_000;
 
 function sortedCandidates(candidates: readonly AnnProviderCandidate[]): AnnProviderCandidate[] {
   return [...candidates].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -137,11 +139,33 @@ function cloneEvent(event: AnnProviderEvent): AnnProviderEvent {
   return { ...event };
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (timeoutMs <= 0) {
+    return promise;
+  }
+
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+    }
+  }
+}
+
 export class AnnProviderOrchestrator implements AnnProvider {
   private active: AnnProviderCandidate | null = null;
   private readonly candidates: AnnProviderCandidate[];
   private readonly failOpen: boolean;
   private readonly healthCheckOnInit: boolean;
+  private readonly healthProbeTimeoutMs: number;
   private readonly failureCooldownMs: number;
   private readonly circuitBreakerThreshold: number;
   private readonly retryAttempts: number;
@@ -153,8 +177,10 @@ export class AnnProviderOrchestrator implements AnnProvider {
   private readonly random: () => number;
   private readonly onEvent: ((event: AnnProviderEvent) => void | Promise<void>) | undefined;
   private readonly eventHistoryLimit: number;
+  private eventCursor = 0;
+  private eventCount = 0;
   private readonly failures = new Map<string, ProviderFailureState>();
-  private readonly events: AnnProviderEvent[] = [];
+  private readonly events: Array<AnnProviderEvent | undefined> = [];
   private readonly metrics: AnnRetryMetrics = {
     providerSelections: 0,
     providerFailures: 0,
@@ -171,6 +197,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
     this.candidates = sortedCandidates(candidates);
     this.failOpen = options.failOpen ?? true;
     this.healthCheckOnInit = options.healthCheckOnInit ?? true;
+    this.healthProbeTimeoutMs = boundedPositiveInteger(options.healthProbeTimeoutMs, DEFAULT_HEALTH_PROBE_TIMEOUT_MS, 0, 120_000);
     this.failureCooldownMs = Math.max(0, options.failureCooldownMs ?? 5_000);
     this.circuitBreakerThreshold = Math.max(1, options.circuitBreakerThreshold ?? 3);
     this.retryAttempts = boundedPositiveInteger(options.retryPolicy?.attempts, DEFAULT_RETRY_ATTEMPTS, 1, 8);
@@ -188,14 +215,26 @@ export class AnnProviderOrchestrator implements AnnProvider {
     return Date.now();
   }
 
-  private async emit(event: AnnProviderEvent): Promise<void> {
-    if (this.eventHistoryLimit > 0) {
-      this.events.push(cloneEvent(event));
-      while (this.events.length > this.eventHistoryLimit) {
-        this.events.shift();
-      }
+  private async checkHealthy(candidate: AnnProviderCandidate): Promise<boolean> {
+    return withTimeout(
+      isHealthy(candidate),
+      this.healthProbeTimeoutMs,
+      `ANN provider health probe timed out: ${candidate.name}`
+    );
+  }
+
+  private recordEvent(event: AnnProviderEvent): void {
+    if (this.eventHistoryLimit <= 0) {
+      return;
     }
 
+    this.events[this.eventCursor] = cloneEvent(event);
+    this.eventCursor = (this.eventCursor + 1) % this.eventHistoryLimit;
+    this.eventCount = Math.min(this.eventCount + 1, this.eventHistoryLimit);
+  }
+
+  private async emit(event: AnnProviderEvent): Promise<void> {
+    this.recordEvent(event);
     await this.onEvent?.(event);
   }
 
@@ -279,7 +318,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
       }
 
       try {
-        if (await isHealthy(candidate)) {
+        if (await this.checkHealthy(candidate)) {
           await this.clearFailure(candidate);
           this.active = candidate;
           this.metrics.providerSelections += 1;
@@ -352,7 +391,7 @@ export class AnnProviderOrchestrator implements AnnProvider {
         }
 
         try {
-          if (!(await isHealthy(candidate))) {
+          if (!(await this.checkHealthy(candidate))) {
             continue;
           }
 
@@ -414,6 +453,20 @@ export class AnnProviderOrchestrator implements AnnProvider {
   }
 
   getRecentEvents(): AnnProviderEvent[] {
-    return this.events.map(cloneEvent);
+    if (this.eventHistoryLimit <= 0 || this.eventCount === 0) {
+      return [];
+    }
+
+    const start = this.eventCount < this.eventHistoryLimit ? 0 : this.eventCursor;
+    const ordered: AnnProviderEvent[] = [];
+
+    for (let index = 0; index < this.eventCount; index += 1) {
+      const event = this.events[(start + index) % this.eventHistoryLimit];
+      if (event !== undefined) {
+        ordered.push(cloneEvent(event));
+      }
+    }
+
+    return ordered;
   }
 }
