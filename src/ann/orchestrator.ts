@@ -50,6 +50,11 @@ export interface AnnProviderSelection {
   attemptedProviders: string[];
 }
 
+export interface AnnExecutionResult<T> {
+  provider: string;
+  result: T;
+}
+
 export interface AnnProviderHealthState {
   provider: string;
   priority: number;
@@ -401,13 +406,13 @@ export class AnnProviderOrchestrator implements AnnProvider {
     throw lastError instanceof Error ? lastError : new Error("ANN provider operation failed");
   }
 
-  private async withFallback<T>(operationName: AnnOperation, operation: (provider: AnnProvider) => Promise<T>): Promise<T> {
+  private async withFallbackExecution<T>(operationName: AnnOperation, operation: (provider: AnnProvider) => Promise<T>): Promise<AnnExecutionResult<T>> {
     const primary = await this.selectProvider();
 
     try {
       const result = await this.runWithRetry(primary, operationName, operation);
       await this.clearFailure(primary);
-      return result;
+      return { provider: primary.name, result };
     } catch (error) {
       await this.recordFailure(primary, operationName, error);
 
@@ -428,7 +433,8 @@ export class AnnProviderOrchestrator implements AnnProvider {
           await this.clearFailure(candidate);
           this.active = candidate;
           this.metrics.fallbackActivations += 1;
-          return await this.runWithRetry(candidate, operationName, operation);
+          const result = await this.runWithRetry(candidate, operationName, operation);
+          return { provider: candidate.name, result };
         } catch (candidateError) {
           await this.recordFailure(candidate, operationName, candidateError);
           continue;
@@ -437,6 +443,11 @@ export class AnnProviderOrchestrator implements AnnProvider {
 
       throw error;
     }
+  }
+
+  private async withFallback<T>(operationName: AnnOperation, operation: (provider: AnnProvider) => Promise<T>): Promise<T> {
+    const execution = await this.withFallbackExecution(operationName, operation);
+    return execution.result;
   }
 
   async upsert(clusterId: string, vector: EmbeddingVector): Promise<void> {
@@ -453,6 +464,14 @@ export class AnnProviderOrchestrator implements AnnProvider {
 
   async stats(): Promise<AnnIndexStats> {
     return this.withFallback("stats", (provider) => provider.stats());
+  }
+
+  async searchWithProvider(vector: EmbeddingVector, options?: AnnSearchOptions): Promise<AnnExecutionResult<AnnSearchResult[]>> {
+    return this.withFallbackExecution("search", (provider) => provider.search(vector, options));
+  }
+
+  async statsWithProvider(): Promise<AnnExecutionResult<AnnIndexStats>> {
+    return this.withFallbackExecution("stats", (provider) => provider.stats());
   }
 
   async selection(): Promise<AnnProviderSelection> {
