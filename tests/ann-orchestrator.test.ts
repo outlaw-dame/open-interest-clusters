@@ -123,6 +123,7 @@ test("ANN orchestrator opens circuit and reports health state", async () => {
 
   const circuit = orchestrator.getCircuitState();
   const health = orchestrator.getProviderHealth()[0];
+  assert.ok(health);
 
   assert.deepEqual(circuit.openProviders, ["primary"]);
   assert.equal(health.circuitOpen, true);
@@ -148,11 +149,14 @@ test("ANN event history remains bounded and immutable", async () => {
 
   const first = orchestrator.getRecentEvents();
   assert.equal(first.length, 2);
-
-  first[0].provider = "tampered";
+  const firstEvent = first[0];
+  assert.ok(firstEvent);
+  firstEvent.provider = "tampered";
 
   const second = orchestrator.getRecentEvents();
-  assert.notEqual(second[0].provider, "tampered");
+  const secondEvent = second[0];
+  assert.ok(secondEvent);
+  assert.notEqual(secondEvent.provider, "tampered");
 });
 
 test("ANN health probe timeout skips hanging providers", async () => {
