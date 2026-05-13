@@ -86,11 +86,15 @@ function retryDelayMs(baseDelayMs: number, maxDelayMs: number): number {
 }
 
 function normalizeMinSimilarity(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
+  if (value === undefined) {
     return Number.NEGATIVE_INFINITY;
   }
 
-  return value ?? Number.NEGATIVE_INFINITY;
+  if (!Number.isFinite(value)) {
+    throw new Error("Invalid pgvector minimum similarity");
+  }
+
+  return value;
 }
 
 export class PgVectorAnnProvider implements AnnProvider {
