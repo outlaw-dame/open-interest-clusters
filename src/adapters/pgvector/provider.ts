@@ -38,6 +38,8 @@ export interface PgVectorAnnProviderOptions {
   retryAttempts?: number;
   initialRetryDelayMs?: number;
   maxRetryDelayMs?: number;
+  retrySleeper?: (delayMs: number) => Promise<void>;
+  random?: () => number;
 }
 
 const DEFAULT_MAX_SEARCH_RESULTS = 1_000;
@@ -80,8 +82,9 @@ function isRetryablePgVectorError(error: unknown): boolean {
   return typeof maybeCode === "string" && RETRYABLE_ERROR_CODES.has(maybeCode);
 }
 
-function retryDelayMs(baseDelayMs: number, maxDelayMs: number): number {
-  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(baseDelayMs * 0.2)));
+function retryDelayMs(baseDelayMs: number, maxDelayMs: number, random: () => number): number {
+  const safeRandom = Math.max(0, Math.min(1, random()));
+  const jitter = Math.floor(safeRandom * Math.max(1, Math.floor(baseDelayMs * 0.2)));
   return Math.min(maxDelayMs, baseDelayMs + jitter);
 }
 
@@ -97,6 +100,10 @@ function normalizeMinSimilarity(value: number | undefined): number {
   return value;
 }
 
+async function defaultRetrySleeper(delayMs: number): Promise<void> {
+  await sleep(delayMs);
+}
+
 export class PgVectorAnnProvider implements AnnProvider {
   public readonly config: Required<PgVectorAnnConfig>;
   public readonly maxSearchResults: number;
@@ -104,6 +111,8 @@ export class PgVectorAnnProvider implements AnnProvider {
   private readonly retryAttempts: number;
   private readonly initialRetryDelayMs: number;
   private readonly maxRetryDelayMs: number;
+  private readonly retrySleeper: (delayMs: number) => Promise<void>;
+  private readonly random: () => number;
 
   constructor(
     executor: PgVectorQueryExecutor,
@@ -131,6 +140,8 @@ export class PgVectorAnnProvider implements AnnProvider {
       this.initialRetryDelayMs,
       120_000
     );
+    this.retrySleeper = options.retrySleeper ?? defaultRetrySleeper;
+    this.random = options.random ?? Math.random;
   }
 
   async upsert(clusterId: string, vector: EmbeddingVector): Promise<void> {
@@ -220,7 +231,7 @@ export class PgVectorAnnProvider implements AnnProvider {
           throw error;
         }
 
-        await sleep(retryDelayMs(delayMs, this.maxRetryDelayMs));
+        await this.retrySleeper(retryDelayMs(delayMs, this.maxRetryDelayMs, this.random));
         delayMs = Math.min(this.maxRetryDelayMs, delayMs * 2);
       }
     }
