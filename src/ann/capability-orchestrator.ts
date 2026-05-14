@@ -138,10 +138,6 @@ export class CapabilityAwareAnnOrchestrator {
   async probeProviders(): Promise<AnnProviderProbeResult[]> {
     return this.orchestrator.probeProviders();
   }
-
-  getOrchestrator(): AnnProviderOrchestrator {
-    return this.orchestrator;
-  }
 }
 
 export function createCapabilityAwareAnnOrchestrator(
