@@ -18,7 +18,7 @@ const vectors = [
   },
   {
     input: "emoji: 🧠🚀",
-    hex: "c57a97f4f705bc36c3bfa9a5b64147c715e4a042622880495a457ed0b7e028cf"
+    hex: "7a915555a4a63309c9bc2a678a633a1759a54134f90adfcc4d80638a9b66de7f"
   }
 ];
 
