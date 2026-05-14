@@ -25,6 +25,7 @@ export * from "./ann/orchestrator.js";
 export * from "./ann/capabilities.js";
 export * from "./ann/capability-runner.js";
 export * from "./ann/capability-orchestrator.js";
+export * from "./ann/adaptive-orchestrator.js";
 export * from "./ann/deployment-routing.js";
 export * from "./ann/deployment-profiles.js";
 export * from "./ann/profiles.js";
