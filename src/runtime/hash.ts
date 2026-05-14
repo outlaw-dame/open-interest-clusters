@@ -45,12 +45,9 @@ function hexFromBytes(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function bytesFromArrayBuffer(buffer: ArrayBuffer): Uint8Array {
-  return new Uint8Array(buffer);
-}
-
 function webCryptoSubtle(): SubtleCrypto | null {
-  return globalThis.crypto?.subtle ?? null;
+  const subtle = globalThis.crypto?.subtle;
+  return subtle !== undefined && typeof subtle.digest === "function" ? subtle : null;
 }
 
 export function sha256Hex(value: string): string {
@@ -143,7 +140,7 @@ export async function sha256HexAsync(value: string): Promise<string> {
 
   if (subtle !== null) {
     const digest = await subtle.digest("SHA-256", new Uint8Array(utf8Bytes(value)));
-    return hexFromBytes(bytesFromArrayBuffer(digest));
+    return hexFromBytes(new Uint8Array(digest));
   }
 
   return sha256Hex(value);
