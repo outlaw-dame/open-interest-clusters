@@ -30,6 +30,7 @@ export * from "./ann/deployment-routing.js";
 export * from "./ann/deployment-profiles.js";
 export * from "./ann/deployment-config.js";
 export * from "./ann/config-lifecycle.js";
+export * from "./ann/config-manager.js";
 export * from "./ann/profiles.js";
 export * from "./adapters/pgvector/types.js";
 export * from "./adapters/pgvector/provider.js";
