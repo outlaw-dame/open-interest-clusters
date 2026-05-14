@@ -7,6 +7,11 @@ import {
   type CapableAnnProviderCandidate
 } from "../src/index.js";
 
+interface ProviderCounters {
+  upserts: number;
+  deletes: number;
+}
+
 function provider(
   name: string,
   options: {
@@ -14,15 +19,24 @@ function provider(
     failUpsert?: boolean;
     failDelete?: boolean;
     deleteResult?: boolean;
+    counters?: ProviderCounters;
   } = {}
 ): AnnProvider {
   return {
     async upsert() {
+      if (options.counters !== undefined) {
+        options.counters.upserts += 1;
+      }
+
       if (options.failUpsert) {
         throw new Error(`${name} upsert failed`);
       }
     },
     async delete() {
+      if (options.counters !== undefined) {
+        options.counters.deletes += 1;
+      }
+
       if (options.failDelete) {
         throw new Error(`${name} delete failed`);
       }
@@ -50,7 +64,7 @@ function candidates(): CapableAnnProviderCandidate[] {
     },
     {
       name: "pgvector-primary",
-      provider: provider("pgvector-primary", { failSearch: true, failUpsert: true }),
+      provider: provider("pgvector-primary", { failSearch: true, failUpsert: true, failDelete: true }),
       priority: 10,
       capabilities: { persistence: "durable", metadataFiltering: true }
     },
@@ -94,6 +108,38 @@ test("capability-aware resilient orchestrator attributes write fallback correctl
 
   assert.equal(result.provider, "pgvector-fallback");
   assert.equal(result.result, undefined);
+});
+
+test("capability-aware resilient orchestrator attributes delete fallback correctly", async () => {
+  const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
+    requirement: { metadataFiltering: true }
+  });
+
+  const result = await orchestrator.delete("cluster-a");
+
+  assert.equal(result.provider, "pgvector-fallback");
+  assert.equal(result.result, true);
+});
+
+test("capability-aware resilient orchestrator does not retry writes by default", async () => {
+  const counters: ProviderCounters = { upserts: 0, deletes: 0 };
+  const orchestrator = createCapabilityAwareAnnOrchestrator([
+    {
+      name: "pgvector-primary",
+      provider: provider("pgvector-primary", { failUpsert: true, counters }),
+      priority: 10,
+      capabilities: { persistence: "durable", metadataFiltering: true }
+    }
+  ], {
+    requirement: { metadataFiltering: true },
+    failOpen: false,
+    retryPolicy: {
+      attempts: 5
+    }
+  });
+
+  await assert.rejects(() => orchestrator.upsert("cluster-a", { values: [1, 2, 3] }));
+  assert.equal(counters.upserts, 1);
 });
 
 test("capability-aware resilient orchestrator respects fail-closed semantics", async () => {
