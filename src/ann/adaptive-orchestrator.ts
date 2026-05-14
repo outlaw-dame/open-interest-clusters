@@ -1,20 +1,18 @@
 import {
   createCapabilityAwareAnnOrchestrator,
   type CapabilityAwareAnnOrchestrator,
-  type CapabilityAwareAnnOrchestratorOptions
+  type CapabilityAwareAnnOrchestratorOptions,
+  type AnnCircuitState,
+  type AnnProviderEvent,
+  type AnnProviderHealthState,
+  type AnnProviderProbeResult,
+  type AnnRetryMetrics
 } from "./capability-orchestrator.js";
 import type { CapabilityAwareAnnExecutionResult } from "./capability-runner.js";
 import type { CapableAnnProviderCandidate } from "./capabilities.js";
 import type { AnnDeploymentRoutingOptions } from "./deployment-routing.js";
 import type { EmbeddingVector } from "../embedding/types.js";
 import type { AnnIndexStats, AnnSearchOptions, AnnSearchResult } from "./types.js";
-import type {
-  AnnCircuitState,
-  AnnProviderEvent,
-  AnnProviderHealthState,
-  AnnProviderProbeResult,
-  AnnRetryMetrics
-} from "./orchestrator.js";
 
 export interface AdaptiveAnnReconfiguration {
   requirement?: CapabilityAwareAnnOrchestratorOptions["requirement"];
@@ -64,23 +62,23 @@ export class AdaptiveCapabilityAnnOrchestrator {
   }
 
   getRetryMetrics(): AnnRetryMetrics {
-    return this.current.getOrchestrator().getRetryMetrics();
+    return this.current.getRetryMetrics();
   }
 
   getProviderHealth(): AnnProviderHealthState[] {
-    return this.current.getOrchestrator().getProviderHealth();
+    return this.current.getProviderHealth();
   }
 
   getCircuitState(): AnnCircuitState {
-    return this.current.getOrchestrator().getCircuitState();
+    return this.current.getCircuitState();
   }
 
   getRecentEvents(): AnnProviderEvent[] {
-    return this.current.getOrchestrator().getRecentEvents();
+    return this.current.getRecentEvents();
   }
 
   async probeProviders(): Promise<AnnProviderProbeResult[]> {
-    return this.current.getOrchestrator().probeProviders();
+    return this.current.probeProviders();
   }
 }
 
