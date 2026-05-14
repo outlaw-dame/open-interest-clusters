@@ -1,7 +1,10 @@
 import { sha256Fingerprint } from "../runtime/hash.js";
 import { validateAnnDeploymentConfig, type AnnDeploymentConfig, type AnnDeploymentConfigInput } from "./deployment-config.js";
 
+export const ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION = 1;
+
 export interface AnnConfigSnapshot {
+  schemaVersion: typeof ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION;
   fingerprint: string;
   config: AnnDeploymentConfig;
   createdAt: string;
@@ -13,18 +16,18 @@ export interface AnnConfigDiff {
   nextFingerprint: string;
 }
 
-function stableStringify(value: unknown): string {
+export function stableStringifyForAnnConfig(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    return `[${value.map((item) => stableStringifyForAnnConfig(item)).join(",")}]`;
   }
 
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringifyForAnnConfig(record[key])}`).join(",")}}`;
 }
 
 function cloneConfig(config: AnnDeploymentConfig): AnnDeploymentConfig {
@@ -37,6 +40,7 @@ function cloneConfig(config: AnnDeploymentConfig): AnnDeploymentConfig {
 
 export function cloneAnnConfigSnapshot(snapshot: AnnConfigSnapshot): AnnConfigSnapshot {
   return {
+    schemaVersion: snapshot.schemaVersion,
     fingerprint: snapshot.fingerprint,
     createdAt: snapshot.createdAt,
     config: cloneConfig(snapshot.config)
@@ -51,12 +55,13 @@ export function freezeAnnConfigSnapshot(snapshot: AnnConfigSnapshot): AnnConfigS
 }
 
 export function fingerprintAnnDeploymentConfig(config: AnnDeploymentConfig): string {
-  return sha256Fingerprint(stableStringify(config));
+  return sha256Fingerprint(stableStringifyForAnnConfig(config));
 }
 
 export function createAnnConfigSnapshot(input: AnnDeploymentConfigInput, now: () => Date = () => new Date()): AnnConfigSnapshot {
   const config = validateAnnDeploymentConfig(input);
   return freezeAnnConfigSnapshot({
+    schemaVersion: ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION,
     fingerprint: fingerprintAnnDeploymentConfig(config),
     config: cloneConfig(config),
     createdAt: now().toISOString()
