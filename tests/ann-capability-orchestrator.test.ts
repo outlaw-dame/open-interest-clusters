@@ -63,6 +63,12 @@ function candidates(): CapableAnnProviderCandidate[] {
       capabilities: { persistence: "none" }
     },
     {
+      name: "pglite",
+      provider: provider("pglite"),
+      priority: 6,
+      capabilities: { persistence: "local", metadataFiltering: true }
+    },
+    {
       name: "pgvector-primary",
       provider: provider("pgvector-primary", { failSearch: true, failUpsert: true, failDelete: true }),
       priority: 10,
@@ -86,6 +92,33 @@ test("capability-aware resilient orchestrator falls back within capability set",
 
   assert.equal(result.provider, "pgvector-fallback");
   assert.deepEqual(result.result, [{ clusterId: "pgvector-fallback", similarity: 1 }]);
+});
+
+test("deployment-aware capability orchestration prefers browser-local providers", async () => {
+  const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
+    requirement: { metadataFiltering: true },
+    deployment: {
+      environment: "browser"
+    }
+  });
+
+  const result = await orchestrator.search({ values: [1, 2, 3] });
+
+  assert.equal(result.provider, "pglite");
+});
+
+test("deployment-aware capability orchestration prefers durable server providers", async () => {
+  const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
+    requirement: { metadataFiltering: true },
+    deployment: {
+      environment: "server",
+      requireDurableWrites: true
+    }
+  });
+
+  const result = await orchestrator.stats();
+
+  assert.equal(result.provider, "pgvector-primary");
 });
 
 test("capability-aware resilient orchestrator preserves metrics visibility", async () => {
