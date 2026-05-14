@@ -1,10 +1,13 @@
 import {
   createCapabilityAwareAnnOrchestrator,
+  type CapabilityAwareAnnExecutionResult,
   type CapabilityAwareAnnOrchestrator,
   type CapabilityAwareAnnOrchestratorOptions
 } from "./capability-orchestrator.js";
 import type { CapableAnnProviderCandidate } from "./capabilities.js";
 import type { AnnDeploymentRoutingOptions } from "./deployment-routing.js";
+import type { EmbeddingVector } from "../embedding/types.js";
+import type { AnnIndexStats, AnnSearchOptions, AnnSearchResult } from "./types.js";
 
 export interface AdaptiveAnnReconfiguration {
   requirement?: CapabilityAwareAnnOrchestratorOptions["requirement"];
@@ -32,6 +35,25 @@ export class AdaptiveCapabilityAnnOrchestrator {
     const next = createCapabilityAwareAnnOrchestrator(this.candidates, nextOptions);
     this.options = nextOptions;
     this.current = next;
+  }
+
+  async upsert(clusterId: string, vector: EmbeddingVector): Promise<CapabilityAwareAnnExecutionResult<void>> {
+    return this.current.upsert(clusterId, vector);
+  }
+
+  async delete(clusterId: string): Promise<CapabilityAwareAnnExecutionResult<boolean>> {
+    return this.current.delete(clusterId);
+  }
+
+  async search(
+    vector: EmbeddingVector,
+    options?: AnnSearchOptions
+  ): Promise<CapabilityAwareAnnExecutionResult<AnnSearchResult[]>> {
+    return this.current.search(vector, options);
+  }
+
+  async stats(): Promise<CapabilityAwareAnnExecutionResult<AnnIndexStats>> {
+    return this.current.stats();
   }
 
   getCurrent(): CapabilityAwareAnnOrchestrator {
