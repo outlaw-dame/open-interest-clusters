@@ -1,6 +1,15 @@
-import type { AnnProviderCapabilityRequirement } from "./capabilities.js";
+import type { AnnOrchestratorOptions } from "./orchestrator.js";
+import type { AnnProviderCapabilityRequirement, CapableAnnProviderCandidate } from "./capabilities.js";
 import type { AnnDeploymentRoutingOptions } from "./deployment-routing.js";
 import { annDeploymentForProfile, type AnnDeploymentProfile } from "./deployment-profiles.js";
+import {
+  createCapabilityAwareAnnOrchestrator,
+  type CapabilityAwareAnnOrchestrator
+} from "./capability-orchestrator.js";
+import {
+  createAdaptiveCapabilityAnnOrchestrator,
+  type AdaptiveCapabilityAnnOrchestrator
+} from "./adaptive-orchestrator.js";
 
 export interface AnnDeploymentConfig {
   profile: AnnDeploymentProfile;
@@ -12,6 +21,10 @@ export interface AnnDeploymentConfigInput {
   profile?: unknown;
   requirement?: unknown;
   deployment?: unknown;
+}
+
+export interface ConfiguredAnnOrchestratorOptions extends AnnOrchestratorOptions {
+  config: AnnDeploymentConfigInput;
 }
 
 const PROFILES: readonly AnnDeploymentProfile[] = ["browser", "server", "edge", "hybrid"];
@@ -96,4 +109,32 @@ export function validateAnnDeploymentConfig(input: AnnDeploymentConfigInput): An
     requirement,
     deployment
   };
+}
+
+export function createConfiguredCapabilityAnnOrchestrator(
+  candidates: readonly CapableAnnProviderCandidate[],
+  options: ConfiguredAnnOrchestratorOptions
+): CapabilityAwareAnnOrchestrator {
+  const { config, ...orchestratorOptions } = options;
+  const validated = validateAnnDeploymentConfig(config);
+
+  return createCapabilityAwareAnnOrchestrator(candidates, {
+    ...orchestratorOptions,
+    requirement: validated.requirement,
+    deployment: validated.deployment
+  });
+}
+
+export function createConfiguredAdaptiveAnnOrchestrator(
+  candidates: readonly CapableAnnProviderCandidate[],
+  options: ConfiguredAnnOrchestratorOptions
+): AdaptiveCapabilityAnnOrchestrator {
+  const { config, ...orchestratorOptions } = options;
+  const validated = validateAnnDeploymentConfig(config);
+
+  return createAdaptiveCapabilityAnnOrchestrator(candidates, {
+    ...orchestratorOptions,
+    requirement: validated.requirement,
+    deployment: validated.deployment
+  });
 }
