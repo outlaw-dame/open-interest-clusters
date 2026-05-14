@@ -9,28 +9,40 @@ import {
   type CapableAnnProviderCandidate
 } from "./capabilities.js";
 import type { CapabilityAwareAnnExecutionResult } from "./capability-runner.js";
+import {
+  filterAnnProvidersByDeployment,
+  type AnnDeploymentRoutingOptions
+} from "./deployment-routing.js";
 
 export interface CapabilityAwareAnnOrchestratorOptions extends AnnOrchestratorOptions {
   requirement: AnnProviderCapabilityRequirement;
+  deployment?: Omit<AnnDeploymentRoutingOptions, "requirement">;
 }
 
 function matchingCandidates(
   candidates: readonly CapableAnnProviderCandidate[],
-  requirement: AnnProviderCapabilityRequirement
+  options: CapabilityAwareAnnOrchestratorOptions
 ): CapableAnnProviderCandidate[] {
+  if (options.deployment !== undefined) {
+    return filterAnnProvidersByDeployment(candidates, {
+      ...options.deployment,
+      requirement: options.requirement
+    });
+  }
+
   return candidates.filter((candidate) =>
-    annProviderSatisfiesCapabilities(candidate.capabilities, requirement)
+    annProviderSatisfiesCapabilities(candidate.capabilities, options.requirement)
   );
 }
 
 function requireMatchingCandidates(
   candidates: readonly CapableAnnProviderCandidate[],
-  requirement: AnnProviderCapabilityRequirement
+  options: CapabilityAwareAnnOrchestratorOptions
 ): CapableAnnProviderCandidate[] {
-  const matches = matchingCandidates(candidates, requirement);
+  const matches = matchingCandidates(candidates, options);
 
   if (matches.length === 0) {
-    throw new Error("No ANN provider satisfies the required capabilities");
+    throw new Error("No ANN provider satisfies the required capabilities and deployment policy");
   }
 
   return matches;
@@ -49,7 +61,7 @@ export class CapabilityAwareAnnOrchestrator {
   private readonly orchestrator: AnnProviderOrchestrator;
 
   constructor(candidates: readonly CapableAnnProviderCandidate[], options: CapabilityAwareAnnOrchestratorOptions) {
-    this.candidates = requireMatchingCandidates(candidates, options.requirement);
+    this.candidates = requireMatchingCandidates(candidates, options);
     this.orchestrator = new AnnProviderOrchestrator(this.candidates, options);
   }
 
