@@ -18,6 +18,7 @@ export * from "./embedding/orchestrator.js";
 export * from "./embedding/retrieval.js";
 export * from "./embedding/serialization.js";
 export * from "./embedding/refresh.js";
+export * from "./runtime/hash.js";
 export * from "./ann/types.js";
 export * from "./ann/in-memory-ann.js";
 export * from "./ann/serialization.js";
