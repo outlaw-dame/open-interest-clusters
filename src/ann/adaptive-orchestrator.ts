@@ -7,17 +7,14 @@ import type { CapabilityAwareAnnExecutionResult } from "./capability-runner.js";
 import type { CapableAnnProviderCandidate } from "./capabilities.js";
 import type { AnnDeploymentRoutingOptions } from "./deployment-routing.js";
 import type { EmbeddingVector } from "../embedding/types.js";
+import type { AnnIndexStats, AnnSearchOptions, AnnSearchResult } from "./types.js";
 import type {
   AnnCircuitState,
-  AnnIndexStats,
   AnnProviderEvent,
   AnnProviderHealthState,
   AnnProviderProbeResult,
-  AnnRetryMetrics,
-  AnnSearchOptions,
-  AnnSearchResult
-} from "./types.js";
-import type { AnnProviderOrchestrator } from "./orchestrator.js";
+  AnnRetryMetrics
+} from "./orchestrator.js";
 
 export interface AdaptiveAnnReconfiguration {
   requirement?: CapabilityAwareAnnOrchestratorOptions["requirement"];
@@ -84,14 +81,6 @@ export class AdaptiveCapabilityAnnOrchestrator {
 
   async probeProviders(): Promise<AnnProviderProbeResult[]> {
     return this.current.getOrchestrator().probeProviders();
-  }
-
-  getCurrent(): CapabilityAwareAnnOrchestrator {
-    return this.current;
-  }
-
-  getOrchestrator(): AnnProviderOrchestrator {
-    return this.current.getOrchestrator();
   }
 }
 
