@@ -127,7 +127,7 @@ test("capability-aware resilient orchestrator preserves durable fallback metrics
   });
 
   await orchestrator.search({ values: [1, 2, 3] });
-  const metrics = orchestrator.getOrchestrator().getRetryMetrics();
+  const metrics = orchestrator.getRetryMetrics();
 
   assert.equal(metrics.fallbackActivations, 1);
 });
