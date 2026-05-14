@@ -83,9 +83,9 @@ function candidates(): CapableAnnProviderCandidate[] {
   ];
 }
 
-test("capability-aware resilient orchestrator falls back within capability set", async () => {
+test("capability-aware resilient orchestrator falls back within durable capability set", async () => {
   const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
-    requirement: { metadataFiltering: true }
+    requirement: { persistence: "durable", metadataFiltering: true }
   });
 
   const result = await orchestrator.search({ values: [1, 2, 3] });
@@ -121,9 +121,9 @@ test("deployment-aware capability orchestration prefers durable server providers
   assert.equal(result.provider, "pgvector-primary");
 });
 
-test("capability-aware resilient orchestrator preserves metrics visibility", async () => {
+test("capability-aware resilient orchestrator preserves durable fallback metrics visibility", async () => {
   const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
-    requirement: { metadataFiltering: true }
+    requirement: { persistence: "durable", metadataFiltering: true }
   });
 
   await orchestrator.search({ values: [1, 2, 3] });
@@ -132,9 +132,9 @@ test("capability-aware resilient orchestrator preserves metrics visibility", asy
   assert.equal(metrics.fallbackActivations, 1);
 });
 
-test("capability-aware resilient orchestrator attributes write fallback correctly", async () => {
+test("capability-aware resilient orchestrator attributes durable write fallback correctly", async () => {
   const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
-    requirement: { metadataFiltering: true }
+    requirement: { persistence: "durable", metadataFiltering: true }
   });
 
   const result = await orchestrator.upsert("cluster-a", { values: [1, 2, 3] });
@@ -143,9 +143,9 @@ test("capability-aware resilient orchestrator attributes write fallback correctl
   assert.equal(result.result, undefined);
 });
 
-test("capability-aware resilient orchestrator attributes delete fallback correctly", async () => {
+test("capability-aware resilient orchestrator attributes durable delete fallback correctly", async () => {
   const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
-    requirement: { metadataFiltering: true }
+    requirement: { persistence: "durable", metadataFiltering: true }
   });
 
   const result = await orchestrator.delete("cluster-a");
@@ -177,7 +177,7 @@ test("capability-aware resilient orchestrator does not retry writes by default",
 
 test("capability-aware resilient orchestrator respects fail-closed semantics", async () => {
   const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
-    requirement: { metadataFiltering: true },
+    requirement: { persistence: "durable", metadataFiltering: true },
     failOpen: false
   });
 
