@@ -1,18 +1,20 @@
 import {
   createCapabilityAwareAnnOrchestrator,
   type CapabilityAwareAnnOrchestrator,
-  type CapabilityAwareAnnOrchestratorOptions,
-  type AnnCircuitState,
-  type AnnProviderEvent,
-  type AnnProviderHealthState,
-  type AnnProviderProbeResult,
-  type AnnRetryMetrics
+  type CapabilityAwareAnnOrchestratorOptions
 } from "./capability-orchestrator.js";
 import type { CapabilityAwareAnnExecutionResult } from "./capability-runner.js";
 import type { CapableAnnProviderCandidate } from "./capabilities.js";
 import type { AnnDeploymentRoutingOptions } from "./deployment-routing.js";
 import type { EmbeddingVector } from "../embedding/types.js";
 import type { AnnIndexStats, AnnSearchOptions, AnnSearchResult } from "./types.js";
+import type {
+  AnnCircuitState,
+  AnnProviderEvent,
+  AnnProviderHealthState,
+  AnnProviderProbeResult,
+  AnnRetryMetrics
+} from "./orchestrator.js";
 
 export interface AdaptiveAnnReconfiguration {
   requirement?: CapabilityAwareAnnOrchestratorOptions["requirement"];
