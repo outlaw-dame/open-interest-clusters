@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { validateAnnDeploymentConfig, type AnnDeploymentConfig, type AnnDeploymentConfigInput } from "./deployment-config.js";
 
 export interface AnnConfigSnapshot {
@@ -27,14 +29,7 @@ function stableStringify(value: unknown): string {
 }
 
 function hashString(value: string): string {
-  let hash = 2166136261;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
 export function fingerprintAnnDeploymentConfig(config: AnnDeploymentConfig): string {
