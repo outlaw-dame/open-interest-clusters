@@ -80,6 +80,6 @@ test("adaptive orchestrator resets metrics after rebuild swap", async () => {
     deployment: { environment: "server", requireDurableWrites: true }
   });
 
-  const metrics = adaptive.getCurrent().getOrchestrator().getRetryMetrics();
+  const metrics = adaptive.getRetryMetrics();
   assert.equal(metrics.fallbackActivations, 0);
 });
