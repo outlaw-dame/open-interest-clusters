@@ -4,6 +4,7 @@ import {
   cloneAnnConfigSnapshot,
   createAnnConfigSnapshot,
   diffAnnConfigSnapshots,
+  fingerprintAnnDeploymentConfig,
   freezeAnnConfigSnapshot,
   type AnnConfigDiff,
   type AnnConfigSnapshot
@@ -59,6 +60,16 @@ function assertCompatibleSnapshot(snapshot: AnnConfigSnapshot): void {
   if (snapshot.schemaVersion !== ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION) {
     throw new Error("ANN config snapshot schema version is unsupported");
   }
+
+  const createdAt = Date.parse(snapshot.createdAt);
+  if (!Number.isFinite(createdAt)) {
+    throw new Error("ANN config snapshot createdAt is invalid");
+  }
+
+  const expectedFingerprint = fingerprintAnnDeploymentConfig(snapshot.config);
+  if (snapshot.fingerprint !== expectedFingerprint) {
+    throw new Error("ANN config snapshot fingerprint does not match config");
+  }
 }
 
 export class AdaptiveAnnConfigManager {
@@ -99,6 +110,7 @@ export class AdaptiveAnnConfigManager {
   restoreSnapshot(snapshot: AnnConfigSnapshot): void {
     try {
       assertCompatibleSnapshot(snapshot);
+      const previousFingerprint = this.snapshot.fingerprint;
       const frozen = freezeAnnConfigSnapshot(cloneAnnConfigSnapshot(snapshot));
 
       this.orchestrator.reconfigure({
@@ -110,8 +122,8 @@ export class AdaptiveAnnConfigManager {
       this.emit({
         type: "config-applied",
         diff: {
-          changed: true,
-          previousFingerprint: null,
+          changed: previousFingerprint !== frozen.fingerprint,
+          previousFingerprint,
           nextFingerprint: frozen.fingerprint
         },
         fingerprint: frozen.fingerprint
