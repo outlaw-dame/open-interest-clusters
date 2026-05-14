@@ -7,15 +7,30 @@ import {
   type CapableAnnProviderCandidate
 } from "../src/index.js";
 
-function provider(name: string, failSearch = false): AnnProvider {
+function provider(
+  name: string,
+  options: {
+    failSearch?: boolean;
+    failUpsert?: boolean;
+    failDelete?: boolean;
+    deleteResult?: boolean;
+  } = {}
+): AnnProvider {
   return {
-    async upsert() {},
+    async upsert() {
+      if (options.failUpsert) {
+        throw new Error(`${name} upsert failed`);
+      }
+    },
     async delete() {
-      return true;
+      if (options.failDelete) {
+        throw new Error(`${name} delete failed`);
+      }
+      return options.deleteResult ?? true;
     },
     async search() {
-      if (failSearch) {
-        throw new Error(`${name} failed`);
+      if (options.failSearch) {
+        throw new Error(`${name} search failed`);
       }
       return [{ clusterId: name, similarity: 1 }];
     },
@@ -35,7 +50,7 @@ function candidates(): CapableAnnProviderCandidate[] {
     },
     {
       name: "pgvector-primary",
-      provider: provider("pgvector-primary", true),
+      provider: provider("pgvector-primary", { failSearch: true, failUpsert: true }),
       priority: 10,
       capabilities: { persistence: "durable", metadataFiltering: true }
     },
@@ -68,6 +83,26 @@ test("capability-aware resilient orchestrator preserves metrics visibility", asy
   const metrics = orchestrator.getOrchestrator().getRetryMetrics();
 
   assert.equal(metrics.fallbackActivations, 1);
+});
+
+test("capability-aware resilient orchestrator attributes write fallback correctly", async () => {
+  const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
+    requirement: { metadataFiltering: true }
+  });
+
+  const result = await orchestrator.upsert("cluster-a", { values: [1, 2, 3] });
+
+  assert.equal(result.provider, "pgvector-fallback");
+  assert.equal(result.result, undefined);
+});
+
+test("capability-aware resilient orchestrator respects fail-closed semantics", async () => {
+  const orchestrator = createCapabilityAwareAnnOrchestrator(candidates(), {
+    requirement: { metadataFiltering: true },
+    failOpen: false
+  });
+
+  await assert.rejects(() => orchestrator.upsert("cluster-a", { values: [1, 2, 3] }));
 });
 
 test("capability-aware resilient orchestrator rejects impossible requirements", () => {
