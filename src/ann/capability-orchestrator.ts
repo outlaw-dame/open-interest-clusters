@@ -53,6 +53,29 @@ export class CapabilityAwareAnnOrchestrator {
     this.orchestrator = new AnnProviderOrchestrator(this.candidates, options);
   }
 
+  async upsert(
+    clusterId: string,
+    vector: EmbeddingVector
+  ): Promise<CapabilityAwareAnnExecutionResult<void>> {
+    const execution = await this.orchestrator.upsertWithProvider(clusterId, vector);
+
+    return {
+      provider: execution.provider,
+      capabilities: capabilitiesFor(this.candidates, execution.provider),
+      result: execution.result
+    };
+  }
+
+  async delete(clusterId: string): Promise<CapabilityAwareAnnExecutionResult<boolean>> {
+    const execution = await this.orchestrator.deleteWithProvider(clusterId);
+
+    return {
+      provider: execution.provider,
+      capabilities: capabilitiesFor(this.candidates, execution.provider),
+      result: execution.result
+    };
+  }
+
   async search(
     vector: EmbeddingVector,
     options?: AnnSearchOptions
