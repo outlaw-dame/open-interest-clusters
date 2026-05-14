@@ -41,6 +41,18 @@ function utf8Bytes(value: string): number[] {
   return bytes;
 }
 
+function hexFromBytes(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function bytesFromArrayBuffer(buffer: ArrayBuffer): Uint8Array {
+  return new Uint8Array(buffer);
+}
+
+function webCryptoSubtle(): SubtleCrypto | null {
+  return globalThis.crypto?.subtle ?? null;
+}
+
 export function sha256Hex(value: string): string {
   const bytes = utf8Bytes(value);
   const bitLength = bytes.length * 8;
@@ -126,6 +138,21 @@ export function sha256Hex(value: string): string {
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((word) => word.toString(16).padStart(8, "0")).join("");
 }
 
+export async function sha256HexAsync(value: string): Promise<string> {
+  const subtle = webCryptoSubtle();
+
+  if (subtle !== null) {
+    const digest = await subtle.digest("SHA-256", new Uint8Array(utf8Bytes(value)));
+    return hexFromBytes(bytesFromArrayBuffer(digest));
+  }
+
+  return sha256Hex(value);
+}
+
 export function sha256Fingerprint(value: string): string {
   return `sha256:${sha256Hex(value)}`;
+}
+
+export async function sha256FingerprintAsync(value: string): Promise<string> {
+  return `sha256:${await sha256HexAsync(value)}`;
 }
