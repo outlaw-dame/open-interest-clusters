@@ -1,4 +1,12 @@
-import { AnnProviderOrchestrator, type AnnOrchestratorOptions } from "./orchestrator.js";
+import {
+  AnnProviderOrchestrator,
+  type AnnCircuitState,
+  type AnnOrchestratorOptions,
+  type AnnProviderEvent,
+  type AnnProviderHealthState,
+  type AnnProviderProbeResult,
+  type AnnRetryMetrics
+} from "./orchestrator.js";
 import type { AnnIndexStats, AnnSearchOptions, AnnSearchResult } from "./types.js";
 import type { EmbeddingVector } from "../embedding/types.js";
 import {
@@ -109,6 +117,26 @@ export class CapabilityAwareAnnOrchestrator {
       capabilities: capabilitiesFor(this.candidates, execution.provider),
       result: execution.result
     };
+  }
+
+  getRetryMetrics(): AnnRetryMetrics {
+    return this.orchestrator.getRetryMetrics();
+  }
+
+  getProviderHealth(): AnnProviderHealthState[] {
+    return this.orchestrator.getProviderHealth();
+  }
+
+  getCircuitState(): AnnCircuitState {
+    return this.orchestrator.getCircuitState();
+  }
+
+  getRecentEvents(): AnnProviderEvent[] {
+    return this.orchestrator.getRecentEvents();
+  }
+
+  async probeProviders(): Promise<AnnProviderProbeResult[]> {
+    return this.orchestrator.probeProviders();
   }
 
   getOrchestrator(): AnnProviderOrchestrator {
