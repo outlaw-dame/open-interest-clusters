@@ -37,7 +37,7 @@ test("adaptive orchestrator can reconfigure browser to server", async () => {
     deployment: { environment: "browser" }
   });
 
-  const browser = await adaptive.getCurrent().search({ values: [1, 2, 3] });
+  const browser = await adaptive.search({ values: [1, 2, 3] });
   assert.equal(browser.provider, "pglite");
 
   adaptive.reconfigure({
@@ -48,7 +48,7 @@ test("adaptive orchestrator can reconfigure browser to server", async () => {
     }
   });
 
-  const server = await adaptive.getCurrent().search({ values: [1, 2, 3] });
+  const server = await adaptive.search({ values: [1, 2, 3] });
   assert.equal(server.provider, "pgvector");
 });
 
@@ -64,7 +64,7 @@ test("adaptive orchestrator preserves previous orchestrator on invalid reconfigu
     });
   });
 
-  const result = await adaptive.getCurrent().search({ values: [1, 2, 3] });
+  const result = await adaptive.search({ values: [1, 2, 3] });
   assert.equal(result.provider, "pglite");
 });
 
@@ -74,7 +74,7 @@ test("adaptive orchestrator resets metrics after rebuild swap", async () => {
     deployment: { environment: "browser" }
   });
 
-  await adaptive.getCurrent().search({ values: [1, 2, 3] });
+  await adaptive.search({ values: [1, 2, 3] });
 
   adaptive.reconfigure({
     deployment: { environment: "server", requireDurableWrites: true }
