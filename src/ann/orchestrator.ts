@@ -466,6 +466,14 @@ export class AnnProviderOrchestrator implements AnnProvider {
     return this.withFallback("stats", (provider) => provider.stats());
   }
 
+  async upsertWithProvider(clusterId: string, vector: EmbeddingVector): Promise<AnnExecutionResult<void>> {
+    return this.withFallbackExecution("upsert", (provider) => provider.upsert(clusterId, vector));
+  }
+
+  async deleteWithProvider(clusterId: string): Promise<AnnExecutionResult<boolean>> {
+    return this.withFallbackExecution("delete", (provider) => provider.delete(clusterId));
+  }
+
   async searchWithProvider(vector: EmbeddingVector, options?: AnnSearchOptions): Promise<AnnExecutionResult<AnnSearchResult[]>> {
     return this.withFallbackExecution("search", (provider) => provider.search(vector, options));
   }
