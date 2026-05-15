@@ -94,6 +94,10 @@ test("ActivityPods context fails closed when ACL access is not read/control/owne
     () => createActivityPodsSourceContext({ resourceScope: "acl_controlled", isOwner: "true" as never }),
     TypeError
   );
+  assert.throws(
+    () => createActivityPodsSourceContext({ resourceScope: "acl_controlled", solidAccessMode: "owner" as never }),
+    TypeError
+  );
 });
 
 test("ATProto context treats repositories as public repo visibility while preserving consent requirement", () => {
