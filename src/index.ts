@@ -25,6 +25,7 @@ export * from "./recommendation/source-adapter.js";
 export * from "./recommendation/protocol-source-contexts.js";
 export * from "./recommendation/consent-gated-source-adapter.js";
 export * from "./recommendation/interest-signal.js";
+export * from "./recommendation/interest-signal-derivation.js";
 export * from "./ann/types.js";
 export * from "./ann/in-memory-ann.js";
 export * from "./ann/serialization.js";
