@@ -84,6 +84,10 @@ function isOptionalAccessBasis(value: unknown): value is RecommendationAccessBas
   return value === undefined || hasString(ACCESS_BASIS_SET, value);
 }
 
+function isOptionalSolidAccessMode(value: unknown): value is RecommendationSolidAccessMode | undefined {
+  return value === undefined || hasString(SOLID_ACCESS_MODE_SET, value);
+}
+
 function withOptionalFlags(
   context: RecommendationSourceContext,
   input: {
@@ -229,7 +233,7 @@ export function createActivityPodsSourceContext(input: RecommendationActivityPod
   if (
     !isObject(input) ||
     !hasString(ACTIVITYPODS_SCOPE_SET, input.resourceScope) ||
-    !(input.solidAccessMode === undefined || hasString(SOLID_ACCESS_MODE_SET, input.solidAccessMode)) ||
+    !isOptionalSolidAccessMode(input.solidAccessMode) ||
     !isOptionalBoolean(input.isOwner) ||
     !isOptionalBoolean(input.containsThirdPartyData) ||
     !isOptionalBoolean(input.serverSideProcessing) ||
@@ -248,6 +252,10 @@ export function createActivityPodsSourceContext(input: RecommendationActivityPod
     },
     input
   );
+}
+
+function defaultAtprotoAccessBasis(sourceVisibility: RecommendationSourceVisibility): RecommendationAccessBasis {
+  return sourceVisibility === "atproto_public_repo" ? "atproto_public_repo" : "unknown";
 }
 
 export function createAtprotoSourceContext(input: RecommendationAtprotoSourceContextInput): RecommendationSourceContext {
@@ -269,7 +277,7 @@ export function createAtprotoSourceContext(input: RecommendationAtprotoSourceCon
     {
       protocol: "atproto",
       sourceVisibility,
-      accessBasis: input.accessBasis ?? (input.repositoryVisibility === "public_repo" ? "atproto_public_repo" : "unknown"),
+      accessBasis: input.accessBasis ?? defaultAtprotoAccessBasis(sourceVisibility),
       containsPrivateData: false
     },
     input
