@@ -119,6 +119,11 @@ export function deserializeAnnConfigSnapshot(serialized: string): AnnConfigSnaps
   return parseSnapshotRecord(parsed);
 }
 
+export function migrateAnnConfigSnapshot(snapshot: AnnConfigSnapshot): AnnConfigSnapshot {
+  assertValidAnnConfigSnapshot(snapshot);
+  return freezeAnnConfigSnapshot(cloneAnnConfigSnapshot(snapshot));
+}
+
 export function diffAnnConfigSnapshots(previous: AnnConfigSnapshot | null, next: AnnConfigSnapshot): AnnConfigDiff {
   return {
     changed: previous?.fingerprint !== next.fingerprint,
