@@ -143,13 +143,17 @@ function earliestTimestamp(left: string | undefined, right: string | undefined):
   return timestampMillis(left) <= timestampMillis(right) ? left : right;
 }
 
-function isExpired(signal: RecommendationInterestSignal, now: string): boolean {
-  if (signal.expiresAt === undefined) {
+function isExpiredTimestamp(expiresAt: string | undefined, now: string): boolean {
+  if (expiresAt === undefined) {
     return false;
   }
 
-  assertValidTimestamp(signal.expiresAt);
-  return timestampMillis(signal.expiresAt) <= timestampMillis(now);
+  assertValidTimestamp(expiresAt);
+  return timestampMillis(expiresAt) <= timestampMillis(now);
+}
+
+function isExpired(signal: RecommendationInterestSignal, now: string): boolean {
+  return isExpiredTimestamp(signal.expiresAt, now);
 }
 
 function clampUnitScore(value: number): number {
@@ -181,6 +185,44 @@ function cloneTarget(target: RecommendationInterestTarget): RecommendationIntere
   return Object.freeze({ kind: target.kind, key: target.key });
 }
 
+function cloneMutableEntry(entry: MutableProfileEntry): MutableProfileEntry {
+  const cloned: MutableProfileEntry = {
+    target: cloneTarget(entry.target),
+    score: entry.score,
+    confidence: entry.confidence,
+    signalCount: entry.signalCount,
+    positiveSignalCount: entry.positiveSignalCount,
+    negativeSignalCount: entry.negativeSignalCount,
+    neutralSignalCount: entry.neutralSignalCount,
+    privacyBoundaries: new Set(entry.privacyBoundaries),
+    protocols: new Set(entry.protocols),
+    sourceVisibilities: new Set(entry.sourceVisibilities),
+    updatedAt: entry.updatedAt
+  };
+
+  if (entry.expiresAt !== undefined) {
+    cloned.expiresAt = entry.expiresAt;
+  }
+
+  return cloned;
+}
+
+function cloneMutableState(state: MutableProfileState): MutableProfileState {
+  return {
+    updatedAt: state.updatedAt,
+    signalCount: state.signalCount,
+    entries: new Map([...state.entries.entries()].map(([key, entry]) => [key, cloneMutableEntry(entry)]))
+  };
+}
+
+function createEmptyState(updatedAt: string): MutableProfileState {
+  return {
+    updatedAt,
+    signalCount: 0,
+    entries: new Map<string, MutableProfileEntry>()
+  };
+}
+
 function freezeSortedSet<T extends string>(values: ReadonlySet<T>): readonly T[] {
   return Object.freeze([...values].sort());
 }
@@ -192,6 +234,22 @@ function createEmptySnapshot(updatedAt: string): RecommendationProfileSnapshot {
     signalCount: 0,
     entries: Object.freeze([])
   });
+}
+
+function pruneExpiredEntries(state: MutableProfileState, now: string): void {
+  let removedSignalCount = 0;
+
+  for (const [key, entry] of state.entries.entries()) {
+    if (isExpiredTimestamp(entry.expiresAt, now)) {
+      removedSignalCount += entry.signalCount;
+      state.entries.delete(key);
+    }
+  }
+
+  if (removedSignalCount > 0) {
+    state.signalCount = Math.max(0, state.signalCount - removedSignalCount);
+    state.updatedAt = maxTimestamp(state.updatedAt, now);
+  }
 }
 
 function cloneEntry(entry: MutableProfileEntry): RecommendationProfileEntry {
@@ -221,6 +279,7 @@ function createSnapshot(state: MutableProfileState | undefined, now: string): Re
     return createEmptySnapshot(now);
   }
 
+  pruneExpiredEntries(state, now);
   const entries = [...state.entries.values()]
     .map(cloneEntry)
     .sort((left, right) => Math.abs(right.score) - Math.abs(left.score) || left.target.key.localeCompare(right.target.key));
@@ -344,11 +403,8 @@ export function createInMemoryRecommendationProfileStore(
 
       assertValidSubjectId(input.subjectId);
       const now = normalizeNow(input.now, nowProvider);
-      const state = profiles.get(input.subjectId) ?? {
-        updatedAt: now,
-        signalCount: 0,
-        entries: new Map<string, MutableProfileEntry>()
-      };
+      const existingState = profiles.get(input.subjectId);
+      const state = existingState === undefined ? createEmptyState(now) : cloneMutableState(existingState);
       let acceptedSignalCount = 0;
       let skippedExpiredSignalCount = 0;
 
@@ -381,12 +437,13 @@ export function createInMemoryRecommendationProfileStore(
       }
 
       trimEntries(state, maxEntries);
+      const profile = createSnapshot(state, now);
       profiles.set(input.subjectId, state);
 
       return Object.freeze({
         acceptedSignalCount,
         skippedExpiredSignalCount,
-        profile: createSnapshot(state, now)
+        profile
       });
     },
 
