@@ -13,6 +13,7 @@ import {
   type RecommendationInterestPolarity,
   type RecommendationInterestPrivacyBoundary,
   type RecommendationInterestSignal,
+  type RecommendationInterestSignalFromSourceInput,
   type RecommendationInterestTarget
 } from "./interest-signal.js";
 import {
@@ -131,7 +132,7 @@ function createSignalForSpec(
   spec: RecommendationInterestSignalDerivationSpec
 ): RecommendationInterestSignal {
   const { source, evaluation } = normalizeReadResultItem(readResult, spec.sourceIndex);
-  const input = {
+  const input: RecommendationInterestSignalFromSourceInput = {
     source,
     target: spec.target,
     action: spec.action,
@@ -139,7 +140,7 @@ function createSignalForSpec(
     confidence: spec.confidence,
     dataUse,
     consentEvaluation: evaluation
-  } satisfies Parameters<typeof createRecommendationInterestSignalFromSource>[0];
+  };
 
   if (spec.polarity !== undefined) {
     input.polarity = spec.polarity;
