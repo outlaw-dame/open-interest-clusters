@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   RecommendationConsentAuditError,
   RecommendationConsentDeniedError,
+  RecommendationDerivedDataDeletionError,
   createRecommendationDerivedDataDeletionIntent,
   executeRecommendationDerivedDataDeletion,
   requireRecommendationConsent,
@@ -77,16 +78,19 @@ test("withRecommendationConsent never runs a denied operation", async () => {
 });
 
 test("requireRecommendationConsent throws privacy-safe denial errors", async () => {
-  const error = await assert.rejects(
-    () => requireRecommendationConsent(undefined, request),
-    RecommendationConsentDeniedError
-  );
+  let thrown: unknown;
 
-  assert.ok(error instanceof RecommendationConsentDeniedError);
-  assert.equal(error.reason, "consent.deny.default");
-  assert.equal(error.auditEvent.decision, "deny");
-  assert.equal(error.message.includes(subjectId), false);
-  assert.equal(JSON.stringify(error).includes(subjectId), false);
+  try {
+    await requireRecommendationConsent(undefined, request);
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.ok(thrown instanceof RecommendationConsentDeniedError);
+  assert.equal(thrown.reason, "consent.deny.default");
+  assert.equal(thrown.auditEvent.decision, "deny");
+  assert.equal(thrown.message.includes(subjectId), false);
+  assert.equal(JSON.stringify(thrown).includes(subjectId), false);
 });
 
 test("audit sink receives only privacy-safe event fields", async () => {
@@ -207,6 +211,26 @@ test("executeRecommendationDerivedDataDeletion validates and sanitizes deletion 
   assert.deepEqual(result.skippedTargets, ["event_history"]);
   assert.equal(result.completedAt, "2026-05-15T00:00:01.000Z");
   assert.equal(JSON.stringify(result).includes(subjectId), false);
+});
+
+test("executeRecommendationDerivedDataDeletion sanitizes deleter failures", async () => {
+  const intent = createRecommendationDerivedDataDeletionIntent(subjectId, "2026-05-15T00:00:00.000Z");
+  let thrown: unknown;
+
+  try {
+    await executeRecommendationDerivedDataDeletion(intent, {
+      deleteDerivedData() {
+        throw new Error(`storage failed for ${subjectId} at https://pod.example/private/resource`);
+      }
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.ok(thrown instanceof RecommendationDerivedDataDeletionError);
+  assert.equal(thrown.message.includes(subjectId), false);
+  assert.equal(thrown.message.includes("pod.example"), false);
+  assert.equal(JSON.stringify(thrown).includes(subjectId), false);
 });
 
 test("executeRecommendationDerivedDataDeletion rejects invalid intents and deleters", async () => {
