@@ -126,6 +126,7 @@ const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 const TRUST_BOUNDARY_SET = new Set<string>(RECOMMENDATION_SOURCE_TRUST_BOUNDARIES);
 const MAX_TARGET_KEY_LENGTH = 160;
+const DOMAIN_TARGET_KEY_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/iu;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -162,8 +163,12 @@ function isPrivacySafeTargetKey(value: unknown): value is string {
     trimmed.length <= MAX_TARGET_KEY_LENGTH &&
     !trimmed.includes("://") &&
     !trimmed.includes("@") &&
-    !/[\r\n\t]/u.test(trimmed)
+    !/[\x00-\x1F\x7F]/u.test(trimmed)
   );
+}
+
+function isPrivacySafeDomainTargetKey(value: unknown): value is string {
+  return isPrivacySafeTargetKey(value) && DOMAIN_TARGET_KEY_PATTERN.test(value);
 }
 
 function isInterestTarget(value: unknown): value is RecommendationInterestTarget {
@@ -172,7 +177,13 @@ function isInterestTarget(value: unknown): value is RecommendationInterestTarget
   }
 
   const candidate = value as Partial<RecommendationInterestTarget>;
-  return hasString(TARGET_KIND_SET, candidate.kind) && isPrivacySafeTargetKey(candidate.key);
+  if (!hasString(TARGET_KIND_SET, candidate.kind)) {
+    return false;
+  }
+
+  return candidate.kind === "domain"
+    ? isPrivacySafeDomainTargetKey(candidate.key)
+    : isPrivacySafeTargetKey(candidate.key);
 }
 
 function isInterestEvidence(value: unknown): value is RecommendationInterestEvidence {
@@ -215,11 +226,28 @@ function cloneTarget(target: RecommendationInterestTarget): RecommendationIntere
 }
 
 function cloneEvidence(evidence: RecommendationInterestEvidence): RecommendationInterestEvidence {
-  return Object.freeze({ ...evidence });
+  return Object.freeze({
+    sourceItemKind: evidence.sourceItemKind,
+    protocol: evidence.protocol,
+    sourceVisibility: evidence.sourceVisibility,
+    accessBasis: evidence.accessBasis,
+    trustBoundary: evidence.trustBoundary,
+    observedAt: evidence.observedAt
+  });
 }
 
 function cloneConsentEvent(consent: PrivacySafeRecommendationConsentEvent): PrivacySafeRecommendationConsentEvent {
-  return Object.freeze({ ...consent });
+  return Object.freeze({
+    decision: consent.decision,
+    reason: consent.reason,
+    dataUse: consent.dataUse,
+    protocol: consent.protocol,
+    sourceVisibility: consent.sourceVisibility,
+    accessBasis: consent.accessBasis,
+    containsPrivateData: consent.containsPrivateData,
+    containsThirdPartyData: consent.containsThirdPartyData,
+    serverSideProcessing: consent.serverSideProcessing
+  });
 }
 
 function isValidInterestSignal(value: unknown): value is RecommendationInterestSignal {
@@ -251,6 +279,10 @@ export function isRecommendationInterestSignal(value: unknown): value is Recomme
 }
 
 export function normalizeRecommendationInterestSignal(input: RecommendationInterestSignalInput): RecommendationInterestSignal {
+  if (!isObject(input)) {
+    throw new TypeError("Invalid recommendation interest signal input.");
+  }
+
   const candidate: RecommendationInterestSignal = {
     target: input.target,
     action: input.action,
@@ -310,17 +342,27 @@ export function createRecommendationInterestSignalFromSource(
 
   const source = normalizeRecommendationSourceItem(input.source);
   const consent = input.consentEvaluation.auditEvent;
-
-  return normalizeRecommendationInterestSignal({
+  const signalInput: RecommendationInterestSignalInput = {
     target: input.target,
     action: input.action,
-    polarity: input.polarity,
     strength: input.strength,
     confidence: input.confidence,
     dataUse: input.dataUse,
-    privacyBoundary: input.privacyBoundary,
     evidence: sourceEvidence(source),
-    consent,
-    expiresAt: input.expiresAt
-  });
+    consent
+  };
+
+  if (input.polarity !== undefined) {
+    signalInput.polarity = input.polarity;
+  }
+
+  if (input.privacyBoundary !== undefined) {
+    signalInput.privacyBoundary = input.privacyBoundary;
+  }
+
+  if (input.expiresAt !== undefined) {
+    signalInput.expiresAt = input.expiresAt;
+  }
+
+  return normalizeRecommendationInterestSignal(signalInput);
 }
