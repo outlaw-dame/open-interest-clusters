@@ -79,3 +79,41 @@ test("deletion helper safely rejects invalid runtime policy values", () => {
     TypeError
   );
 });
+
+test("malformed revocation and deletion timestamps invalidate runtime policies", () => {
+  const revokedPolicy = {
+    ...policy,
+    revokedAt: true
+  } as unknown as RecommendationConsentPolicy;
+  const deletionPolicy = {
+    ...policy,
+    deleteDerivedDataRequestedAt: 1
+  } as unknown as RecommendationConsentPolicy;
+
+  const revokedDecision = evaluateRecommendationConsent(revokedPolicy, request);
+  const deletionDecision = evaluateRecommendationConsent(deletionPolicy, request);
+
+  assert.equal(revokedDecision.decision, "deny");
+  assert.equal(revokedDecision.reason, "consent.deny.invalid_policy");
+  assert.equal(deletionDecision.decision, "deny");
+  assert.equal(deletionDecision.reason, "consent.deny.invalid_policy");
+});
+
+test("malformed optional request booleans are invalid instead of bypassing gates", () => {
+  const malformedServerSide = {
+    ...request,
+    serverSideProcessing: "true"
+  } as unknown as RecommendationConsentRequest;
+  const malformedProviderPolicy = {
+    ...request,
+    providerPolicyAllowsProcessing: "false"
+  } as unknown as RecommendationConsentRequest;
+  const malformedPrivateFlag = {
+    ...request,
+    containsPrivateData: "true"
+  } as unknown as RecommendationConsentRequest;
+
+  assert.equal(evaluateRecommendationConsent(policy, malformedServerSide).reason, "consent.deny.invalid_request");
+  assert.equal(evaluateRecommendationConsent(policy, malformedProviderPolicy).reason, "consent.deny.invalid_request");
+  assert.equal(evaluateRecommendationConsent(policy, malformedPrivateFlag).reason, "consent.deny.invalid_request");
+});
