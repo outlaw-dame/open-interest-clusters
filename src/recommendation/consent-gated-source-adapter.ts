@@ -1,10 +1,13 @@
 import {
   RECOMMENDATION_DATA_USES,
+  RECOMMENDATION_PROTOCOLS,
   evaluateRecommendationConsent,
   type PrivacySafeRecommendationConsentEvent,
   type RecommendationConsentEvaluation,
   type RecommendationConsentPolicy,
-  type RecommendationDataUse
+  type RecommendationConsentRequest,
+  type RecommendationDataUse,
+  type RecommendationProtocol
 } from "./consent.js";
 import {
   RecommendationConsentAuditError,
@@ -12,7 +15,6 @@ import {
   type RecommendationConsentEnforcementOptions
 } from "./consent-enforcement.js";
 import {
-  createRecommendationConsentRequestFromSource,
   normalizeRecommendationSourceAdapterReadRequest,
   readRecommendationSourceAdapter,
   type RecommendationSourceAdapter,
@@ -44,6 +46,7 @@ interface AllowedSourceItem {
 }
 
 const DATA_USE_SET = new Set<string>(RECOMMENDATION_DATA_USES);
+const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -51,6 +54,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isKnownDataUse(value: unknown): value is RecommendationDataUse {
   return typeof value === "string" && DATA_USE_SET.has(value);
+}
+
+function isKnownProtocol(value: unknown): value is RecommendationProtocol {
+  return typeof value === "string" && PROTOCOL_SET.has(value);
 }
 
 function isDeniedItemMode(value: unknown): value is RecommendationDeniedSourceItemMode | undefined {
@@ -66,7 +73,17 @@ function freezeEvaluations(evaluations: RecommendationConsentEvaluation[]): read
 }
 
 function cloneAuditEvent(event: PrivacySafeRecommendationConsentEvent): PrivacySafeRecommendationConsentEvent {
-  return Object.freeze({ ...event });
+  return Object.freeze({
+    decision: event.decision,
+    reason: event.reason,
+    dataUse: event.dataUse,
+    protocol: event.protocol,
+    sourceVisibility: event.sourceVisibility,
+    accessBasis: event.accessBasis,
+    containsPrivateData: event.containsPrivateData,
+    containsThirdPartyData: event.containsThirdPartyData,
+    serverSideProcessing: event.serverSideProcessing
+  });
 }
 
 async function recordConsentAuditEvent(
@@ -86,6 +103,94 @@ async function recordConsentAuditEvent(
   }
 }
 
+async function recordAuditThenThrowDenied(
+  evaluation: RecommendationConsentEvaluation,
+  options: RecommendationConsentEnforcementOptions | undefined
+): Promise<never> {
+  try {
+    await recordConsentAuditEvent(evaluation.auditEvent, options);
+  } catch {
+    throw new RecommendationConsentDeniedError(evaluation);
+  }
+
+  throw new RecommendationConsentDeniedError(evaluation);
+}
+
+function preflightProtocol(adapter: RecommendationSourceAdapter): RecommendationProtocol {
+  return isKnownProtocol(adapter.protocol) && adapter.protocol !== "unknown" ? adapter.protocol : "app_local";
+}
+
+function createPreflightConsentRequest(
+  subjectId: string,
+  dataUse: RecommendationDataUse,
+  adapter: RecommendationSourceAdapter
+): RecommendationConsentRequest {
+  const protocol = preflightProtocol(adapter);
+  const request: RecommendationConsentRequest = {
+    subjectId,
+    dataUse,
+    protocol,
+    sourceVisibility: protocol === "atproto" ? "atproto_public_repo" : "public",
+    accessBasis: protocol === "atproto" ? "atproto_public_repo" : "public_web",
+    containsPrivateData: false,
+    containsThirdPartyData: false,
+    serverSideProcessing: false
+  };
+
+  return request;
+}
+
+async function requirePolicyBeforeSourceRead(
+  policy: RecommendationConsentPolicy | null | undefined,
+  subjectId: string,
+  dataUse: RecommendationDataUse,
+  adapter: RecommendationSourceAdapter,
+  options: RecommendationConsentEnforcementOptions | undefined
+): Promise<void> {
+  if (policy !== null && policy !== undefined) {
+    return;
+  }
+
+  const evaluation = evaluateRecommendationConsent(
+    policy,
+    createPreflightConsentRequest(subjectId, dataUse, adapter)
+  );
+
+  await recordAuditThenThrowDenied(evaluation, options);
+}
+
+function createConsentRequestFromNormalizedSource(
+  subjectId: string,
+  dataUse: RecommendationDataUse,
+  source: RecommendationSourceItem
+): RecommendationConsentRequest {
+  const request: RecommendationConsentRequest = {
+    subjectId,
+    dataUse,
+    protocol: source.context.protocol,
+    sourceVisibility: source.context.sourceVisibility,
+    accessBasis: source.context.accessBasis
+  };
+
+  if (source.context.containsPrivateData !== undefined) {
+    request.containsPrivateData = source.context.containsPrivateData;
+  }
+
+  if (source.context.containsThirdPartyData !== undefined) {
+    request.containsThirdPartyData = source.context.containsThirdPartyData;
+  }
+
+  if (source.context.serverSideProcessing !== undefined) {
+    request.serverSideProcessing = source.context.serverSideProcessing;
+  }
+
+  if (source.context.providerPolicyAllowsProcessing !== undefined) {
+    request.providerPolicyAllowsProcessing = source.context.providerPolicyAllowsProcessing;
+  }
+
+  return request;
+}
+
 async function evaluateSourceItemConsent(
   source: RecommendationSourceItem,
   subjectId: string,
@@ -94,14 +199,18 @@ async function evaluateSourceItemConsent(
   deniedItemMode: RecommendationDeniedSourceItemMode,
   options: RecommendationConsentEnforcementOptions | undefined
 ): Promise<AllowedSourceItem | null> {
-  const consentRequest = createRecommendationConsentRequestFromSource({
-    subjectId,
-    dataUse,
-    source
-  });
+  const consentRequest = createConsentRequestFromNormalizedSource(subjectId, dataUse, source);
   const evaluation = evaluateRecommendationConsent(policy, consentRequest);
 
-  await recordConsentAuditEvent(evaluation.auditEvent, options);
+  try {
+    await recordConsentAuditEvent(evaluation.auditEvent, options);
+  } catch (error) {
+    if (evaluation.decision === "deny") {
+      throw new RecommendationConsentDeniedError(evaluation);
+    }
+
+    throw error;
+  }
 
   if (evaluation.decision === "deny") {
     if (deniedItemMode === "filter_denied") {
@@ -142,6 +251,14 @@ export async function readRecommendationSourceAdapterWithConsent(
 
   const safeReadRequest = normalizeRecommendationSourceAdapterReadRequest(input.readRequest);
   const deniedItemMode = input.deniedItemMode ?? "fail_closed";
+  await requirePolicyBeforeSourceRead(
+    input.policy,
+    safeReadRequest.subjectId,
+    input.dataUse,
+    input.adapter,
+    input.enforcementOptions
+  );
+
   const sourceResult = await readRecommendationSourceAdapter(input.adapter, safeReadRequest);
   const evaluations = await Promise.all(
     sourceResult.items.map((source) =>
