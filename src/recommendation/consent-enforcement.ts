@@ -45,45 +45,51 @@ function cloneAuditEvent(event: PrivacySafeRecommendationConsentEvent): PrivacyS
   return Object.freeze({ ...event });
 }
 
-function cloneTargets(targets: readonly RecommendationDerivedDataTarget[]): readonly RecommendationDerivedDataTarget[] {
-  return Object.freeze([...targets]);
+function freezeTargets(targets: RecommendationDerivedDataTarget[]): readonly RecommendationDerivedDataTarget[] {
+  return Object.freeze(targets);
 }
 
-function isValidDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): boolean {
+function isValidDeletionIntent(intent: unknown): intent is RecommendationDerivedDataDeletionIntent {
+  if (intent === null || typeof intent !== "object") {
+    return false;
+  }
+
+  const candidate = intent as Partial<RecommendationDerivedDataDeletionIntent>;
+
   return (
-    intent !== null &&
-    typeof intent === "object" &&
-    isNonEmptyString(intent.subjectId) &&
-    isNonEmptyString(intent.requestedAt) &&
-    intent.scope === "recommendation_derived_data" &&
-    Array.isArray(intent.targets) &&
-    intent.targets.length > 0 &&
-    intent.targets.every(isKnownDeletionTarget)
+    isNonEmptyString(candidate.subjectId) &&
+    isNonEmptyString(candidate.requestedAt) &&
+    candidate.scope === "recommendation_derived_data" &&
+    Array.isArray(candidate.targets) &&
+    candidate.targets.length > 0 &&
+    candidate.targets.every(isKnownDeletionTarget)
   );
 }
 
-function isValidDeletionResult(result: RecommendationDerivedDataDeletionResult): boolean {
+function isValidDeletionResult(result: unknown): result is RecommendationDerivedDataDeletionResult {
+  if (result === null || typeof result !== "object") {
+    return false;
+  }
+
+  const candidate = result as Partial<RecommendationDerivedDataDeletionResult>;
+
   return (
-    result !== null &&
-    typeof result === "object" &&
-    Array.isArray(result.deletedTargets) &&
-    Array.isArray(result.skippedTargets) &&
-    isNonEmptyString(result.completedAt) &&
-    result.deletedTargets.every(isKnownDeletionTarget) &&
-    result.skippedTargets.every(isKnownDeletionTarget)
+    Array.isArray(candidate.deletedTargets) &&
+    Array.isArray(candidate.skippedTargets) &&
+    isNonEmptyString(candidate.completedAt) &&
+    candidate.deletedTargets.every(isKnownDeletionTarget) &&
+    candidate.skippedTargets.every(isKnownDeletionTarget)
   );
 }
 
-function sanitizeDeletionResult(
-  result: RecommendationDerivedDataDeletionResult
-): RecommendationDerivedDataDeletionResult {
+function sanitizeDeletionResult(result: unknown): RecommendationDerivedDataDeletionResult {
   if (!isValidDeletionResult(result)) {
     throw new TypeError("Invalid recommendation derived data deletion result.");
   }
 
   return Object.freeze({
-    deletedTargets: cloneTargets([...new Set(result.deletedTargets)]),
-    skippedTargets: cloneTargets([...new Set(result.skippedTargets)]),
+    deletedTargets: freezeTargets([...new Set(result.deletedTargets)]),
+    skippedTargets: freezeTargets([...new Set(result.skippedTargets)]),
     completedAt: result.completedAt
   });
 }
@@ -107,6 +113,13 @@ export class RecommendationConsentAuditError extends Error {
     super("Recommendation consent audit sink failed.");
     this.name = "RecommendationConsentAuditError";
     this.auditEvent = cloneAuditEvent(event);
+  }
+}
+
+export class RecommendationDerivedDataDeletionError extends Error {
+  constructor() {
+    super("Recommendation derived data deletion failed.");
+    this.name = "RecommendationDerivedDataDeletionError";
   }
 }
 
@@ -173,6 +186,14 @@ export async function executeRecommendationDerivedDataDeletion(
     throw new TypeError("Invalid recommendation derived data deleter.");
   }
 
-  const result = await deleter.deleteDerivedData(intent);
-  return sanitizeDeletionResult(result);
+  try {
+    const result = await deleter.deleteDerivedData(intent);
+    return sanitizeDeletionResult(result);
+  } catch (error) {
+    if (error instanceof TypeError && error.message.startsWith("Invalid recommendation derived data deletion result")) {
+      throw error;
+    }
+
+    throw new RecommendationDerivedDataDeletionError();
+  }
 }
