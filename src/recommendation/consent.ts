@@ -133,6 +133,14 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
 function isKnownDataUse(value: unknown): value is RecommendationDataUse {
   return typeof value === "string" && DATA_USE_SET.has(value);
 }
@@ -170,7 +178,9 @@ function isValidPolicy(policy: unknown): policy is RecommendationConsentPolicy {
     candidate.allowedDataUses.every(isKnownDataUse) &&
     !hasInvalidAllowedUse(candidate.privateDataUses) &&
     !hasInvalidAllowedUse(candidate.thirdPartyPrivateDataUses) &&
-    !hasInvalidAllowedUse(candidate.serverSideDataUses)
+    !hasInvalidAllowedUse(candidate.serverSideDataUses) &&
+    isOptionalString(candidate.revokedAt) &&
+    isOptionalString(candidate.deleteDerivedDataRequestedAt)
   );
 }
 
@@ -186,7 +196,11 @@ function isValidRequest(request: unknown): request is RecommendationConsentReque
     isKnownDataUse(candidate.dataUse) &&
     isKnownProtocol(candidate.protocol) &&
     isKnownVisibility(candidate.sourceVisibility) &&
-    isKnownAccessBasis(candidate.accessBasis)
+    isKnownAccessBasis(candidate.accessBasis) &&
+    isOptionalBoolean(candidate.containsPrivateData) &&
+    isOptionalBoolean(candidate.containsThirdPartyData) &&
+    isOptionalBoolean(candidate.serverSideProcessing) &&
+    isOptionalBoolean(candidate.providerPolicyAllowsProcessing)
   );
 }
 

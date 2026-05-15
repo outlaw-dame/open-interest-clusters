@@ -20,6 +20,7 @@ export * from "./embedding/serialization.js";
 export * from "./embedding/refresh.js";
 export * from "./runtime/hash.js";
 export * from "./recommendation/consent.js";
+export * from "./recommendation/consent-enforcement.js";
 export * from "./ann/types.js";
 export * from "./ann/in-memory-ann.js";
 export * from "./ann/serialization.js";
