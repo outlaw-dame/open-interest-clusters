@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  RecommendationConsentAuditError,
   RecommendationConsentDeniedError,
   readRecommendationSourceAdapterWithConsent,
   type PrivacySafeRecommendationConsentEvent,
@@ -142,7 +141,7 @@ test("consent-gated source reads can filter denied items without returning them"
   assert.equal(JSON.stringify(result).includes("opaque-private"), false);
 });
 
-test("filter-denied source reads still fail closed when denial audit fails", async () => {
+test("filter-denied source reads prioritize denial errors when denial audit fails", async () => {
   let thrown: unknown;
 
   try {
@@ -164,8 +163,8 @@ test("filter-denied source reads still fail closed when denial audit fails", asy
     thrown = error;
   }
 
-  assert.equal(thrown instanceof RecommendationConsentAuditError, true);
-  assert.equal((thrown as RecommendationConsentAuditError).auditEvent.decision, "deny");
+  assert.equal(thrown instanceof RecommendationConsentDeniedError, true);
+  assert.equal((thrown as RecommendationConsentDeniedError).reason, "safety.deny.private_data_use_not_allowed");
 });
 
 test("filter-denied source reads may ignore audit failures only when explicitly configured", async () => {
@@ -188,6 +187,36 @@ test("filter-denied source reads may ignore audit failures only when explicitly 
   assert.equal(result.items.length, 0);
   assert.equal(result.deniedItemCount, 1);
   assert.equal(result.consentEvaluations.length, 0);
+});
+
+test("consent-gated source reads short-circuit missing consent before adapter reads", async () => {
+  let readCalled = false;
+  const adapter: RecommendationSourceAdapter = {
+    id: "activitypub-test",
+    protocol: "activitypub",
+    capabilities: ["read_public"],
+    read() {
+      readCalled = true;
+      return { items: [publicSourceItem] };
+    }
+  };
+  let thrown: unknown;
+
+  try {
+    await readRecommendationSourceAdapterWithConsent({
+      adapter,
+      readRequest: { subjectId: "subject-1" },
+      dataUse: "ranking",
+      policy: undefined,
+      deniedItemMode: "filter_denied"
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.equal(readCalled, false);
+  assert.equal(thrown instanceof RecommendationConsentDeniedError, true);
+  assert.equal((thrown as RecommendationConsentDeniedError).reason, "consent.deny.default");
 });
 
 test("consent-gated source reads reject invalid denied item modes", async () => {
