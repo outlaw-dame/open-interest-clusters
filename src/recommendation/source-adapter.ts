@@ -1,5 +1,6 @@
 import {
   RECOMMENDATION_ACCESS_BASES,
+  RECOMMENDATION_DATA_USES,
   RECOMMENDATION_PROTOCOLS,
   RECOMMENDATION_SOURCE_VISIBILITIES,
   type RecommendationAccessBasis,
@@ -99,6 +100,7 @@ const ADAPTER_CAPABILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_ADAPTER_CAP
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
+const DATA_USE_SET = new Set<string>(RECOMMENDATION_DATA_USES);
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -113,7 +115,7 @@ function isOptionalBoolean(value: unknown): value is boolean | undefined {
 }
 
 function isOptionalPositiveInteger(value: unknown): value is number | undefined {
-  return value === undefined || (Number.isInteger(value) && value > 0);
+  return value === undefined || (typeof value === "number" && Number.isInteger(value) && value > 0);
 }
 
 function isKnownSourceItemKind(value: unknown): value is RecommendationSourceItemKind {
@@ -138,6 +140,10 @@ function isKnownVisibility(value: unknown): value is RecommendationSourceVisibil
 
 function isKnownAccessBasis(value: unknown): value is RecommendationAccessBasis {
   return typeof value === "string" && ACCESS_BASIS_SET.has(value);
+}
+
+function isKnownDataUse(value: unknown): value is RecommendationDataUse {
+  return typeof value === "string" && DATA_USE_SET.has(value);
 }
 
 function isValidSourceContext(value: unknown): value is RecommendationSourceContext {
@@ -338,7 +344,7 @@ export async function readRecommendationSourceAdapter(
 export function createRecommendationConsentRequestFromSource(
   input: RecommendationConsentRequestFromSourceInput
 ): RecommendationConsentRequest {
-  if (input === null || typeof input !== "object" || !isNonEmptyString(input.subjectId)) {
+  if (input === null || typeof input !== "object" || !isNonEmptyString(input.subjectId) || !isKnownDataUse(input.dataUse)) {
     throw new TypeError("Invalid recommendation consent source input.");
   }
 
