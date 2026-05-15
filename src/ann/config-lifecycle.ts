@@ -42,7 +42,7 @@ function cloneConfig(config: AnnDeploymentConfig): AnnDeploymentConfig {
   };
 }
 
-function assertValidSnapshot(snapshot: AnnConfigSnapshot): void {
+export function assertValidAnnConfigSnapshot(snapshot: AnnConfigSnapshot): void {
   if (snapshot.schemaVersion !== ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION) {
     throw new Error("ANN config snapshot schema version is unsupported");
   }
@@ -69,7 +69,7 @@ function parseSnapshotRecord(value: unknown): AnnConfigSnapshot {
     config: value.config as unknown as AnnConfigSnapshot["config"]
   };
 
-  assertValidSnapshot(snapshot);
+  assertValidAnnConfigSnapshot(snapshot);
   return freezeAnnConfigSnapshot(cloneAnnConfigSnapshot(snapshot));
 }
 
@@ -104,7 +104,7 @@ export function createAnnConfigSnapshot(input: AnnDeploymentConfigInput, now: ()
 }
 
 export function serializeAnnConfigSnapshot(snapshot: AnnConfigSnapshot): string {
-  assertValidSnapshot(snapshot);
+  assertValidAnnConfigSnapshot(snapshot);
   return stableStringifyForAnnConfig(snapshot);
 }
 
