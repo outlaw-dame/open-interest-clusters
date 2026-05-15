@@ -16,6 +16,10 @@ export interface AnnConfigDiff {
   nextFingerprint: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function stableStringifyForAnnConfig(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -36,6 +40,37 @@ function cloneConfig(config: AnnDeploymentConfig): AnnDeploymentConfig {
     requirement: { ...config.requirement },
     deployment: { ...config.deployment }
   };
+}
+
+function assertValidSnapshot(snapshot: AnnConfigSnapshot): void {
+  if (snapshot.schemaVersion !== ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION) {
+    throw new Error("ANN config snapshot schema version is unsupported");
+  }
+
+  if (!Number.isFinite(Date.parse(snapshot.createdAt))) {
+    throw new Error("ANN config snapshot createdAt is invalid");
+  }
+
+  if (snapshot.fingerprint !== fingerprintAnnDeploymentConfig(snapshot.config)) {
+    throw new Error("ANN config snapshot fingerprint does not match config");
+  }
+}
+
+function parseSnapshotRecord(value: unknown): AnnConfigSnapshot {
+  if (!isRecord(value)) throw new Error("ANN config snapshot must be an object");
+  if (!isRecord(value.config)) throw new Error("ANN config snapshot config must be an object");
+  if (typeof value.createdAt !== "string") throw new Error("ANN config snapshot createdAt must be a string");
+  if (typeof value.fingerprint !== "string") throw new Error("ANN config snapshot fingerprint must be a string");
+
+  const snapshot: AnnConfigSnapshot = {
+    schemaVersion: value.schemaVersion as typeof ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION,
+    fingerprint: value.fingerprint,
+    createdAt: value.createdAt,
+    config: value.config as unknown as AnnConfigSnapshot["config"]
+  };
+
+  assertValidSnapshot(snapshot);
+  return freezeAnnConfigSnapshot(cloneAnnConfigSnapshot(snapshot));
 }
 
 export function cloneAnnConfigSnapshot(snapshot: AnnConfigSnapshot): AnnConfigSnapshot {
@@ -66,6 +101,22 @@ export function createAnnConfigSnapshot(input: AnnDeploymentConfigInput, now: ()
     config: cloneConfig(config),
     createdAt: now().toISOString()
   });
+}
+
+export function serializeAnnConfigSnapshot(snapshot: AnnConfigSnapshot): string {
+  assertValidSnapshot(snapshot);
+  return stableStringifyForAnnConfig(snapshot);
+}
+
+export function deserializeAnnConfigSnapshot(serialized: string): AnnConfigSnapshot {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new Error("ANN config snapshot JSON is invalid");
+  }
+
+  return parseSnapshotRecord(parsed);
 }
 
 export function diffAnnConfigSnapshots(previous: AnnConfigSnapshot | null, next: AnnConfigSnapshot): AnnConfigDiff {
