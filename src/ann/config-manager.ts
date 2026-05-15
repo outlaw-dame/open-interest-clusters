@@ -1,10 +1,9 @@
 import type { AdaptiveCapabilityAnnOrchestrator } from "./adaptive-orchestrator.js";
 import {
-  ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION,
+  assertValidAnnConfigSnapshot,
   cloneAnnConfigSnapshot,
   createAnnConfigSnapshot,
   diffAnnConfigSnapshots,
-  fingerprintAnnDeploymentConfig,
   freezeAnnConfigSnapshot,
   type AnnConfigDiff,
   type AnnConfigSnapshot
@@ -52,26 +51,6 @@ function cloneEvent(event: AnnConfigManagerEvent): AnnConfigManagerEvent {
   };
 }
 
-function eventForCallback(event: AnnConfigManagerEvent): AnnConfigManagerEvent {
-  return cloneEvent(event);
-}
-
-function assertCompatibleSnapshot(snapshot: AnnConfigSnapshot): void {
-  if (snapshot.schemaVersion !== ANN_CONFIG_SNAPSHOT_SCHEMA_VERSION) {
-    throw new Error("ANN config snapshot schema version is unsupported");
-  }
-
-  const createdAt = Date.parse(snapshot.createdAt);
-  if (!Number.isFinite(createdAt)) {
-    throw new Error("ANN config snapshot createdAt is invalid");
-  }
-
-  const expectedFingerprint = fingerprintAnnDeploymentConfig(snapshot.config);
-  if (snapshot.fingerprint !== expectedFingerprint) {
-    throw new Error("ANN config snapshot fingerprint does not match config");
-  }
-}
-
 export class AdaptiveAnnConfigManager {
   private snapshot: AnnConfigSnapshot;
   private readonly now: () => Date;
@@ -96,7 +75,7 @@ export class AdaptiveAnnConfigManager {
     if (this.eventHistory.length > this.maxEventHistory) {
       this.eventHistory.splice(0, this.eventHistory.length - this.maxEventHistory);
     }
-    this.onEvent?.(eventForCallback(storedEvent));
+    this.onEvent?.(cloneEvent(storedEvent));
   }
 
   getSnapshot(): AnnConfigSnapshot {
@@ -109,9 +88,19 @@ export class AdaptiveAnnConfigManager {
 
   restoreSnapshot(snapshot: AnnConfigSnapshot): void {
     try {
-      assertCompatibleSnapshot(snapshot);
+      assertValidAnnConfigSnapshot(snapshot);
       const previousFingerprint = this.snapshot.fingerprint;
       const frozen = freezeAnnConfigSnapshot(cloneAnnConfigSnapshot(snapshot));
+      const diff = {
+        changed: previousFingerprint !== frozen.fingerprint,
+        previousFingerprint,
+        nextFingerprint: frozen.fingerprint
+      };
+
+      if (!diff.changed) {
+        this.emit({ type: "config-noop", diff, fingerprint: frozen.fingerprint });
+        return;
+      }
 
       this.orchestrator.reconfigure({
         requirement: frozen.config.requirement,
@@ -119,15 +108,7 @@ export class AdaptiveAnnConfigManager {
       });
 
       this.snapshot = frozen;
-      this.emit({
-        type: "config-applied",
-        diff: {
-          changed: previousFingerprint !== frozen.fingerprint,
-          previousFingerprint,
-          nextFingerprint: frozen.fingerprint
-        },
-        fingerprint: frozen.fingerprint
-      });
+      this.emit({ type: "config-applied", diff, fingerprint: frozen.fingerprint });
     } catch (error) {
       this.emit({ type: "config-rejected", error: errorMessage(error) });
       throw error;
