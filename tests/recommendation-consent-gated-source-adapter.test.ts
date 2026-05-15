@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  RecommendationConsentAuditError,
   RecommendationConsentDeniedError,
   readRecommendationSourceAdapterWithConsent,
   type PrivacySafeRecommendationConsentEvent,
@@ -141,6 +142,54 @@ test("consent-gated source reads can filter denied items without returning them"
   assert.equal(JSON.stringify(result).includes("opaque-private"), false);
 });
 
+test("filter-denied source reads still fail closed when denial audit fails", async () => {
+  let thrown: unknown;
+
+  try {
+    await readRecommendationSourceAdapterWithConsent({
+      adapter: createAdapter([privateSourceItem]),
+      readRequest: { subjectId: "subject-1" },
+      dataUse: "ranking",
+      policy: publicOnlyPolicy,
+      deniedItemMode: "filter_denied",
+      enforcementOptions: {
+        auditSink: {
+          record() {
+            throw new Error("sink unavailable");
+          }
+        }
+      }
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.equal(thrown instanceof RecommendationConsentAuditError, true);
+  assert.equal((thrown as RecommendationConsentAuditError).auditEvent.decision, "deny");
+});
+
+test("filter-denied source reads may ignore audit failures only when explicitly configured", async () => {
+  const result = await readRecommendationSourceAdapterWithConsent({
+    adapter: createAdapter([privateSourceItem]),
+    readRequest: { subjectId: "subject-1" },
+    dataUse: "ranking",
+    policy: publicOnlyPolicy,
+    deniedItemMode: "filter_denied",
+    enforcementOptions: {
+      auditFailureMode: "ignore",
+      auditSink: {
+        record() {
+          throw new Error("sink unavailable");
+        }
+      }
+    }
+  });
+
+  assert.equal(result.items.length, 0);
+  assert.equal(result.deniedItemCount, 1);
+  assert.equal(result.consentEvaluations.length, 0);
+});
+
 test("consent-gated source reads reject invalid denied item modes", async () => {
   await assert.rejects(
     () =>
@@ -167,4 +216,30 @@ test("consent-gated source reads reject malformed data use before returning sour
       }),
     TypeError
   );
+});
+
+test("consent-gated source reads reject malformed data use even for empty pages", async () => {
+  let readCalled = false;
+  const emptyAdapter: RecommendationSourceAdapter = {
+    id: "activitypub-test",
+    protocol: "activitypub",
+    capabilities: ["read_public"],
+    read() {
+      readCalled = true;
+      return { items: [] };
+    }
+  };
+
+  await assert.rejects(
+    () =>
+      readRecommendationSourceAdapterWithConsent({
+        adapter: emptyAdapter,
+        readRequest: { subjectId: "subject-1" },
+        dataUse: "raw_profile_export" as never,
+        policy: rankingPolicy,
+        deniedItemMode: "filter_denied"
+      }),
+    TypeError
+  );
+  assert.equal(readCalled, false);
 });
