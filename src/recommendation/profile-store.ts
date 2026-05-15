@@ -258,6 +258,16 @@ function createMutableEntry(signal: RecommendationInterestSignal, now: string): 
   return entry;
 }
 
+function updateEntryExpiration(entry: MutableProfileEntry, signal: RecommendationInterestSignal): void {
+  const expiresAt = earliestTimestamp(entry.expiresAt, signal.expiresAt);
+  if (expiresAt === undefined) {
+    delete entry.expiresAt;
+    return;
+  }
+
+  entry.expiresAt = expiresAt;
+}
+
 function applySignalToEntry(entry: MutableProfileEntry, signal: RecommendationInterestSignal, now: string): void {
   const observedAt = signal.evidence.observedAt;
   assertValidTimestamp(observedAt);
@@ -272,7 +282,7 @@ function applySignalToEntry(entry: MutableProfileEntry, signal: RecommendationIn
   entry.protocols.add(signal.evidence.protocol);
   entry.sourceVisibilities.add(signal.evidence.sourceVisibility);
   entry.updatedAt = maxTimestamp(entry.updatedAt, maxTimestamp(now, observedAt));
-  entry.expiresAt = earliestTimestamp(entry.expiresAt, signal.expiresAt);
+  updateEntryExpiration(entry, signal);
 }
 
 function normalizeMaxEntries(value: number | undefined): number {
