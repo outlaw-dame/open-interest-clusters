@@ -153,28 +153,40 @@ function includesUse(uses: readonly RecommendationDataUse[] | undefined, dataUse
   return Array.isArray(uses) && uses.includes(dataUse);
 }
 
-function hasInvalidAllowedUse(uses: readonly RecommendationDataUse[] | undefined): boolean {
+function hasInvalidAllowedUse(uses: unknown): boolean {
   return uses !== undefined && (!Array.isArray(uses) || uses.some((use) => !isKnownDataUse(use)));
 }
 
-function isValidPolicy(policy: RecommendationConsentPolicy): boolean {
+function isValidPolicy(policy: unknown): policy is RecommendationConsentPolicy {
+  if (policy === null || typeof policy !== "object") {
+    return false;
+  }
+
+  const candidate = policy as Partial<RecommendationConsentPolicy>;
+
   return (
-    isNonEmptyString(policy.subjectId) &&
-    Array.isArray(policy.allowedDataUses) &&
-    policy.allowedDataUses.every(isKnownDataUse) &&
-    !hasInvalidAllowedUse(policy.privateDataUses) &&
-    !hasInvalidAllowedUse(policy.thirdPartyPrivateDataUses) &&
-    !hasInvalidAllowedUse(policy.serverSideDataUses)
+    isNonEmptyString(candidate.subjectId) &&
+    Array.isArray(candidate.allowedDataUses) &&
+    candidate.allowedDataUses.every(isKnownDataUse) &&
+    !hasInvalidAllowedUse(candidate.privateDataUses) &&
+    !hasInvalidAllowedUse(candidate.thirdPartyPrivateDataUses) &&
+    !hasInvalidAllowedUse(candidate.serverSideDataUses)
   );
 }
 
-function isValidRequest(request: RecommendationConsentRequest): boolean {
+function isValidRequest(request: unknown): request is RecommendationConsentRequest {
+  if (request === null || typeof request !== "object") {
+    return false;
+  }
+
+  const candidate = request as Partial<RecommendationConsentRequest>;
+
   return (
-    isNonEmptyString(request.subjectId) &&
-    isKnownDataUse(request.dataUse) &&
-    isKnownProtocol(request.protocol) &&
-    isKnownVisibility(request.sourceVisibility) &&
-    isKnownAccessBasis(request.accessBasis)
+    isNonEmptyString(candidate.subjectId) &&
+    isKnownDataUse(candidate.dataUse) &&
+    isKnownProtocol(candidate.protocol) &&
+    isKnownVisibility(candidate.sourceVisibility) &&
+    isKnownAccessBasis(candidate.accessBasis)
   );
 }
 
@@ -186,6 +198,10 @@ function isPrivateVisibility(visibility: RecommendationSourceVisibility): boolea
     visibility === "local_only" ||
     visibility === "acl_controlled"
   );
+}
+
+function deriveEffectivePrivateData(request: RecommendationConsentRequest): boolean {
+  return request.containsPrivateData === true || isPrivateVisibility(request.sourceVisibility);
 }
 
 function visibilityAllowsAccess(
@@ -202,22 +218,13 @@ function visibilityAllowsAccess(
 
   switch (visibility) {
     case "public":
-      return accessBasis === "public_web" ||
-        accessBasis === "authenticated_api" ||
-        accessBasis === "owner" ||
-        accessBasis === "oauth_scope" ||
-        accessBasis === "provider_policy"
-        ? "allow"
-        : "access.deny.visibility_scope";
     case "unlisted":
-      return accessBasis === "authenticated_api" ||
-        accessBasis === "owner" ||
-        accessBasis === "oauth_scope" ||
-        accessBasis === "provider_policy"
-        ? "allow"
-        : "access.deny.visibility_scope";
+    case "atproto_public_repo":
+      return "allow";
     case "followers_only":
-      return accessBasis === "follower_relationship" || accessBasis === "owner"
+      return accessBasis === "follower_relationship" ||
+        accessBasis === "mutual_relationship" ||
+        accessBasis === "owner"
         ? "allow"
         : "access.deny.visibility_scope";
     case "mentioned_only":
@@ -238,20 +245,14 @@ function visibilityAllowsAccess(
         accessBasis === "owner"
         ? "allow"
         : "access.deny.acl_required";
-    case "atproto_public_repo":
-      return accessBasis === "atproto_public_repo" ||
-        accessBasis === "authenticated_api" ||
-        accessBasis === "oauth_scope" ||
-        accessBasis === "public_web"
-        ? "allow"
-        : "access.deny.visibility_scope";
   }
 }
 
 function createPrivacySafeConsentEvent(
   request: RecommendationConsentRequest,
   decision: RecommendationConsentDecision,
-  reason: RecommendationConsentReasonCode
+  reason: RecommendationConsentReasonCode,
+  effectivePrivateData = deriveEffectivePrivateData(request)
 ): PrivacySafeRecommendationConsentEvent {
   return Object.freeze({
     decision,
@@ -260,7 +261,7 @@ function createPrivacySafeConsentEvent(
     protocol: request.protocol,
     sourceVisibility: request.sourceVisibility,
     accessBasis: request.accessBasis,
-    containsPrivateData: request.containsPrivateData === true,
+    containsPrivateData: effectivePrivateData,
     containsThirdPartyData: request.containsThirdPartyData === true,
     serverSideProcessing: request.serverSideProcessing === true
   });
@@ -269,9 +270,10 @@ function createPrivacySafeConsentEvent(
 function createEvaluation(
   request: RecommendationConsentRequest,
   decision: RecommendationConsentDecision,
-  reason: RecommendationConsentReasonCode
+  reason: RecommendationConsentReasonCode,
+  effectivePrivateData = deriveEffectivePrivateData(request)
 ): RecommendationConsentEvaluation {
-  const auditEvent = createPrivacySafeConsentEvent(request, decision, reason);
+  const auditEvent = createPrivacySafeConsentEvent(request, decision, reason, effectivePrivateData);
   return Object.freeze({ ...auditEvent, auditEvent });
 }
 
@@ -285,71 +287,86 @@ function fallbackRequest(dataUse: RecommendationDataUse): RecommendationConsentR
   };
 }
 
+function getSafeDataUseFromInvalidRequest(request: unknown): RecommendationDataUse {
+  if (request !== null && typeof request === "object") {
+    const candidate = request as Partial<RecommendationConsentRequest>;
+    if (isKnownDataUse(candidate.dataUse)) {
+      return candidate.dataUse;
+    }
+  }
+
+  return "ranking";
+}
+
 export function evaluateRecommendationConsent(
   policy: RecommendationConsentPolicy | null | undefined,
   request: RecommendationConsentRequest
 ): RecommendationConsentEvaluation {
   if (!isValidRequest(request)) {
-    const safeDataUse = isKnownDataUse(request.dataUse) ? request.dataUse : "ranking";
-    return createEvaluation(fallbackRequest(safeDataUse), "deny", "consent.deny.invalid_request");
+    return createEvaluation(
+      fallbackRequest(getSafeDataUseFromInvalidRequest(request)),
+      "deny",
+      "consent.deny.invalid_request",
+      false
+    );
   }
 
+  const effectivePrivateData = deriveEffectivePrivateData(request);
+
   if (request.protocol === "unknown") {
-    return createEvaluation(request, "deny", "access.deny.protocol_scope_unknown");
+    return createEvaluation(request, "deny", "access.deny.protocol_scope_unknown", effectivePrivateData);
   }
 
   if (policy === null || policy === undefined) {
-    return createEvaluation(request, "deny", "consent.deny.default");
+    return createEvaluation(request, "deny", "consent.deny.default", effectivePrivateData);
   }
 
   if (!isValidPolicy(policy)) {
-    return createEvaluation(request, "deny", "consent.deny.invalid_policy");
+    return createEvaluation(request, "deny", "consent.deny.invalid_policy", effectivePrivateData);
   }
 
   if (policy.subjectId !== request.subjectId) {
-    return createEvaluation(request, "deny", "consent.deny.subject_mismatch");
+    return createEvaluation(request, "deny", "consent.deny.subject_mismatch", effectivePrivateData);
   }
 
   if (isNonEmptyString(policy.revokedAt)) {
-    return createEvaluation(request, "deny", "consent.deny.revoked");
+    return createEvaluation(request, "deny", "consent.deny.revoked", effectivePrivateData);
   }
 
   if (isNonEmptyString(policy.deleteDerivedDataRequestedAt)) {
-    return createEvaluation(request, "deny", "consent.deny.deleted");
+    return createEvaluation(request, "deny", "consent.deny.deleted", effectivePrivateData);
   }
 
   if (!includesUse(policy.allowedDataUses, request.dataUse)) {
-    return createEvaluation(request, "deny", "consent.deny.use_not_allowed");
+    return createEvaluation(request, "deny", "consent.deny.use_not_allowed", effectivePrivateData);
   }
 
   if (request.serverSideProcessing === true && !includesUse(policy.serverSideDataUses, request.dataUse)) {
-    return createEvaluation(request, "deny", "consent.deny.server_processing_not_allowed");
+    return createEvaluation(request, "deny", "consent.deny.server_processing_not_allowed", effectivePrivateData);
   }
 
   if (request.providerPolicyAllowsProcessing === false) {
-    return createEvaluation(request, "deny", "policy.deny.provider_policy");
+    return createEvaluation(request, "deny", "policy.deny.provider_policy", effectivePrivateData);
   }
 
   const visibilityDecision = visibilityAllowsAccess(request.sourceVisibility, request.accessBasis);
   if (visibilityDecision !== "allow") {
-    return createEvaluation(request, "deny", visibilityDecision);
+    return createEvaluation(request, "deny", visibilityDecision, effectivePrivateData);
   }
 
-  const containsPrivateData = request.containsPrivateData === true || isPrivateVisibility(request.sourceVisibility);
-
-  if (containsPrivateData && !includesUse(policy.privateDataUses, request.dataUse)) {
-    return createEvaluation(request, "deny", "safety.deny.private_data_use_not_allowed");
+  if (effectivePrivateData && !includesUse(policy.privateDataUses, request.dataUse)) {
+    return createEvaluation(request, "deny", "safety.deny.private_data_use_not_allowed", effectivePrivateData);
   }
 
   if (
-    containsPrivateData &&
+    effectivePrivateData &&
     request.containsThirdPartyData === true &&
     !includesUse(policy.thirdPartyPrivateDataUses, request.dataUse)
   ) {
-    return createEvaluation(request, "deny", "safety.deny.third_party_private_data");
+    return createEvaluation(request, "deny", "safety.deny.third_party_private_data", effectivePrivateData);
   }
 
-  return createEvaluation(request, "allow", "consent.allow.explicit");
+  return createEvaluation(request, "allow", "consent.allow.explicit", effectivePrivateData);
 }
 
 export function markRecommendationConsentForDeletion(
