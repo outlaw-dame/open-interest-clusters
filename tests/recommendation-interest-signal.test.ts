@@ -148,6 +148,99 @@ test("interest signals reject unsafe target keys and invalid scores", () => {
   );
 });
 
+test("interest signals reject path-bearing and malformed domain target keys", () => {
+  assert.equal(
+    normalizeRecommendationInterestSignal({
+      target: { kind: "domain", key: "example.com" },
+      action: "click",
+      strength: 0.6,
+      confidence: 0.7,
+      dataUse: "ranking",
+      evidence,
+      consent: consentEvent
+    }).target.key,
+    "example.com"
+  );
+  assert.throws(
+    () =>
+      normalizeRecommendationInterestSignal({
+        target: { kind: "domain", key: "example.com/private/post" },
+        action: "click",
+        strength: 0.8,
+        confidence: 0.9,
+        dataUse: "ranking",
+        evidence,
+        consent: consentEvent
+      }),
+    TypeError
+  );
+  assert.throws(
+    () =>
+      normalizeRecommendationInterestSignal({
+        target: { kind: "domain", key: "localhost" },
+        action: "click",
+        strength: 0.8,
+        confidence: 0.9,
+        dataUse: "ranking",
+        evidence,
+        consent: consentEvent
+      }),
+    TypeError
+  );
+});
+
+test("interest signals reject control characters in target keys", () => {
+  assert.throws(
+    () =>
+      normalizeRecommendationInterestSignal({
+        target: { kind: "keyword", key: "books\u0000fiction" },
+        action: "search",
+        strength: 0.5,
+        confidence: 0.5,
+        dataUse: "ranking",
+        evidence,
+        consent: consentEvent
+      }),
+    TypeError
+  );
+  assert.throws(
+    () =>
+      normalizeRecommendationInterestSignal({
+        target: { kind: "keyword", key: "books\ffiction" },
+        action: "search",
+        strength: 0.5,
+        confidence: 0.5,
+        dataUse: "ranking",
+        evidence,
+        consent: consentEvent
+      }),
+    TypeError
+  );
+});
+
+test("interest signals explicitly pick cloned evidence and consent properties", () => {
+  const signal = normalizeRecommendationInterestSignal({
+    target: { kind: "keyword", key: "books" },
+    action: "search",
+    strength: 0.5,
+    confidence: 0.5,
+    dataUse: "ranking",
+    evidence: { ...evidence, unsafeSourceId: "opaque-source-id" } as RecommendationInterestEvidence,
+    consent: { ...consentEvent, subjectId: "did:web:alice.example" } as PrivacySafeRecommendationConsentEvent
+  });
+  const serialized = JSON.stringify(signal);
+
+  assert.equal(serialized.includes("unsafeSourceId"), false);
+  assert.equal(serialized.includes("opaque-source-id"), false);
+  assert.equal(serialized.includes("subjectId"), false);
+  assert.equal(serialized.includes("did:web:alice.example"), false);
+});
+
+test("interest signal normalization rejects non-object input", () => {
+  assert.throws(() => normalizeRecommendationInterestSignal(null as never), TypeError);
+  assert.throws(() => normalizeRecommendationInterestSignal(undefined as never), TypeError);
+});
+
 test("interest signals derive evidence from source without copying opaque provenance", () => {
   const signal = createRecommendationInterestSignalFromSource({
     source: sourceItem,
