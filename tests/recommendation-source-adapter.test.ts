@@ -69,6 +69,18 @@ test("source item metadata maps into consent request without source identifiers"
   assert.equal(serialized.includes("test-fediverse"), false);
 });
 
+test("source consent request bridge rejects malformed data uses", () => {
+  assert.throws(
+    () =>
+      createRecommendationConsentRequestFromSource({
+        subjectId: "did:web:alice.example",
+        dataUse: "raw_profile_export" as never,
+        source: sourceItem
+      }),
+    TypeError
+  );
+});
+
 test("adapter read requests reject malformed pagination inputs", () => {
   const normalized = normalizeRecommendationSourceAdapterReadRequest({
     subjectId: "subject-1",
@@ -85,6 +97,10 @@ test("adapter read requests reject malformed pagination inputs", () => {
   );
   assert.throws(
     () => normalizeRecommendationSourceAdapterReadRequest({ subjectId: "subject-1", cursor: "" }),
+    TypeError
+  );
+  assert.throws(
+    () => normalizeRecommendationSourceAdapterReadRequest({ subjectId: "subject-1", limit: "10" }),
     TypeError
   );
 });
