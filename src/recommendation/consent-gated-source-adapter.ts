@@ -126,7 +126,8 @@ function createPreflightConsentRequest(
   adapter: RecommendationSourceAdapter
 ): RecommendationConsentRequest {
   const protocol = preflightProtocol(adapter);
-  const request: RecommendationConsentRequest = {
+
+  return Object.freeze({
     subjectId,
     dataUse,
     protocol,
@@ -135,9 +136,7 @@ function createPreflightConsentRequest(
     containsPrivateData: false,
     containsThirdPartyData: false,
     serverSideProcessing: false
-  };
-
-  return request;
+  });
 }
 
 async function requirePolicyBeforeSourceRead(
@@ -188,7 +187,7 @@ function createConsentRequestFromNormalizedSource(
     request.providerPolicyAllowsProcessing = source.context.providerPolicyAllowsProcessing;
   }
 
-  return request;
+  return Object.freeze(request);
 }
 
 async function evaluateSourceItemConsent(
