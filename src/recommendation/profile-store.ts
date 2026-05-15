@@ -1,5 +1,8 @@
-import type { RecommendationDerivedDataDeletionIntent } from "./consent.js";
-import type { RecommendationProtocol, RecommendationSourceVisibility } from "./consent.js";
+import type {
+  RecommendationDerivedDataDeletionIntent,
+  RecommendationProtocol,
+  RecommendationSourceVisibility
+} from "./consent.js";
 import {
   RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES,
   isRecommendationInterestSignal,
@@ -83,6 +86,10 @@ const DEFAULT_MAX_ENTRIES = 10_000;
 const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_ENTRIES_UPPER_BOUND = 100_000;
 const PRIVACY_BOUNDARY_SET = new Set<string>(RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES);
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -230,8 +237,7 @@ function createMutableEntry(signal: RecommendationInterestSignal, now: string): 
   const delta = signalDelta(signal.polarity, signal.strength, signal.confidence);
   const observedAt = signal.evidence.observedAt;
   assertValidTimestamp(observedAt);
-
-  return {
+  const entry: MutableProfileEntry = {
     target: signal.target,
     score: clampUnitScore(delta),
     confidence: signal.confidence,
@@ -242,9 +248,14 @@ function createMutableEntry(signal: RecommendationInterestSignal, now: string): 
     privacyBoundaries: new Set([signal.privacyBoundary]),
     protocols: new Set([signal.evidence.protocol]),
     sourceVisibilities: new Set([signal.evidence.sourceVisibility]),
-    updatedAt: maxTimestamp(now, observedAt),
-    expiresAt: signal.expiresAt
+    updatedAt: maxTimestamp(now, observedAt)
   };
+
+  if (signal.expiresAt !== undefined) {
+    entry.expiresAt = signal.expiresAt;
+  }
+
+  return entry;
 }
 
 function applySignalToEntry(entry: MutableProfileEntry, signal: RecommendationInterestSignal, now: string): void {
@@ -317,7 +328,7 @@ export function createInMemoryRecommendationProfileStore(
 
   return {
     async ingestSignals(input) {
-      if (!isNonEmptyString(input?.subjectId) || !Array.isArray(input.signals)) {
+      if (!isObject(input) || !isNonEmptyString(input.subjectId) || !Array.isArray(input.signals)) {
         throw new TypeError("Invalid recommendation profile signal ingest input.");
       }
 
@@ -388,8 +399,8 @@ export function createInMemoryRecommendationProfileStore(
       }
 
       assertValidSubjectId(intent.subjectId);
-      profiles.delete(intent.subjectId);
       const now = normalizeNow(intent.requestedAt, nowProvider);
+      profiles.delete(intent.subjectId);
       return createEmptySnapshot(now);
     }
   };
