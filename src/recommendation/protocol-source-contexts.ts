@@ -1,8 +1,9 @@
-import type {
-  RecommendationAccessBasis,
-  RecommendationSourceContext,
-  RecommendationSourceVisibility
+import {
+  RECOMMENDATION_ACCESS_BASES,
+  type RecommendationAccessBasis,
+  type RecommendationSourceVisibility
 } from "./consent.js";
+import type { RecommendationSourceContext } from "./source-adapter.js";
 
 export const RECOMMENDATION_ACTIVITYPUB_VISIBILITIES = [
   "public",
@@ -65,21 +66,7 @@ const ACTIVITYPUB_VISIBILITY_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_VI
 const ACTIVITYPODS_SCOPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPODS_RESOURCE_SCOPES);
 const SOLID_ACCESS_MODE_SET = new Set<string>(RECOMMENDATION_SOLID_ACCESS_MODES);
 const ATPROTO_REPOSITORY_VISIBILITY_SET = new Set<string>(RECOMMENDATION_ATPROTO_REPOSITORY_VISIBILITIES);
-
-const ACCESS_BASIS_SET = new Set<string>([
-  "public_web",
-  "authenticated_api",
-  "follower_relationship",
-  "mentioned_recipient",
-  "mutual_relationship",
-  "owner",
-  "solid_acl_read",
-  "solid_acl_control",
-  "atproto_public_repo",
-  "oauth_scope",
-  "provider_policy",
-  "unknown"
-]);
+const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
