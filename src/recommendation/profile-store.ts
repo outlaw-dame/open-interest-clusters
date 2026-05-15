@@ -131,16 +131,12 @@ function maxTimestamp(left: string, right: string): string {
   return timestampMillis(left) >= timestampMillis(right) ? left : right;
 }
 
-function earliestTimestamp(left: string | undefined, right: string | undefined): string | undefined {
-  if (left === undefined) {
-    return right;
+function latestExpiration(left: string | undefined, right: string | undefined): string | undefined {
+  if (left === undefined || right === undefined) {
+    return undefined;
   }
 
-  if (right === undefined) {
-    return left;
-  }
-
-  return timestampMillis(left) <= timestampMillis(right) ? left : right;
+  return timestampMillis(left) >= timestampMillis(right) ? left : right;
 }
 
 function isExpiredTimestamp(expiresAt: string | undefined, now: string): boolean {
@@ -282,7 +278,7 @@ function createSnapshot(state: MutableProfileState | undefined, now: string): Re
   pruneExpiredEntries(state, now);
   const entries = [...state.entries.values()]
     .map(cloneEntry)
-    .sort((left, right) => Math.abs(right.score) - Math.abs(left.score) || left.target.key.localeCompare(right.target.key));
+    .sort((left, right) => Math.abs(right.score) - Math.abs(left.score) || targetKey(left.target).localeCompare(targetKey(right.target)));
 
   return Object.freeze({
     schemaVersion: RECOMMENDATION_PROFILE_SCHEMA_VERSION,
@@ -318,7 +314,7 @@ function createMutableEntry(signal: RecommendationInterestSignal, now: string): 
 }
 
 function updateEntryExpiration(entry: MutableProfileEntry, signal: RecommendationInterestSignal): void {
-  const expiresAt = earliestTimestamp(entry.expiresAt, signal.expiresAt);
+  const expiresAt = latestExpiration(entry.expiresAt, signal.expiresAt);
   if (expiresAt === undefined) {
     delete entry.expiresAt;
     return;
