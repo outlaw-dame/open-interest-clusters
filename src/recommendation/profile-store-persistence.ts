@@ -52,3 +52,4 @@ export * from "./profile-store-persistence-key.js";
 export * from "./profile-store-persistence-snapshot.js";
 export * from "./profile-store-persistence-record.js";
 export * from "./profile-store-persistence-operations.js";
+export * from "./embedding-lifecycle.js";
