@@ -12,14 +12,23 @@ import {
   type RecommendationProfileSnapshot
 } from "../src/index.js";
 
-function model(version = "v1"): RecommendationEmbeddingModelManifest {
+function model(version = "v1", artifactHash?: string): RecommendationEmbeddingModelManifest {
   return {
     schemaVersion: RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION,
     providerId: "local",
     modelId: "model",
     modelVersion: version,
     dimensions: 3,
-    distanceMetric: "cosine"
+    distanceMetric: "cosine",
+    ...(artifactHash === undefined
+      ? {}
+      : {
+        artifact: {
+          artifactRef: "models/model.bin",
+          sha256: artifactHash,
+          sizeBytes: 1024
+        }
+      })
   };
 }
 
@@ -75,6 +84,26 @@ test("recommendation embedding freshness detects model, profile, privacy, and ex
       privacyBoundary: "server_allowed"
     }).reasons,
     ["expired", "model_changed", "profile_changed", "privacy_boundary_changed"]
+  );
+});
+
+test("recommendation embedding freshness treats artifact identity as model identity", () => {
+  const record = createRecommendationEmbeddingRecord({
+    subjectId: "subject-1",
+    model: model("v1", "0".repeat(64)),
+    profile: profile(),
+    vector: [0.1, 0.2, 0.3],
+    createdAt: "2026-05-16T01:00:00.000Z"
+  });
+
+  assert.deepEqual(
+    evaluateRecommendationEmbeddingFreshness({
+      record,
+      model: model("v1", "1".repeat(64)),
+      profile: profile(),
+      now: "2026-05-16T02:00:00.000Z"
+    }).reasons,
+    ["model_changed"]
   );
 });
 
