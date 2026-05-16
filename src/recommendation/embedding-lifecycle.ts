@@ -5,6 +5,7 @@ import {
 } from "./interest-signal.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import {
+  assertValidRecommendationProfileSubjectKey,
   createRecommendationProfileSubjectKey,
   type RecommendationProfileSubjectKeyInput,
   normalizeRecommendationProfileSnapshot
@@ -113,6 +114,7 @@ const MAX_SAFE_STRING_LENGTH = 512;
 const MAX_ARTIFACT_REF_LENGTH = 1_024;
 const MAX_VECTOR_DIMENSIONS = 16_384;
 const SHA256_HEX_LENGTH = 64;
+const EMBEDDING_ID_PREFIX = "embedding:";
 const DISTANCE_METRIC_SET = new Set<string>(RECOMMENDATION_EMBEDDING_DISTANCE_METRICS);
 const PRIVACY_BOUNDARY_SET = new Set<string>(RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES);
 const INVALIDATION_REASON_SET = new Set<string>(RECOMMENDATION_EMBEDDING_INVALIDATION_REASONS);
@@ -184,8 +186,33 @@ function assertSha256Hex(value: unknown, message: string): string {
   return value;
 }
 
+function normalizeSubjectKey(value: unknown): string {
+  assertValidRecommendationProfileSubjectKey(value);
+  return value;
+}
+
+function normalizeEmbeddingId(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(EMBEDDING_ID_PREFIX) ||
+    !isSha256Hex(value.slice(EMBEDDING_ID_PREFIX.length))
+  ) {
+    throw new TypeError("Invalid recommendation embedding id.");
+  }
+
+  return value;
+}
+
 function assertPositiveInteger(value: unknown, message: string, max: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > max) {
+    throw new TypeError(message);
+  }
+
+  return value;
+}
+
+function assertNonNegativeInteger(value: unknown, message: string, max: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > max) {
     throw new TypeError(message);
   }
 
@@ -197,11 +224,7 @@ function assertOptionalNonNegativeInteger(value: unknown, message: string): numb
     return undefined;
   }
 
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(message);
-  }
-
-  return value;
+  return assertNonNegativeInteger(value, message, Number.MAX_SAFE_INTEGER);
 }
 
 function assertPrivacyBoundary(value: unknown): RecommendationInterestPrivacyBoundary {
@@ -256,6 +279,10 @@ export function normalizeRecommendationEmbeddingModelManifest(
     throw new TypeError("Invalid recommendation embedding model manifest.");
   }
 
+  if (value.schemaVersion !== RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION) {
+    throw new TypeError("Invalid recommendation embedding model schema version.");
+  }
+
   const model: RecommendationEmbeddingModelManifest = {
     schemaVersion: RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION,
     providerId: assertSafeString(value.providerId, "Invalid recommendation embedding provider id."),
@@ -264,10 +291,6 @@ export function normalizeRecommendationEmbeddingModelManifest(
     dimensions: assertPositiveInteger(value.dimensions, "Invalid recommendation embedding dimensions.", MAX_VECTOR_DIMENSIONS),
     distanceMetric: assertDistanceMetric(value.distanceMetric)
   };
-
-  if (value.schemaVersion !== RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION) {
-    throw new TypeError("Invalid recommendation embedding model schema version.");
-  }
 
   const artifact = normalizeArtifactIntegrity(value.artifact);
   if (artifact !== undefined) {
@@ -317,7 +340,11 @@ function normalizeSourceFingerprint(value: unknown): RecommendationEmbeddingSour
   return Object.freeze({
     schemaVersion: RECOMMENDATION_EMBEDDING_SOURCE_SCHEMA_VERSION,
     profileUpdatedAt: assertTimestamp(value.profileUpdatedAt).value,
-    profileSignalCount: assertPositiveInteger(value.profileSignalCount, "Invalid recommendation embedding source signal count.", Number.MAX_SAFE_INTEGER),
+    profileSignalCount: assertNonNegativeInteger(
+      value.profileSignalCount,
+      "Invalid recommendation embedding source signal count.",
+      Number.MAX_SAFE_INTEGER
+    ),
     profileDigest: assertSha256Hex(value.profileDigest, "Invalid recommendation embedding source digest.")
   });
 }
@@ -379,8 +406,12 @@ export function normalizeRecommendationEmbeddingRecord(
   const model = normalizeRecommendationEmbeddingModelManifest(value.model);
   const source = normalizeSourceFingerprint(value.source);
   const vector = normalizeVector(value.vector, model.dimensions);
-  const subjectKey = assertSafeString(value.subjectKey, "Invalid recommendation embedding subject key.");
-  const embeddingId = assertSafeString(value.embeddingId, "Invalid recommendation embedding id.");
+  const subjectKey = normalizeSubjectKey(value.subjectKey);
+  const embeddingId = normalizeEmbeddingId(value.embeddingId);
+  if (embeddingId !== createEmbeddingId(subjectKey, model, source)) {
+    throw new TypeError("Invalid recommendation embedding id.");
+  }
+
   const createdAt = assertTimestamp(value.createdAt).value;
   const now = options.now === undefined ? undefined : assertTimestamp(options.now).millis;
   const expiresAt = value.expiresAt === undefined ? undefined : assertTimestamp(value.expiresAt).value;
@@ -416,7 +447,7 @@ export function normalizeRecommendationEmbeddingRecord(
   if (expiresAt !== undefined) {
     record.expiresAt = expiresAt;
   }
-  if (invalidatedAt !== undefined) {
+  if (invalidatedAt !== undefined && invalidationReason !== undefined) {
     record.invalidatedAt = invalidatedAt;
     record.invalidationReason = invalidationReason;
   }
