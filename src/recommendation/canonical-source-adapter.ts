@@ -165,8 +165,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if ((code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && !/[\x00-\x1F\x7F]/u.test(value);
+  return typeof value === "string" && value.trim().length > 0 && !hasControlCharacter(value);
 }
 
 function isOptionalNonEmptyString(value: unknown): value is string | undefined {
@@ -299,21 +310,27 @@ function parseStrictRfc3339Timestamp(value: unknown): ParsedRfc3339Timestamp | n
   return parsed;
 }
 
+function utcMillisFromParsedTimestamp(parsed: ParsedRfc3339Timestamp): number {
+  const second = Math.min(parsed.second, 59);
+  const millis = fractionalMillis(parsed.fractionalSeconds);
+
+  if (parsed.year >= 0 && parsed.year < 100) {
+    const date = new Date(0);
+    date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+    date.setUTCHours(parsed.hour, parsed.minute, second, millis);
+    return date.getTime();
+  }
+
+  return Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, second, millis);
+}
+
 function timestampMillis(value: unknown, errorMessage: string): number {
   const parsed = parseStrictRfc3339Timestamp(value);
   if (parsed === null) {
     throw new TypeError(errorMessage);
   }
 
-  const utcMillis = Date.UTC(
-    parsed.year,
-    parsed.month - 1,
-    parsed.day,
-    parsed.hour,
-    parsed.minute,
-    Math.min(parsed.second, 59),
-    fractionalMillis(parsed.fractionalSeconds)
-  );
+  const utcMillis = utcMillisFromParsedTimestamp(parsed);
   if (!Number.isFinite(utcMillis)) {
     throw new TypeError(errorMessage);
   }
