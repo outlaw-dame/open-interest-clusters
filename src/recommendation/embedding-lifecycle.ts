@@ -186,6 +186,41 @@ function assertSha256Hex(value: unknown, message: string): string {
   return value;
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError("Cannot canonicalize non-finite recommendation embedding metadata.");
+    }
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  if (isObject(value)) {
+    const entries: string[] = [];
+    for (const key of Object.keys(value).sort()) {
+      const item = value[key];
+      if (item === undefined) {
+        continue;
+      }
+      entries.push(`${JSON.stringify(key)}:${stableStringify(item)}`);
+    }
+    return `{${entries.join(",")}}`;
+  }
+
+  throw new TypeError("Cannot canonicalize unsupported recommendation embedding metadata.");
+}
+
 function normalizeSubjectKey(value: unknown): string {
   assertValidRecommendationProfileSubjectKey(value);
   return value;
@@ -319,7 +354,7 @@ export function createRecommendationEmbeddingSourceFingerprint(
   profile: RecommendationProfileSnapshot
 ): RecommendationEmbeddingSourceFingerprint {
   const normalizedProfile = normalizeRecommendationProfileSnapshot(profile, { pruneExpiredEntries: false });
-  const serializedProfile = JSON.stringify(normalizedProfile);
+  const serializedProfile = stableStringify(normalizedProfile);
   return Object.freeze({
     schemaVersion: RECOMMENDATION_EMBEDDING_SOURCE_SCHEMA_VERSION,
     profileUpdatedAt: normalizedProfile.updatedAt,
@@ -349,14 +384,30 @@ function normalizeSourceFingerprint(value: unknown): RecommendationEmbeddingSour
   });
 }
 
-function createEmbeddingId(subjectKey: string, model: RecommendationEmbeddingModelManifest, source: RecommendationEmbeddingSourceFingerprint): string {
-  return `embedding:${sha256Hex(JSON.stringify([
-    "recommendation-embedding-id.v1",
-    subjectKey,
+function modelIdentityParts(model: RecommendationEmbeddingModelManifest): readonly unknown[] {
+  const artifact = model.artifact;
+  return [
+    "recommendation-embedding-model-identity.v1",
     model.providerId,
     model.modelId,
     model.modelVersion,
     model.dimensions,
+    model.distanceMetric,
+    artifact === undefined
+      ? null
+      : {
+        artifactRef: artifact.artifactRef,
+        sha256: artifact.sha256,
+        sizeBytes: artifact.sizeBytes ?? null
+      }
+  ];
+}
+
+function createEmbeddingId(subjectKey: string, model: RecommendationEmbeddingModelManifest, source: RecommendationEmbeddingSourceFingerprint): string {
+  return `embedding:${sha256Hex(stableStringify([
+    "recommendation-embedding-id.v1",
+    subjectKey,
+    modelIdentityParts(model),
     source.profileDigest
   ]))}`;
 }
@@ -483,11 +534,7 @@ export function deserializeRecommendationEmbeddingRecord(
 }
 
 function sameModel(left: RecommendationEmbeddingModelManifest, right: RecommendationEmbeddingModelManifest): boolean {
-  return left.providerId === right.providerId &&
-    left.modelId === right.modelId &&
-    left.modelVersion === right.modelVersion &&
-    left.dimensions === right.dimensions &&
-    left.distanceMetric === right.distanceMetric;
+  return stableStringify(modelIdentityParts(left)) === stableStringify(modelIdentityParts(right));
 }
 
 export function evaluateRecommendationEmbeddingFreshness(
