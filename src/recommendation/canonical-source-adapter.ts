@@ -7,9 +7,11 @@ import {
 import {
   createActivityPodsSourceContext,
   type RecommendationActivityPodsResourceScope,
+  type RecommendationActivityPodsSourceContextInput,
   type RecommendationSolidAccessMode
 } from "./protocol-source-contexts.js";
 import {
+  RECOMMENDATION_SOURCE_ADAPTER_CAPABILITIES,
   RECOMMENDATION_SOURCE_TRUST_BOUNDARIES,
   normalizeRecommendationSourceAdapterReadRequest,
   normalizeRecommendationSourceItem,
@@ -120,6 +122,7 @@ export interface CanonicalRecommendationEvent {
 }
 
 export interface CanonicalRecommendationSourceOptions {
+  adapterId?: string;
   sourceSystem?: string;
   includeMirroredEvents?: boolean;
   defaultTrustBoundary?: RecommendationSourceTrustBoundary;
@@ -129,13 +132,13 @@ export interface CanonicalRecommendationSourceOptions {
 }
 
 export interface CanonicalRecommendationSourceAdapterOptions extends CanonicalRecommendationSourceOptions {
-  adapterId?: string;
   events: readonly CanonicalRecommendationEvent[] | (() => readonly CanonicalRecommendationEvent[] | Promise<readonly CanonicalRecommendationEvent[]>);
   capabilities?: readonly RecommendationSourceAdapterCapability[];
 }
 
 const MAX_CANONICAL_ID_LENGTH = 2_048;
 const MAX_SOURCE_SYSTEM_LENGTH = 256;
+const MAX_ADAPTER_ID_LENGTH = 256;
 const DEFAULT_CANONICAL_SOURCE_SYSTEM = "canonical.v1";
 const DEFAULT_CANONICAL_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "unknown";
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
@@ -143,6 +146,7 @@ const VISIBILITY_SET = new Set<string>(CANONICAL_RECOMMENDATION_VISIBILITIES);
 const PROJECTION_MODE_SET = new Set<string>(CANONICAL_RECOMMENDATION_PROJECTION_MODES);
 const EVENT_KIND_SET = new Set<string>(CANONICAL_RECOMMENDATION_EVENT_KINDS);
 const TRUST_BOUNDARY_SET = new Set<string>(RECOMMENDATION_SOURCE_TRUST_BOUNDARIES);
+const ADAPTER_CAPABILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_ADAPTER_CAPABILITIES);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -182,6 +186,10 @@ function isKnownEventKind(value: unknown): value is CanonicalRecommendationEvent
 
 function isKnownTrustBoundary(value: unknown): value is RecommendationSourceTrustBoundary {
   return typeof value === "string" && TRUST_BOUNDARY_SET.has(value);
+}
+
+function isKnownAdapterCapability(value: unknown): value is RecommendationSourceAdapterCapability {
+  return typeof value === "string" && ADAPTER_CAPABILITY_SET.has(value);
 }
 
 function assertBoundedString(value: string, label: string, maxLength: number): void {
@@ -409,12 +417,17 @@ export function normalizeCanonicalRecommendationEvent(value: unknown): Canonical
 
   if (value.canonicalEventId !== undefined) next.canonicalEventId = value.canonicalEventId;
   if (value.canonicalIntentId !== undefined) next.canonicalIntentId = value.canonicalIntentId;
-  if (value.actor !== undefined) next.actor = cloneActorRef(value.actor);
-  if (value.object !== undefined) next.object = cloneObjectRef(value.object);
-  if (value.subject !== undefined) next.subject = cloneActorRef(value.subject);
-  if (value.content !== undefined) next.content = cloneContentSummary(value.content);
+  const actor = cloneActorRef(value.actor);
+  if (actor !== undefined) next.actor = actor;
+  const object = cloneObjectRef(value.object);
+  if (object !== undefined) next.object = object;
+  const subject = cloneActorRef(value.subject);
+  if (subject !== undefined) next.subject = subject;
+  const content = cloneContentSummary(value.content);
+  if (content !== undefined) next.content = content;
   if (value.projectionMode !== undefined) next.projectionMode = value.projectionMode;
-  if (value.activityPods !== undefined) next.activityPods = cloneActivityPodsContext(value.activityPods);
+  const activityPods = cloneActivityPodsContext(value.activityPods);
+  if (activityPods !== undefined) next.activityPods = activityPods;
   if (value.trustBoundary !== undefined) next.trustBoundary = value.trustBoundary;
   if (value.containsThirdPartyData !== undefined) next.containsThirdPartyData = value.containsThirdPartyData;
   if (value.serverSideProcessing !== undefined) next.serverSideProcessing = value.serverSideProcessing;
@@ -525,6 +538,24 @@ function activityPodsResourceScopeFromCanonicalVisibility(
   }
 }
 
+function createActivityPodsContextInput(
+  event: CanonicalRecommendationEvent,
+  options: CanonicalRecommendationSourceOptions
+): RecommendationActivityPodsSourceContextInput {
+  const input: RecommendationActivityPodsSourceContextInput = {
+    resourceScope: event.activityPods?.resourceScope ?? activityPodsResourceScopeFromCanonicalVisibility(event.visibility)
+  };
+  if (event.activityPods?.solidAccessMode !== undefined) input.solidAccessMode = event.activityPods.solidAccessMode;
+  if (event.activityPods?.isOwner !== undefined) input.isOwner = event.activityPods.isOwner;
+  const containsThirdPartyData = event.containsThirdPartyData ?? options.containsThirdPartyData;
+  const serverSideProcessing = event.serverSideProcessing ?? options.serverSideProcessing;
+  const providerPolicyAllowsProcessing = event.providerPolicyAllowsProcessing ?? options.providerPolicyAllowsProcessing;
+  if (containsThirdPartyData !== undefined) input.containsThirdPartyData = containsThirdPartyData;
+  if (serverSideProcessing !== undefined) input.serverSideProcessing = serverSideProcessing;
+  if (providerPolicyAllowsProcessing !== undefined) input.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
+  return input;
+}
+
 export function createCanonicalRecommendationSourceContext(
   eventInput: CanonicalRecommendationEvent,
   options: CanonicalRecommendationSourceOptions = {}
@@ -532,16 +563,8 @@ export function createCanonicalRecommendationSourceContext(
   const event = normalizeCanonicalRecommendationEvent(eventInput);
 
   if (event.sourceProtocol === "activitypods") {
-    const resourceScope = event.activityPods?.resourceScope ?? activityPodsResourceScopeFromCanonicalVisibility(event.visibility);
     return addOptionalContextFlags(
-      createActivityPodsSourceContext({
-        resourceScope,
-        solidAccessMode: event.activityPods?.solidAccessMode,
-        isOwner: event.activityPods?.isOwner,
-        containsThirdPartyData: event.containsThirdPartyData ?? options.containsThirdPartyData,
-        serverSideProcessing: event.serverSideProcessing ?? options.serverSideProcessing,
-        providerPolicyAllowsProcessing: event.providerPolicyAllowsProcessing ?? options.providerPolicyAllowsProcessing
-      }),
+      createActivityPodsSourceContext(createActivityPodsContextInput(event, options)),
       event,
       options
     );
@@ -605,6 +628,15 @@ function normalizeSourceSystem(value: string | undefined): string {
   return sourceSystem;
 }
 
+function normalizeAdapterId(value: string | undefined): string {
+  const adapterId = value ?? CANONICAL_RECOMMENDATION_SOURCE_ADAPTER_ID;
+  if (!isNonEmptyString(adapterId)) {
+    throw new TypeError("Invalid canonical recommendation source adapter id.");
+  }
+  assertBoundedString(adapterId, "Canonical source adapter id", MAX_ADAPTER_ID_LENGTH);
+  return adapterId;
+}
+
 function normalizeTrustBoundary(
   event: CanonicalRecommendationEvent,
   options: CanonicalRecommendationSourceOptions
@@ -625,7 +657,7 @@ export function createCanonicalRecommendationSourceItem(
     kind: canonicalEventKindToSourceItemKind(event.kind),
     context: createCanonicalRecommendationSourceContext(event, options),
     provenance: {
-      adapterId: CANONICAL_RECOMMENDATION_SOURCE_ADAPTER_ID,
+      adapterId: normalizeAdapterId(options.adapterId),
       sourceSystem: normalizeSourceSystem(options.sourceSystem),
       observedAt: event.observedAt,
       trustBoundary: normalizeTrustBoundary(event, options),
@@ -674,6 +706,33 @@ function dedupeSourceItems(items: Iterable<RecommendationSourceItem>): Recommend
   return deduped;
 }
 
+function normalizeCapabilities(
+  capabilities: readonly RecommendationSourceAdapterCapability[] | undefined
+): readonly RecommendationSourceAdapterCapability[] {
+  const values = capabilities ?? ["read_public", "read_private_with_authorization", "supports_incremental_sync"];
+  if (values.some((capability) => !isKnownAdapterCapability(capability))) {
+    throw new TypeError("Invalid canonical recommendation source adapter capability.");
+  }
+
+  return Object.freeze([...values]);
+}
+
+function createReadOptions(
+  adapterId: string,
+  sourceSystem: string,
+  options: CanonicalRecommendationSourceAdapterOptions
+): CanonicalRecommendationSourceOptions {
+  const readOptions: CanonicalRecommendationSourceOptions = { adapterId, sourceSystem };
+  if (options.includeMirroredEvents !== undefined) readOptions.includeMirroredEvents = options.includeMirroredEvents;
+  if (options.defaultTrustBoundary !== undefined) readOptions.defaultTrustBoundary = options.defaultTrustBoundary;
+  if (options.containsThirdPartyData !== undefined) readOptions.containsThirdPartyData = options.containsThirdPartyData;
+  if (options.serverSideProcessing !== undefined) readOptions.serverSideProcessing = options.serverSideProcessing;
+  if (options.providerPolicyAllowsProcessing !== undefined) {
+    readOptions.providerPolicyAllowsProcessing = options.providerPolicyAllowsProcessing;
+  }
+  return Object.freeze(readOptions);
+}
+
 export function createCanonicalRecommendationSourceAdapter(
   options: CanonicalRecommendationSourceAdapterOptions
 ): RecommendationSourceAdapter {
@@ -681,19 +740,14 @@ export function createCanonicalRecommendationSourceAdapter(
     throw new TypeError("Invalid canonical recommendation source adapter options.");
   }
 
-  const adapterId = options.adapterId ?? CANONICAL_RECOMMENDATION_SOURCE_ADAPTER_ID;
-  if (!isNonEmptyString(adapterId)) {
-    throw new TypeError("Invalid canonical recommendation source adapter id.");
-  }
-
+  const adapterId = normalizeAdapterId(options.adapterId);
   const sourceSystem = normalizeSourceSystem(options.sourceSystem);
   if (options.defaultTrustBoundary !== undefined && !isKnownTrustBoundary(options.defaultTrustBoundary)) {
     throw new TypeError("Invalid canonical recommendation source adapter trust boundary.");
   }
 
-  const capabilities = Object.freeze([
-    ...(options.capabilities ?? ["read_public", "read_private_with_authorization", "supports_incremental_sync"])
-  ]);
+  const capabilities = normalizeCapabilities(options.capabilities);
+  const readOptions = createReadOptions(adapterId, sourceSystem, options);
 
   return Object.freeze({
     id: adapterId,
@@ -704,14 +758,6 @@ export function createCanonicalRecommendationSourceAdapter(
       const offset = parseCursor(safeRequest.cursor);
       const limit = safeRequest.limit ?? 100;
       const events = await resolveAdapterEvents(options.events);
-      const readOptions: CanonicalRecommendationSourceOptions = {
-        sourceSystem,
-        includeMirroredEvents: options.includeMirroredEvents,
-        defaultTrustBoundary: options.defaultTrustBoundary,
-        containsThirdPartyData: options.containsThirdPartyData,
-        serverSideProcessing: options.serverSideProcessing,
-        providerPolicyAllowsProcessing: options.providerPolicyAllowsProcessing
-      };
       const items = dedupeSourceItems(
         events
           .map((event) => createCanonicalRecommendationSourceItem(event, readOptions))
