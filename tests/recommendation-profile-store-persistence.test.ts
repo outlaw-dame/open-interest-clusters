@@ -1,25 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { RecommendationDerivedDataDeletionIntent } from "../src/recommendation/consent.js";
-import type { RecommendationProfileSnapshot } from "../src/recommendation/profile-store.js";
-import type {
-  RecommendationProfilePersistenceAdapter,
-  RecommendationProfileStoreRecord
-} from "../src/recommendation/profile-store-persistence.js";
-import { createRecommendationProfileSubjectKey } from "../src/recommendation/profile-store-persistence-key.js";
 import {
+  createRecommendationProfileSubjectKey,
   createRecommendationProfileStoreRecord,
-  deserializeRecommendationProfileStoreRecord,
-  normalizeRecommendationProfileStoreRecord,
-  serializeRecommendationProfileStoreRecord
-} from "../src/recommendation/profile-store-persistence-record.js";
-import {
   deleteRecommendationProfileStoreRecord,
+  deserializeRecommendationProfileStoreRecord,
+  normalizeRecommendationProfileSnapshot,
+  normalizeRecommendationProfileStoreRecord,
+  serializeRecommendationProfileStoreRecord,
   readRecommendationProfileStoreRecord,
-  writeRecommendationProfileStoreRecord
-} from "../src/recommendation/profile-store-persistence-operations.js";
-import { normalizeRecommendationProfileSnapshot } from "../src/recommendation/profile-store-persistence-snapshot.js";
+  writeRecommendationProfileStoreRecord,
+  type RecommendationDerivedDataDeletionIntent,
+  type RecommendationProfilePersistenceAdapter,
+  type RecommendationProfileSnapshot,
+  type RecommendationProfileStoreRecord
+} from "../src/index.js";
 
 function profileSnapshot(entries = [profileEntry("books.fiction")]): RecommendationProfileSnapshot {
   return {
@@ -75,6 +71,8 @@ test("profile persistence subject keys are deterministic and do not expose raw s
   assert.match(first, /^profile:[a-f0-9]{64}$/u);
   assert.equal(first.includes("alice"), false);
   assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: `bad${String.fromCharCode(0)}subject` }), TypeError);
+  assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: " subject-1" }), TypeError);
+  assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: "subject-1 " }), TypeError);
 });
 
 test("profile persistence records serialize redacted validated snapshots", () => {
@@ -109,6 +107,26 @@ test("profile snapshot normalization rejects raw source identifiers and corrupt 
 
   assert.throws(() => normalizeRecommendationProfileSnapshot(rawIdentifierProfile), TypeError);
   assert.throws(() => normalizeRecommendationProfileSnapshot(corruptCountProfile), TypeError);
+});
+
+test("profile record and snapshot normalization tolerate unknown outer metadata", () => {
+  const record = createRecommendationProfileStoreRecord({
+    subjectId: "subject-1",
+    writtenAt: "2026-05-16T01:00:00.000Z",
+    profile: profileSnapshot()
+  });
+  const profileWithMetadata = {
+    ...profileSnapshot(),
+    futureMetadata: { ignored: true }
+  };
+  const recordWithMetadata = {
+    ...record,
+    futureMetadata: { ignored: true },
+    profile: profileWithMetadata
+  };
+
+  assert.equal(normalizeRecommendationProfileSnapshot(profileWithMetadata).signalCount, 1);
+  assert.equal(normalizeRecommendationProfileStoreRecord(recordWithMetadata)?.profile.signalCount, 1);
 });
 
 test("profile snapshot normalization prunes expired entries without accepting corrupt records", () => {
