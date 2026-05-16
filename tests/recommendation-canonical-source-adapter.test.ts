@@ -222,6 +222,25 @@ test("canonical adapter paginates after since filtering and dedupe", async () =>
   assert.equal(secondPage.cursor, undefined);
 });
 
+test("canonical adapter validates cursor-skipped rows before counting them", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      { ...baseEvent, canonicalIntentId: "bad-row", sourceProtocol: "bad-protocol" as never },
+      { ...baseEvent, canonicalIntentId: "valid-row" }
+    ]
+  });
+
+  await assert.rejects(
+    () =>
+      readRecommendationSourceAdapter(adapter, {
+        subjectId: "subject-1",
+        cursor: "1",
+        limit: 1
+      }),
+    TypeError
+  );
+});
+
 test("canonical adapter accepts strict RFC3339 timestamps with explicit offsets", async () => {
   const adapter = createCanonicalRecommendationSourceAdapter({
     events: [
@@ -241,6 +260,48 @@ test("canonical adapter accepts strict RFC3339 timestamps with explicit offsets"
 
   assert.equal(result.items.length, 1);
   assert.equal(result.items[0]?.provenance.opaqueSourceId, "offset-event");
+});
+
+test("canonical adapter accepts high-precision fractional seconds", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      {
+        ...baseEvent,
+        canonicalIntentId: "high-precision",
+        createdAt: "2026-05-16T00:00:00.123456789Z",
+        observedAt: "2026-05-16T00:00:00.123456789Z"
+      }
+    ]
+  });
+
+  const result = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-05-16T00:00:00.123Z"
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.provenance.opaqueSourceId, "high-precision");
+});
+
+test("canonical adapter accepts leap-second timestamps", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      {
+        ...baseEvent,
+        canonicalIntentId: "leap-second",
+        createdAt: "2026-12-31T23:59:60Z",
+        observedAt: "2026-12-31T23:59:60Z"
+      }
+    ]
+  });
+
+  const result = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-12-31T23:59:59Z"
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.provenance.opaqueSourceId, "leap-second");
 });
 
 test("canonical adapter rejects malformed events, cursors, and loose timestamps", async () => {
