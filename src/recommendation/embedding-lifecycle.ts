@@ -412,6 +412,32 @@ function createEmbeddingId(subjectKey: string, model: RecommendationEmbeddingMod
   ]))}`;
 }
 
+function createLegacyEmbeddingId(
+  subjectKey: string,
+  model: RecommendationEmbeddingModelManifest,
+  source: RecommendationEmbeddingSourceFingerprint
+): string {
+  return `embedding:${sha256Hex(JSON.stringify([
+    "recommendation-embedding-id.v1",
+    subjectKey,
+    model.providerId,
+    model.modelId,
+    model.modelVersion,
+    model.dimensions,
+    source.profileDigest
+  ]))}`;
+}
+
+function isSupportedEmbeddingId(
+  embeddingId: string,
+  subjectKey: string,
+  model: RecommendationEmbeddingModelManifest,
+  source: RecommendationEmbeddingSourceFingerprint
+): boolean {
+  return embeddingId === createEmbeddingId(subjectKey, model, source) ||
+    embeddingId === createLegacyEmbeddingId(subjectKey, model, source);
+}
+
 export function createRecommendationEmbeddingRecord(input: RecommendationEmbeddingRecordInput): RecommendationEmbeddingRecord {
   if (!isObject(input)) {
     throw new TypeError("Invalid recommendation embedding record input.");
@@ -459,7 +485,7 @@ export function normalizeRecommendationEmbeddingRecord(
   const vector = normalizeVector(value.vector, model.dimensions);
   const subjectKey = normalizeSubjectKey(value.subjectKey);
   const embeddingId = normalizeEmbeddingId(value.embeddingId);
-  if (embeddingId !== createEmbeddingId(subjectKey, model, source)) {
+  if (!isSupportedEmbeddingId(embeddingId, subjectKey, model, source)) {
     throw new TypeError("Invalid recommendation embedding id.");
   }
 
