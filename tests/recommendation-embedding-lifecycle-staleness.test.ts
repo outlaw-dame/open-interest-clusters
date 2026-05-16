@@ -13,23 +13,24 @@ import {
 } from "../src/index.js";
 
 function model(version = "v1", artifactHash?: string): RecommendationEmbeddingModelManifest {
-  return {
+  const manifest: RecommendationEmbeddingModelManifest = {
     schemaVersion: RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION,
     providerId: "local",
     modelId: "model",
     modelVersion: version,
     dimensions: 3,
-    distanceMetric: "cosine",
-    ...(artifactHash === undefined
-      ? {}
-      : {
-        artifact: {
-          artifactRef: "models/model.bin",
-          sha256: artifactHash,
-          sizeBytes: 1024
-        }
-      })
+    distanceMetric: "cosine"
   };
+
+  if (artifactHash !== undefined) {
+    manifest.artifact = {
+      artifactRef: "models/model.bin",
+      sha256: artifactHash,
+      sizeBytes: 1024
+    };
+  }
+
+  return manifest;
 }
 
 function profile(key = "books"): RecommendationProfileSnapshot {
