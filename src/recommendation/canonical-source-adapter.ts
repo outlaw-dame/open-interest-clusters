@@ -136,13 +136,24 @@ export interface CanonicalRecommendationSourceAdapterOptions extends CanonicalRe
   capabilities?: readonly RecommendationSourceAdapterCapability[];
 }
 
+interface ParsedRfc3339Timestamp {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  fractionalSeconds?: string;
+  zone: string;
+}
+
 const MAX_CANONICAL_ID_LENGTH = 2_048;
 const MAX_SOURCE_SYSTEM_LENGTH = 256;
 const MAX_ADAPTER_ID_LENGTH = 256;
 const DEFAULT_CANONICAL_SOURCE_SYSTEM = "canonical.v1";
 const DEFAULT_CANONICAL_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "unknown";
 const STRICT_RFC3339_TIMESTAMP_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/u;
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const VISIBILITY_SET = new Set<string>(CANONICAL_RECOMMENDATION_VISIBILITIES);
 const PROJECTION_MODE_SET = new Set<string>(CANONICAL_RECOMMENDATION_PROJECTION_MODES);
@@ -201,17 +212,40 @@ function assertBoundedString(value: string, label: string, maxLength: number): v
 }
 
 function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (month === 2) {
+    return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  }
+
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
-function isStrictRfc3339Timestamp(value: unknown): value is string {
+function fractionalMillis(fractionalSeconds: string | undefined): number {
+  if (fractionalSeconds === undefined) {
+    return 0;
+  }
+
+  return Number.parseInt(fractionalSeconds.slice(0, 3).padEnd(3, "0"), 10);
+}
+
+function timezoneOffsetMillis(zone: string): number {
+  if (zone === "Z") {
+    return 0;
+  }
+
+  const sign = zone[0] === "+" ? 1 : -1;
+  const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
+  const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
+  return sign * ((offsetHour * 60 + offsetMinute) * 60_000);
+}
+
+function parseStrictRfc3339Timestamp(value: unknown): ParsedRfc3339Timestamp | null {
   if (!isNonEmptyString(value)) {
-    return false;
+    return null;
   }
 
   const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(value);
   if (match === null) {
-    return false;
+    return null;
   }
 
   const year = Number.parseInt(match[1] ?? "", 10);
@@ -220,6 +254,7 @@ function isStrictRfc3339Timestamp(value: unknown): value is string {
   const hour = Number.parseInt(match[4] ?? "", 10);
   const minute = Number.parseInt(match[5] ?? "", 10);
   const second = Number.parseInt(match[6] ?? "", 10);
+  const fractionalSeconds = match[7];
   const zone = match[8] ?? "";
 
   if (
@@ -235,33 +270,55 @@ function isStrictRfc3339Timestamp(value: unknown): value is string {
     minute < 0 ||
     minute > 59 ||
     second < 0 ||
-    second > 59
+    second > 60
   ) {
-    return false;
+    return null;
   }
 
   if (zone !== "Z") {
     const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
     const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
     if (offsetHour > 23 || offsetMinute > 59) {
-      return false;
+      return null;
     }
   }
 
-  return true;
-}
-
-function timestampMillis(value: unknown, errorMessage: string): number {
-  if (!isStrictRfc3339Timestamp(value)) {
-    throw new TypeError(errorMessage);
-  }
-
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    throw new TypeError(errorMessage);
+  const parsed: ParsedRfc3339Timestamp = {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    zone
+  };
+  if (fractionalSeconds !== undefined) {
+    parsed.fractionalSeconds = fractionalSeconds;
   }
 
   return parsed;
+}
+
+function timestampMillis(value: unknown, errorMessage: string): number {
+  const parsed = parseStrictRfc3339Timestamp(value);
+  if (parsed === null) {
+    throw new TypeError(errorMessage);
+  }
+
+  const utcMillis = Date.UTC(
+    parsed.year,
+    parsed.month - 1,
+    parsed.day,
+    parsed.hour,
+    parsed.minute,
+    Math.min(parsed.second, 59),
+    fractionalMillis(parsed.fractionalSeconds)
+  );
+  if (!Number.isFinite(utcMillis)) {
+    throw new TypeError(errorMessage);
+  }
+
+  return utcMillis + (parsed.second === 60 ? 1_000 : 0) - timezoneOffsetMillis(parsed.zone);
 }
 
 function assertTimestamp(value: string): void {
@@ -809,7 +866,8 @@ function readCanonicalSourceItems(
       continue;
     }
 
-    const id = canonicalEventIdentity(event);
+    const normalizedEvent = normalizeCanonicalRecommendationEvent(event);
+    const id = canonicalEventIdentity(normalizedEvent);
     if (seen.has(id)) {
       continue;
     }
@@ -826,7 +884,7 @@ function readCanonicalSourceItems(
       break;
     }
 
-    const item = createCanonicalRecommendationSourceItem(event, readOptions);
+    const item = createCanonicalRecommendationSourceItem(normalizedEvent, readOptions);
     if (item === null) {
       continue;
     }
