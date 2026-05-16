@@ -73,13 +73,30 @@ interface MutableProfileEntry {
   protocols: Set<RecommendationProtocol>;
   sourceVisibilities: Set<RecommendationSourceVisibility>;
   updatedAt: string;
-  expiresAt?: string;
+  expiresAt: string | undefined;
 }
 
 interface MutableProfileState {
   updatedAt: string;
   signalCount: number;
   entries: Map<string, MutableProfileEntry>;
+}
+
+interface NormalizedTimestamp {
+  value: string;
+  millis: number;
+}
+
+interface PreparedInterestSignal {
+  signal: RecommendationInterestSignal;
+  key: string;
+  observedAtMillis: number;
+  expiresAtMillis: number | undefined;
+}
+
+interface PreparedSignalBatch {
+  acceptedSignals: PreparedInterestSignal[];
+  skippedExpiredSignalCount: number;
 }
 
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -105,19 +122,6 @@ function assertValidSubjectId(subjectId: unknown): asserts subjectId is string {
   }
 }
 
-function assertValidTimestamp(value: string): void {
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    throw new TypeError("Invalid recommendation profile timestamp.");
-  }
-}
-
-function normalizeNow(value: string | undefined, fallback: () => string): string {
-  const timestamp = value ?? fallback();
-  assertValidTimestamp(timestamp);
-  return timestamp;
-}
-
 function timestampMillis(value: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) {
@@ -127,33 +131,37 @@ function timestampMillis(value: string): number {
   return parsed;
 }
 
-function maxTimestamp(left: string, right: string): string {
-  return timestampMillis(left) >= timestampMillis(right) ? left : right;
+function normalizeNow(value: string | undefined, fallback: () => string): NormalizedTimestamp {
+  const timestamp = value ?? fallback();
+  return { value: timestamp, millis: timestampMillis(timestamp) };
 }
 
-function latestExpiration(left: string | undefined, right: string | undefined): string | undefined {
-  if (left === undefined || right === undefined) {
+function maxTimestampWithRightMillis(left: string, right: string, rightMillis: number): string {
+  return timestampMillis(left) >= rightMillis ? left : right;
+}
+
+function latestExpiration(
+  left: string | undefined,
+  right: string | undefined,
+  rightMillis: number | undefined
+): string | undefined {
+  if (left === undefined || right === undefined || rightMillis === undefined) {
     return undefined;
   }
 
-  return timestampMillis(left) >= timestampMillis(right) ? left : right;
+  return timestampMillis(left) >= rightMillis ? left : right;
 }
 
-function isExpiredTimestamp(expiresAt: string | undefined, now: string): boolean {
+function isExpiredTimestamp(expiresAt: string | undefined, nowMillis: number): boolean {
   if (expiresAt === undefined) {
     return false;
   }
 
-  assertValidTimestamp(expiresAt);
-  return timestampMillis(expiresAt) <= timestampMillis(now);
-}
-
-function isExpired(signal: RecommendationInterestSignal, now: string): boolean {
-  return isExpiredTimestamp(signal.expiresAt, now);
+  return timestampMillis(expiresAt) <= nowMillis;
 }
 
 function clampUnitScore(value: number): number {
-  if (!Number.isFinite(value)) {
+  if (Number.isNaN(value)) {
     return 0;
   }
 
@@ -177,12 +185,24 @@ function targetKey(target: RecommendationInterestTarget): string {
   return `${target.kind}:${target.key}`;
 }
 
+function compareTargets(left: RecommendationInterestTarget, right: RecommendationInterestTarget): number {
+  return left.kind.localeCompare(right.kind) || left.key.localeCompare(right.key);
+}
+
+function compareProfileEntries(left: MutableProfileEntry, right: MutableProfileEntry): number {
+  return Math.abs(right.score) - Math.abs(left.score) || compareTargets(left.target, right.target);
+}
+
+function sortEntryRecords(entries: ReadonlyMap<string, MutableProfileEntry>): [string, MutableProfileEntry][] {
+  return [...entries.entries()].sort((left, right) => compareProfileEntries(left[1], right[1]));
+}
+
 function cloneTarget(target: RecommendationInterestTarget): RecommendationInterestTarget {
   return Object.freeze({ kind: target.kind, key: target.key });
 }
 
 function cloneMutableEntry(entry: MutableProfileEntry): MutableProfileEntry {
-  const cloned: MutableProfileEntry = {
+  return {
     target: cloneTarget(entry.target),
     score: entry.score,
     confidence: entry.confidence,
@@ -193,21 +213,8 @@ function cloneMutableEntry(entry: MutableProfileEntry): MutableProfileEntry {
     privacyBoundaries: new Set(entry.privacyBoundaries),
     protocols: new Set(entry.protocols),
     sourceVisibilities: new Set(entry.sourceVisibilities),
-    updatedAt: entry.updatedAt
-  };
-
-  if (entry.expiresAt !== undefined) {
-    cloned.expiresAt = entry.expiresAt;
-  }
-
-  return cloned;
-}
-
-function cloneMutableState(state: MutableProfileState): MutableProfileState {
-  return {
-    updatedAt: state.updatedAt,
-    signalCount: state.signalCount,
-    entries: new Map([...state.entries.entries()].map(([key, entry]) => [key, cloneMutableEntry(entry)]))
+    updatedAt: entry.updatedAt,
+    expiresAt: entry.expiresAt
   };
 }
 
@@ -232,11 +239,11 @@ function createEmptySnapshot(updatedAt: string): RecommendationProfileSnapshot {
   });
 }
 
-function pruneExpiredEntries(state: MutableProfileState, now: string): void {
+function pruneExpiredEntries(state: MutableProfileState, now: NormalizedTimestamp): void {
   let removedSignalCount = 0;
 
   for (const [key, entry] of state.entries.entries()) {
-    if (isExpiredTimestamp(entry.expiresAt, now)) {
+    if (isExpiredTimestamp(entry.expiresAt, now.millis)) {
       removedSignalCount += entry.signalCount;
       state.entries.delete(key);
     }
@@ -244,7 +251,7 @@ function pruneExpiredEntries(state: MutableProfileState, now: string): void {
 
   if (removedSignalCount > 0) {
     state.signalCount = Math.max(0, state.signalCount - removedSignalCount);
-    state.updatedAt = maxTimestamp(state.updatedAt, now);
+    state.updatedAt = maxTimestampWithRightMillis(state.updatedAt, now.value, now.millis);
   }
 }
 
@@ -270,29 +277,34 @@ function cloneEntry(entry: MutableProfileEntry): RecommendationProfileEntry {
   return Object.freeze(snapshot);
 }
 
-function createSnapshot(state: MutableProfileState | undefined, now: string): RecommendationProfileSnapshot {
-  if (state === undefined) {
-    return createEmptySnapshot(now);
-  }
-
-  pruneExpiredEntries(state, now);
-  const entries = [...state.entries.values()]
-    .map(cloneEntry)
-    .sort((left, right) => Math.abs(right.score) - Math.abs(left.score) || targetKey(left.target).localeCompare(targetKey(right.target)));
-
+function createSnapshotFromSortedEntries(
+  state: MutableProfileState,
+  sortedEntries: readonly MutableProfileEntry[]
+): RecommendationProfileSnapshot {
   return Object.freeze({
     schemaVersion: RECOMMENDATION_PROFILE_SCHEMA_VERSION,
     updatedAt: state.updatedAt,
     signalCount: state.signalCount,
-    entries: Object.freeze(entries)
+    entries: Object.freeze(sortedEntries.map(cloneEntry))
   });
 }
 
-function createMutableEntry(signal: RecommendationInterestSignal, now: string): MutableProfileEntry {
+function createSnapshot(state: MutableProfileState | undefined, now: NormalizedTimestamp): RecommendationProfileSnapshot {
+  if (state === undefined) {
+    return createEmptySnapshot(now.value);
+  }
+
+  pruneExpiredEntries(state, now);
+  return createSnapshotFromSortedEntries(
+    state,
+    sortEntryRecords(state.entries).map(([, entry]) => entry)
+  );
+}
+
+function createMutableEntry(prepared: PreparedInterestSignal, now: NormalizedTimestamp): MutableProfileEntry {
+  const signal = prepared.signal;
   const delta = signalDelta(signal.polarity, signal.strength, signal.confidence);
-  const observedAt = signal.evidence.observedAt;
-  assertValidTimestamp(observedAt);
-  const entry: MutableProfileEntry = {
+  return {
     target: signal.target,
     score: clampUnitScore(delta),
     confidence: signal.confidence,
@@ -303,29 +315,19 @@ function createMutableEntry(signal: RecommendationInterestSignal, now: string): 
     privacyBoundaries: new Set([signal.privacyBoundary]),
     protocols: new Set([signal.evidence.protocol]),
     sourceVisibilities: new Set([signal.evidence.sourceVisibility]),
-    updatedAt: maxTimestamp(now, observedAt)
+    updatedAt: now.millis >= prepared.observedAtMillis ? now.value : signal.evidence.observedAt,
+    expiresAt: signal.expiresAt
   };
-
-  if (signal.expiresAt !== undefined) {
-    entry.expiresAt = signal.expiresAt;
-  }
-
-  return entry;
 }
 
-function updateEntryExpiration(entry: MutableProfileEntry, signal: RecommendationInterestSignal): void {
-  const expiresAt = latestExpiration(entry.expiresAt, signal.expiresAt);
-  if (expiresAt === undefined) {
-    delete entry.expiresAt;
-    return;
-  }
-
-  entry.expiresAt = expiresAt;
+function updateEntryExpiration(entry: MutableProfileEntry, prepared: PreparedInterestSignal): void {
+  entry.expiresAt = latestExpiration(entry.expiresAt, prepared.signal.expiresAt, prepared.expiresAtMillis);
 }
 
-function applySignalToEntry(entry: MutableProfileEntry, signal: RecommendationInterestSignal, now: string): void {
-  const observedAt = signal.evidence.observedAt;
-  assertValidTimestamp(observedAt);
+function applySignalToEntry(entry: MutableProfileEntry, prepared: PreparedInterestSignal, now: NormalizedTimestamp): void {
+  const signal = prepared.signal;
+  const updatedAt = now.millis >= prepared.observedAtMillis ? now.value : signal.evidence.observedAt;
+  const updatedAtMillis = Math.max(now.millis, prepared.observedAtMillis);
 
   entry.score = clampUnitScore(entry.score + signalDelta(signal.polarity, signal.strength, signal.confidence));
   entry.confidence = Math.max(entry.confidence, signal.confidence);
@@ -336,8 +338,8 @@ function applySignalToEntry(entry: MutableProfileEntry, signal: RecommendationIn
   entry.privacyBoundaries.add(signal.privacyBoundary);
   entry.protocols.add(signal.evidence.protocol);
   entry.sourceVisibilities.add(signal.evidence.sourceVisibility);
-  entry.updatedAt = maxTimestamp(entry.updatedAt, maxTimestamp(now, observedAt));
-  updateEntryExpiration(entry, signal);
+  entry.updatedAt = maxTimestampWithRightMillis(entry.updatedAt, updatedAt, updatedAtMillis);
+  updateEntryExpiration(entry, prepared);
 }
 
 function normalizeMaxEntries(value: number | undefined): number {
@@ -364,23 +366,58 @@ function normalizeAllowedPrivacyBoundaries(
   return new Set(boundaries);
 }
 
-function trimEntries(state: MutableProfileState, maxEntries: number): void {
-  if (state.entries.size <= maxEntries) {
-    return;
-  }
+function prepareSignalBatch(
+  rawSignals: readonly RecommendationInterestSignal[],
+  allowedPrivacyBoundaries: ReadonlySet<RecommendationInterestPrivacyBoundary>,
+  now: NormalizedTimestamp
+): PreparedSignalBatch {
+  const acceptedSignals: PreparedInterestSignal[] = [];
+  let skippedExpiredSignalCount = 0;
 
-  const keep = new Set(
-    [...state.entries.entries()]
-      .sort((left, right) => Math.abs(right[1].score) - Math.abs(left[1].score) || left[0].localeCompare(right[0]))
-      .slice(0, maxEntries)
-      .map(([key]) => key)
-  );
-
-  for (const key of state.entries.keys()) {
-    if (!keep.has(key)) {
-      state.entries.delete(key);
+  for (const rawSignal of rawSignals) {
+    if (!isRecommendationInterestSignal(rawSignal)) {
+      throw new TypeError("Invalid recommendation profile interest signal.");
     }
+
+    const signal = normalizeRecommendationInterestSignal(rawSignal);
+    if (!allowedPrivacyBoundaries.has(signal.privacyBoundary)) {
+      throw new TypeError("Recommendation profile signal privacy boundary is not allowed.");
+    }
+
+    const observedAtMillis = timestampMillis(signal.evidence.observedAt);
+    const expiresAtMillis = signal.expiresAt === undefined ? undefined : timestampMillis(signal.expiresAt);
+    if (expiresAtMillis !== undefined && expiresAtMillis <= now.millis) {
+      skippedExpiredSignalCount += 1;
+      continue;
+    }
+
+    acceptedSignals.push({
+      signal,
+      key: targetKey(signal.target),
+      observedAtMillis,
+      expiresAtMillis
+    });
   }
+
+  return { acceptedSignals, skippedExpiredSignalCount };
+}
+
+function trimSortedEntries(
+  state: MutableProfileState,
+  sortedRecords: readonly [string, MutableProfileEntry][],
+  maxEntries: number
+): MutableProfileEntry[] {
+  if (sortedRecords.length <= maxEntries) {
+    return sortedRecords.map(([, entry]) => entry);
+  }
+
+  const keptEntries = sortedRecords.slice(0, maxEntries).map(([, entry]) => entry);
+  for (const [key, entry] of sortedRecords.slice(maxEntries)) {
+    state.signalCount = Math.max(0, state.signalCount - entry.signalCount);
+    state.entries.delete(key);
+  }
+
+  return keptEntries;
 }
 
 export function createInMemoryRecommendationProfileStore(
@@ -399,45 +436,46 @@ export function createInMemoryRecommendationProfileStore(
 
       assertValidSubjectId(input.subjectId);
       const now = normalizeNow(input.now, nowProvider);
+      const { acceptedSignals, skippedExpiredSignalCount } = prepareSignalBatch(
+        input.signals,
+        allowedPrivacyBoundaries,
+        now
+      );
       const existingState = profiles.get(input.subjectId);
-      const state = existingState === undefined ? createEmptyState(now) : cloneMutableState(existingState);
-      let acceptedSignalCount = 0;
-      let skippedExpiredSignalCount = 0;
+      const state: MutableProfileState = existingState === undefined
+        ? createEmptyState(now.value)
+        : {
+            updatedAt: existingState.updatedAt,
+            signalCount: existingState.signalCount,
+            entries: new Map(existingState.entries)
+          };
+      const clonedEntryKeys = new Set<string>();
 
-      for (const rawSignal of input.signals) {
-        if (!isRecommendationInterestSignal(rawSignal)) {
-          throw new TypeError("Invalid recommendation profile interest signal.");
-        }
-
-        const signal = normalizeRecommendationInterestSignal(rawSignal);
-        if (!allowedPrivacyBoundaries.has(signal.privacyBoundary)) {
-          throw new TypeError("Recommendation profile signal privacy boundary is not allowed.");
-        }
-
-        if (isExpired(signal, now)) {
-          skippedExpiredSignalCount += 1;
-          continue;
-        }
-
-        const key = targetKey(signal.target);
-        const existing = state.entries.get(key);
+      for (const prepared of acceptedSignals) {
+        const existing = state.entries.get(prepared.key);
         if (existing === undefined) {
-          state.entries.set(key, createMutableEntry(signal, now));
+          state.entries.set(prepared.key, createMutableEntry(prepared, now));
+          clonedEntryKeys.add(prepared.key);
         } else {
-          applySignalToEntry(existing, signal, now);
+          const entry = clonedEntryKeys.has(prepared.key) ? existing : cloneMutableEntry(existing);
+          if (!clonedEntryKeys.has(prepared.key)) {
+            state.entries.set(prepared.key, entry);
+            clonedEntryKeys.add(prepared.key);
+          }
+          applySignalToEntry(entry, prepared, now);
         }
 
-        acceptedSignalCount += 1;
         state.signalCount += 1;
-        state.updatedAt = maxTimestamp(state.updatedAt, now);
+        state.updatedAt = maxTimestampWithRightMillis(state.updatedAt, now.value, now.millis);
       }
 
-      trimEntries(state, maxEntries);
-      const profile = createSnapshot(state, now);
+      pruneExpiredEntries(state, now);
+      const sortedEntries = trimSortedEntries(state, sortEntryRecords(state.entries), maxEntries);
+      const profile = createSnapshotFromSortedEntries(state, sortedEntries);
       profiles.set(input.subjectId, state);
 
       return Object.freeze({
-        acceptedSignalCount,
+        acceptedSignalCount: acceptedSignals.length,
         skippedExpiredSignalCount,
         profile
       });
@@ -445,8 +483,7 @@ export function createInMemoryRecommendationProfileStore(
 
     async readProfile(subjectId) {
       assertValidSubjectId(subjectId);
-      const now = normalizeNow(undefined, nowProvider);
-      return createSnapshot(profiles.get(subjectId), now);
+      return createSnapshot(profiles.get(subjectId), normalizeNow(undefined, nowProvider));
     },
 
     async deleteProfile(intent) {
@@ -464,7 +501,7 @@ export function createInMemoryRecommendationProfileStore(
       assertValidSubjectId(intent.subjectId);
       const now = normalizeNow(intent.requestedAt, nowProvider);
       profiles.delete(intent.subjectId);
-      return createEmptySnapshot(now);
+      return createEmptySnapshot(now.value);
     }
   };
 }
