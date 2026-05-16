@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION,
   createRecommendationEmbeddingRecord,
+  createRecommendationEmbeddingSourceFingerprint,
   type RecommendationEmbeddingModelManifest,
   type RecommendationProfileSnapshot
 } from "../src/index.js";
@@ -55,4 +56,48 @@ test("recommendation embedding lifecycle creates redacted embedding records", ()
   assert.equal(record.embeddingId.startsWith("embedding:"), true);
   assert.equal(record.subjectKey.startsWith("profile:"), true);
   assert.equal(JSON.stringify(record).includes("subject-1"), false);
+});
+
+test("recommendation embedding source fingerprint is deterministic across object key order", () => {
+  const reordered = {
+    entries: [
+      {
+        updatedAt: "2026-05-16T00:00:00.000Z",
+        sourceVisibilities: ["public"],
+        protocols: ["activitypub"],
+        privacyBoundaries: ["local_only"],
+        neutralSignalCount: 0,
+        negativeSignalCount: 0,
+        positiveSignalCount: 1,
+        signalCount: 1,
+        confidence: 0.8,
+        score: 0.75,
+        target: { key: "books", kind: "canonical_interest" }
+      }
+    ],
+    signalCount: 1,
+    updatedAt: "2026-05-16T00:00:00.000Z",
+    schemaVersion: "recommendation-profile.v1"
+  } as RecommendationProfileSnapshot;
+
+  assert.equal(
+    createRecommendationEmbeddingSourceFingerprint(profile()).profileDigest,
+    createRecommendationEmbeddingSourceFingerprint(reordered).profileDigest
+  );
+  assert.equal(
+    createRecommendationEmbeddingRecord({
+      subjectId: "subject-1",
+      model: model(),
+      profile: profile(),
+      vector: [0.1, 0.2, 0.3],
+      createdAt: "2026-05-16T01:00:00.000Z"
+    }).embeddingId,
+    createRecommendationEmbeddingRecord({
+      subjectId: "subject-1",
+      model: model(),
+      profile: reordered,
+      vector: [0.1, 0.2, 0.3],
+      createdAt: "2026-05-16T01:00:00.000Z"
+    }).embeddingId
+  );
 });
