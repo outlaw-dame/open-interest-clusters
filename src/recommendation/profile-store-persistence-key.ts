@@ -35,7 +35,12 @@ function assertSafeKeyPart(value: unknown, message: string): string {
 }
 
 export function assertValidRecommendationProfileSubjectId(subjectId: unknown): asserts subjectId is string {
-  if (!isNonEmptyString(subjectId) || subjectId.length > MAX_SUBJECT_ID_LENGTH || hasControlCharacter(subjectId)) {
+  if (
+    !isNonEmptyString(subjectId) ||
+    subjectId.trim() !== subjectId ||
+    subjectId.length > MAX_SUBJECT_ID_LENGTH ||
+    hasControlCharacter(subjectId)
+  ) {
     throw new TypeError("Invalid recommendation profile subject id.");
   }
 }
