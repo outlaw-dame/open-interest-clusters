@@ -10,8 +10,6 @@ import {
 } from "./profile-store-persistence-key.js";
 import { normalizeRecommendationProfileSnapshot } from "./profile-store-persistence-snapshot.js";
 
-const RECORD_KEYS = new Set(["schemaVersion", "subjectKey", "writtenAt", "profile", "expiresAt"]);
-
 interface TimestampParseResult {
   value: string;
   millis: number;
@@ -19,10 +17,6 @@ interface TimestampParseResult {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: ReadonlySet<string>): boolean {
-  return Object.keys(value).every((key) => allowedKeys.has(key));
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -71,7 +65,7 @@ export function normalizeRecommendationProfileStoreRecord(
   value: unknown,
   options: RecommendationProfileStoreRecordParseOptions = {}
 ): RecommendationProfileStoreRecord | null {
-  if (!isObject(value) || !hasOnlyKeys(value, RECORD_KEYS)) {
+  if (!isObject(value)) {
     throw new TypeError("Invalid recommendation profile store record.");
   }
 
