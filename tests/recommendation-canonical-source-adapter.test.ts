@@ -222,7 +222,28 @@ test("canonical adapter paginates after since filtering and dedupe", async () =>
   assert.equal(secondPage.cursor, undefined);
 });
 
-test("canonical adapter rejects malformed events, cursors, and since timestamps", async () => {
+test("canonical adapter accepts strict RFC3339 timestamps with explicit offsets", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      {
+        ...baseEvent,
+        canonicalIntentId: "offset-event",
+        createdAt: "2026-05-16T01:00:00+01:00",
+        observedAt: "2026-05-16T01:00:00+01:00"
+      }
+    ]
+  });
+
+  const result = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-05-15T20:00:00-04:00"
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.provenance.opaqueSourceId, "offset-event");
+});
+
+test("canonical adapter rejects malformed events, cursors, and loose timestamps", async () => {
   const adapter = createCanonicalRecommendationSourceAdapter({
     events: [{ ...baseEvent, canonicalIntentId: "canonical-1" }]
   });
@@ -231,17 +252,21 @@ test("canonical adapter rejects malformed events, cursors, and since timestamps"
     () => readRecommendationSourceAdapter(adapter, { subjectId: "subject-1", cursor: "not-a-number" }),
     TypeError
   );
-  await assert.rejects(
-    () => readRecommendationSourceAdapter(adapter, { subjectId: "subject-1", since: "not-a-date" }),
-    TypeError
-  );
-  assert.throws(
-    () =>
-      createCanonicalRecommendationSourceItem({
-        ...baseEvent,
-        canonicalIntentId: "canonical-bad-time",
-        observedAt: "not-a-date"
-      }),
-    TypeError
-  );
+  for (const since of ["not-a-date", "0", "2026-02-30T00:00:00.000Z", "2026-05-16", "2026-05-16T00:00:00"]) {
+    await assert.rejects(
+      () => readRecommendationSourceAdapter(adapter, { subjectId: "subject-1", since }),
+      TypeError
+    );
+  }
+  for (const observedAt of ["not-a-date", "0", "2026-02-30T00:00:00.000Z", "2026-05-16T00:00:00"]) {
+    assert.throws(
+      () =>
+        createCanonicalRecommendationSourceItem({
+          ...baseEvent,
+          canonicalIntentId: `canonical-bad-time-${observedAt}`,
+          observedAt
+        }),
+      TypeError
+    );
+  }
 });

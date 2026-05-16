@@ -141,6 +141,8 @@ const MAX_SOURCE_SYSTEM_LENGTH = 256;
 const MAX_ADAPTER_ID_LENGTH = 256;
 const DEFAULT_CANONICAL_SOURCE_SYSTEM = "canonical.v1";
 const DEFAULT_CANONICAL_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "unknown";
+const STRICT_RFC3339_TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/u;
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const VISIBILITY_SET = new Set<string>(CANONICAL_RECOMMENDATION_VISIBILITIES);
 const PROJECTION_MODE_SET = new Set<string>(CANONICAL_RECOMMENDATION_PROJECTION_MODES);
@@ -198,7 +200,62 @@ function assertBoundedString(value: string, label: string, maxLength: number): v
   }
 }
 
-function timestampMillis(value: string, errorMessage: string): number {
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function isStrictRfc3339Timestamp(value: unknown): value is string {
+  if (!isNonEmptyString(value)) {
+    return false;
+  }
+
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(value);
+  if (match === null) {
+    return false;
+  }
+
+  const year = Number.parseInt(match[1] ?? "", 10);
+  const month = Number.parseInt(match[2] ?? "", 10);
+  const day = Number.parseInt(match[3] ?? "", 10);
+  const hour = Number.parseInt(match[4] ?? "", 10);
+  const minute = Number.parseInt(match[5] ?? "", 10);
+  const second = Number.parseInt(match[6] ?? "", 10);
+  const zone = match[8] ?? "";
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59 ||
+    second < 0 ||
+    second > 59
+  ) {
+    return false;
+  }
+
+  if (zone !== "Z") {
+    const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
+    const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
+    if (offsetHour > 23 || offsetMinute > 59) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function timestampMillis(value: unknown, errorMessage: string): number {
+  if (!isStrictRfc3339Timestamp(value)) {
+    throw new TypeError(errorMessage);
+  }
+
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) {
     throw new TypeError(errorMessage);
@@ -217,8 +274,8 @@ function parseSinceTimestamp(value: string | undefined): number | undefined {
     : timestampMillis(value, "Invalid canonical recommendation source adapter since timestamp.");
 }
 
-function sourceItemObservedAtMillis(item: RecommendationSourceItem): number {
-  return timestampMillis(item.provenance.observedAt, "Invalid canonical recommendation source item timestamp.");
+function eventObservedAtMillis(event: CanonicalRecommendationEvent): number {
+  return timestampMillis(event.observedAt, "Invalid canonical recommendation event timestamp.");
 }
 
 function isActorRef(value: unknown): value is CanonicalRecommendationActorRef {
@@ -704,10 +761,6 @@ function parseCursor(cursor: string | undefined): number {
   return offset;
 }
 
-function sourceItemDedupeId(item: RecommendationSourceItem): string {
-  return item.provenance.opaqueSourceId ?? `${item.provenance.sourceSystem}:${item.kind}:${item.provenance.observedAt}`;
-}
-
 function normalizeCapabilities(
   capabilities: readonly RecommendationSourceAdapterCapability[] | undefined
 ): readonly RecommendationSourceAdapterCapability[] {
@@ -748,16 +801,15 @@ function readCanonicalSourceItems(
   let hasMore = false;
 
   for (const event of events) {
-    const item = createCanonicalRecommendationSourceItem(event, readOptions);
-    if (item === null) {
+    if (sinceMillis !== undefined && eventObservedAtMillis(event) < sinceMillis) {
       continue;
     }
 
-    if (sinceMillis !== undefined && sourceItemObservedAtMillis(item) < sinceMillis) {
+    if (!shouldIncludeCanonicalEvent(event, readOptions)) {
       continue;
     }
 
-    const id = sourceItemDedupeId(item);
+    const id = canonicalEventIdentity(event);
     if (seen.has(id)) {
       continue;
     }
@@ -772,6 +824,11 @@ function readCanonicalSourceItems(
     if (page.length >= limit) {
       hasMore = true;
       break;
+    }
+
+    const item = createCanonicalRecommendationSourceItem(event, readOptions);
+    if (item === null) {
+      continue;
     }
 
     page.push(item);
