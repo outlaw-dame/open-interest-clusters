@@ -5,7 +5,10 @@ import {
   RECOMMENDATION_EMBEDDING_MODEL_SCHEMA_VERSION,
   createRecommendationEmbeddingRecord,
   createRecommendationEmbeddingSourceFingerprint,
+  normalizeRecommendationEmbeddingRecord,
+  sha256Hex,
   type RecommendationEmbeddingModelManifest,
+  type RecommendationEmbeddingRecord,
   type RecommendationProfileSnapshot
 } from "../src/index.js";
 
@@ -41,6 +44,18 @@ function profile(): RecommendationProfileSnapshot {
       }
     ]
   };
+}
+
+function legacyEmbeddingId(record: RecommendationEmbeddingRecord): string {
+  return `embedding:${sha256Hex(JSON.stringify([
+    "recommendation-embedding-id.v1",
+    record.subjectKey,
+    record.model.providerId,
+    record.model.modelId,
+    record.model.modelVersion,
+    record.model.dimensions,
+    record.source.profileDigest
+  ]))}`;
 }
 
 test("recommendation embedding lifecycle creates redacted embedding records", () => {
@@ -100,4 +115,21 @@ test("recommendation embedding source fingerprint is deterministic across object
       createdAt: "2026-05-16T01:00:00.000Z"
     }).embeddingId
   );
+});
+
+test("recommendation embedding normalization accepts persisted legacy v1 embedding ids", () => {
+  const record = createRecommendationEmbeddingRecord({
+    subjectId: "subject-1",
+    model: model(),
+    profile: profile(),
+    vector: [0.1, 0.2, 0.3],
+    createdAt: "2026-05-16T01:00:00.000Z"
+  });
+  const legacyRecord = {
+    ...record,
+    embeddingId: legacyEmbeddingId(record)
+  };
+
+  assert.notEqual(legacyRecord.embeddingId, record.embeddingId);
+  assert.equal(normalizeRecommendationEmbeddingRecord(legacyRecord)?.embeddingId, legacyRecord.embeddingId);
 });
