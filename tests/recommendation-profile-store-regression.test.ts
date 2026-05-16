@@ -151,3 +151,25 @@ test("profile store snapshot ordering uses the composite target key", async () =
     ["entity:same", "keyword:same"]
   );
 });
+
+test("profile store subtracts dropped signal counts when trimming entries", async () => {
+  const store = createInMemoryRecommendationProfileStore({
+    now: () => "2026-05-15T00:00:00.000Z",
+    maxEntries: 1
+  });
+
+  await store.ingestSignals({
+    subjectId: "subject-1",
+    signals: [
+      createSignal({ kind: "keyword", key: "drop" }),
+      createSignal({ kind: "keyword", key: "drop" }),
+      createSignal({ kind: "keyword", key: "keep" })
+    ]
+  });
+
+  const profile = await store.readProfile("subject-1");
+  assert.equal(profile.entries.length, 1);
+  assert.equal(profile.entries[0]?.target.key, "keep");
+  assert.equal(profile.entries[0]?.signalCount, 1);
+  assert.equal(profile.signalCount, 1);
+});
