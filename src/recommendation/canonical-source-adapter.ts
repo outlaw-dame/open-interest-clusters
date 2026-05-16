@@ -198,11 +198,27 @@ function assertBoundedString(value: string, label: string, maxLength: number): v
   }
 }
 
-function assertTimestamp(value: string): void {
+function timestampMillis(value: string, errorMessage: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) {
-    throw new TypeError("Invalid canonical recommendation event timestamp.");
+    throw new TypeError(errorMessage);
   }
+
+  return parsed;
+}
+
+function assertTimestamp(value: string): void {
+  timestampMillis(value, "Invalid canonical recommendation event timestamp.");
+}
+
+function parseSinceTimestamp(value: string | undefined): number | undefined {
+  return value === undefined
+    ? undefined
+    : timestampMillis(value, "Invalid canonical recommendation source adapter since timestamp.");
+}
+
+function sourceItemObservedAtMillis(item: RecommendationSourceItem): number {
+  return timestampMillis(item.provenance.observedAt, "Invalid canonical recommendation source item timestamp.");
 }
 
 function isActorRef(value: unknown): value is CanonicalRecommendationActorRef {
@@ -315,7 +331,6 @@ export function isCanonicalRecommendationEvent(value: unknown): value is Canonic
   return (
     isOptionalNonEmptyString(candidate.canonicalEventId) &&
     isOptionalNonEmptyString(candidate.canonicalIntentId) &&
-    (candidate.canonicalEventId !== undefined || candidate.canonicalIntentId !== undefined || isNonEmptyString(candidate.sourceEventId)) &&
     isKnownEventKind(candidate.kind) &&
     isKnownProtocol(candidate.sourceProtocol) &&
     isNonEmptyString(candidate.sourceEventId) &&
@@ -689,21 +704,8 @@ function parseCursor(cursor: string | undefined): number {
   return offset;
 }
 
-function dedupeSourceItems(items: Iterable<RecommendationSourceItem>): RecommendationSourceItem[] {
-  const seen = new Set<string>();
-  const deduped: RecommendationSourceItem[] = [];
-
-  for (const item of items) {
-    const id = item.provenance.opaqueSourceId ?? `${item.provenance.sourceSystem}:${item.kind}:${item.provenance.observedAt}`;
-    if (seen.has(id)) {
-      continue;
-    }
-
-    seen.add(id);
-    deduped.push(item);
-  }
-
-  return deduped;
+function sourceItemDedupeId(item: RecommendationSourceItem): string {
+  return item.provenance.opaqueSourceId ?? `${item.provenance.sourceSystem}:${item.kind}:${item.provenance.observedAt}`;
 }
 
 function normalizeCapabilities(
@@ -733,6 +735,59 @@ function createReadOptions(
   return Object.freeze(readOptions);
 }
 
+function readCanonicalSourceItems(
+  events: readonly CanonicalRecommendationEvent[],
+  readOptions: CanonicalRecommendationSourceOptions,
+  offset: number,
+  limit: number,
+  sinceMillis: number | undefined
+): RecommendationSourceAdapterReadResult {
+  const seen = new Set<string>();
+  const page: RecommendationSourceItem[] = [];
+  let acceptedCount = 0;
+  let hasMore = false;
+
+  for (const event of events) {
+    const item = createCanonicalRecommendationSourceItem(event, readOptions);
+    if (item === null) {
+      continue;
+    }
+
+    if (sinceMillis !== undefined && sourceItemObservedAtMillis(item) < sinceMillis) {
+      continue;
+    }
+
+    const id = sourceItemDedupeId(item);
+    if (seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+
+    if (acceptedCount < offset) {
+      acceptedCount += 1;
+      continue;
+    }
+
+    if (page.length >= limit) {
+      hasMore = true;
+      break;
+    }
+
+    page.push(item);
+    acceptedCount += 1;
+  }
+
+  const result: RecommendationSourceAdapterReadResult = {
+    items: Object.freeze(page)
+  };
+  if (hasMore) {
+    result.cursor = String(offset + page.length);
+  }
+
+  return Object.freeze(result);
+}
+
 export function createCanonicalRecommendationSourceAdapter(
   options: CanonicalRecommendationSourceAdapterOptions
 ): RecommendationSourceAdapter {
@@ -757,22 +812,9 @@ export function createCanonicalRecommendationSourceAdapter(
       const safeRequest = normalizeRecommendationSourceAdapterReadRequest(request);
       const offset = parseCursor(safeRequest.cursor);
       const limit = safeRequest.limit ?? 100;
+      const sinceMillis = parseSinceTimestamp(safeRequest.since);
       const events = await resolveAdapterEvents(options.events);
-      const items = dedupeSourceItems(
-        events
-          .map((event) => createCanonicalRecommendationSourceItem(event, readOptions))
-          .filter((item): item is RecommendationSourceItem => item !== null)
-      );
-      const page = items.slice(offset, offset + limit);
-      const result: RecommendationSourceAdapterReadResult = {
-        items: Object.freeze(page)
-      };
-      const nextOffset = offset + page.length;
-      if (nextOffset < items.length) {
-        result.cursor = String(nextOffset);
-      }
-
-      return Object.freeze(result);
+      return readCanonicalSourceItems(events, readOptions, offset, limit, sinceMillis);
     }
   });
 }
