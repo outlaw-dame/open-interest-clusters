@@ -95,8 +95,8 @@ export async function deleteRecommendationProfileStoreRecord(
   await adapter.deleteProfileRecord(
     createRecommendationProfileSubjectKey({
       subjectId: input.intent.subjectId,
-      namespace: input.namespace,
-      salt: input.salt
+      ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
+      ...(input.salt === undefined ? {} : { salt: input.salt })
     })
   );
   return createEmptyRecommendationProfileSnapshot(input.intent.requestedAt);
