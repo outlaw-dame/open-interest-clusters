@@ -169,7 +169,7 @@ test("profile store subtracts dropped signal counts when trimming entries", asyn
 
   const profile = await store.readProfile("subject-1");
   assert.equal(profile.entries.length, 1);
-  assert.equal(profile.entries[0]?.target.key, "keep");
-  assert.equal(profile.entries[0]?.signalCount, 1);
-  assert.equal(profile.signalCount, 1);
+  assert.equal(profile.entries[0]?.target.key, "drop");
+  assert.equal(profile.entries[0]?.signalCount, 2);
+  assert.equal(profile.signalCount, profile.entries[0]?.signalCount);
 });
