@@ -34,7 +34,6 @@ const TARGET_KIND_SET = new Set<string>(RECOMMENDATION_INTEREST_TARGET_KINDS);
 const PRIVACY_BOUNDARY_SET = new Set<string>(RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES);
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const SOURCE_VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
-const SNAPSHOT_KEYS = new Set(["schemaVersion", "updatedAt", "signalCount", "entries"]);
 const ENTRY_KEYS = new Set([
   "target",
   "score",
@@ -220,7 +219,7 @@ export function normalizeRecommendationProfileSnapshot(
   value: unknown,
   options: RecommendationProfileStoreRecordParseOptions = {}
 ): RecommendationProfileSnapshot {
-  if (!isObject(value) || !hasOnlyKeys(value, SNAPSHOT_KEYS)) {
+  if (!isObject(value)) {
     throw new TypeError("Invalid recommendation profile snapshot.");
   }
 
