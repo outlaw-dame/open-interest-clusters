@@ -164,13 +164,75 @@ test("canonical adapter deduplicates by canonical identity and paginates results
   assert.equal(secondPage.cursor, undefined);
 });
 
-test("canonical adapter rejects malformed events and cursors", async () => {
+test("canonical adapter honors since using observedAt for incremental reads", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      { ...baseEvent, canonicalIntentId: "old", observedAt: "2026-05-15T00:00:00.000Z" },
+      { ...baseEvent, canonicalIntentId: "checkpoint", observedAt: "2026-05-16T00:00:00.000Z" },
+      { ...baseEvent, canonicalIntentId: "new", observedAt: "2026-05-16T00:00:01.000Z" },
+      { ...baseEvent, canonicalIntentId: "new", sourceEventId: "duplicate-new", observedAt: "2026-05-16T00:00:02.000Z" }
+    ]
+  });
+
+  const result = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-05-16T00:00:00.000Z",
+    limit: 10
+  });
+
+  assert.deepEqual(
+    result.items.map((item) => item.provenance.opaqueSourceId),
+    ["checkpoint", "new"]
+  );
+  assert.equal(result.cursor, undefined);
+});
+
+test("canonical adapter paginates after since filtering and dedupe", async () => {
+  const adapter = createCanonicalRecommendationSourceAdapter({
+    events: [
+      { ...baseEvent, canonicalIntentId: "old", observedAt: "2026-05-15T00:00:00.000Z" },
+      { ...baseEvent, canonicalIntentId: "one", observedAt: "2026-05-16T00:00:01.000Z" },
+      { ...baseEvent, canonicalIntentId: "one", sourceEventId: "duplicate-one", observedAt: "2026-05-16T00:00:02.000Z" },
+      { ...baseEvent, canonicalIntentId: "two", observedAt: "2026-05-16T00:00:03.000Z" },
+      { ...baseEvent, canonicalIntentId: "three", observedAt: "2026-05-16T00:00:04.000Z" }
+    ]
+  });
+
+  const firstPage = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-05-16T00:00:00.000Z",
+    limit: 2
+  });
+  assert.deepEqual(
+    firstPage.items.map((item) => item.provenance.opaqueSourceId),
+    ["one", "two"]
+  );
+  assert.equal(firstPage.cursor, "2");
+
+  const secondPage = await readRecommendationSourceAdapter(adapter, {
+    subjectId: "subject-1",
+    since: "2026-05-16T00:00:00.000Z",
+    cursor: firstPage.cursor,
+    limit: 2
+  });
+  assert.deepEqual(
+    secondPage.items.map((item) => item.provenance.opaqueSourceId),
+    ["three"]
+  );
+  assert.equal(secondPage.cursor, undefined);
+});
+
+test("canonical adapter rejects malformed events, cursors, and since timestamps", async () => {
   const adapter = createCanonicalRecommendationSourceAdapter({
     events: [{ ...baseEvent, canonicalIntentId: "canonical-1" }]
   });
 
   await assert.rejects(
     () => readRecommendationSourceAdapter(adapter, { subjectId: "subject-1", cursor: "not-a-number" }),
+    TypeError
+  );
+  await assert.rejects(
+    () => readRecommendationSourceAdapter(adapter, { subjectId: "subject-1", since: "not-a-date" }),
     TypeError
   );
   assert.throws(
