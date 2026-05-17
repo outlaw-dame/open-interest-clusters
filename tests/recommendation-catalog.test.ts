@@ -84,6 +84,47 @@ test("recommendation catalog normalizes canonical hashtag variants and entity re
   assert.equal(topic?.entityRefs?.some((entity) => entity.source === "dbpedia" && entity.id === "PlayStation_5"), true);
 });
 
+test("recommendation catalog accepts common Wikidata and localized DBpedia entity hosts", () => {
+  const normalized = normalizeRecommendationCatalog({
+    ...catalog(),
+    topics: [
+      {
+        ...catalog().topics[0]
+      },
+      {
+        ...catalog().topics[1],
+        entityRefs: [
+          {
+            source: "wikidata",
+            id: "Q63184502",
+            uri: "https://wikidata.org/wiki/Q63184502"
+          },
+          {
+            source: "dbpedia",
+            id: "PlayStation_5",
+            uri: "https://es.dbpedia.org/resource/PlayStation_5"
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.equal(findRecommendationCatalogTopic(normalized, "gaming.playstation")?.entityRefs?.length, 2);
+});
+
+test("recommendation catalog reuses trusted normalized catalog objects only", () => {
+  const normalized = normalizeRecommendationCatalog(catalog());
+  const forgedFrozenCatalog = Object.freeze({
+    schemaVersion: RECOMMENDATION_CATALOG_SCHEMA_VERSION,
+    catalogId: "Bad Catalog Id",
+    topics: Object.freeze([]),
+    canonicalTags: Object.freeze([])
+  });
+
+  assert.equal(normalizeRecommendationCatalog(normalized), normalized);
+  assert.throws(() => normalizeRecommendationCatalog(forgedFrozenCatalog), TypeError);
+});
+
 test("recommendation catalog resolves messy hashtag variants to canonical tags", () => {
   const normalized = normalizeRecommendationCatalog(catalog());
 
@@ -170,6 +211,30 @@ test("recommendation catalog rejects unsafe identifiers and broken links", () =>
           entityRefs: [{ source: "wikidata", id: "PlayStation_5" }]
         }
       ]
+    }),
+    TypeError
+  );
+});
+
+test("recommendation catalog rejects subtopic ownership drift", () => {
+  assert.throws(
+    () => normalizeRecommendationCatalog({
+      ...catalog(),
+      topics: [
+        ...catalog().topics,
+        {
+          id: "sports",
+          kind: "primary",
+          label: "Sports"
+        },
+        {
+          id: "sports.nba",
+          kind: "subtopic",
+          label: "NBA",
+          primaryTopicId: "sports",
+          canonicalTagIds: ["ps5"]
+        }
+      ].map((topic) => topic.id === "gaming" ? { ...topic, subtopicIds: ["gaming.playstation", "sports.nba"] } : topic)
     }),
     TypeError
   );
