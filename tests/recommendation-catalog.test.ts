@@ -85,14 +85,18 @@ test("recommendation catalog normalizes canonical hashtag variants and entity re
 });
 
 test("recommendation catalog accepts common Wikidata and localized DBpedia entity hosts", () => {
+  const baseCatalog = catalog();
+  const gamingTopic = baseCatalog.topics[0];
+  const playstationTopic = baseCatalog.topics[1];
+  assert.ok(gamingTopic);
+  assert.ok(playstationTopic);
+
   const normalized = normalizeRecommendationCatalog({
-    ...catalog(),
+    ...baseCatalog,
     topics: [
+      { ...gamingTopic },
       {
-        ...catalog().topics[0]
-      },
-      {
-        ...catalog().topics[1],
+        ...playstationTopic,
         entityRefs: [
           {
             source: "wikidata",
