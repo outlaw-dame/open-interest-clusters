@@ -446,8 +446,11 @@ function assertCatalogLinks(catalog: RecommendationCatalog): void {
 }
 
 export function normalizeRecommendationCatalog(value: unknown): RecommendationCatalog {
-  if (isObject(value) && NORMALIZED_RECOMMENDATION_CATALOGS.has(value as RecommendationCatalog)) {
-    return value as RecommendationCatalog;
+  if (isObject(value)) {
+    const possibleCatalog = value as unknown as RecommendationCatalog;
+    if (NORMALIZED_RECOMMENDATION_CATALOGS.has(possibleCatalog)) {
+      return possibleCatalog;
+    }
   }
 
   if (!isObject(value)) {
