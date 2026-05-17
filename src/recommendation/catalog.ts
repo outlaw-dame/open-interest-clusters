@@ -108,6 +108,7 @@ const TOPIC_KIND_SET = new Set<string>(RECOMMENDATION_CATALOG_TOPIC_KINDS);
 const POPULARITY_TIER_SET = new Set<string>(RECOMMENDATION_CATALOG_POPULARITY_TIERS);
 const ENTITY_SOURCE_SET = new Set<string>(RECOMMENDATION_CATALOG_ENTITY_SOURCES);
 const STORAGE_TARGET_SET = new Set<string>(RECOMMENDATION_PREFERENCE_STORAGE_TARGETS);
+const NORMALIZED_RECOMMENDATION_CATALOGS = new WeakSet<RecommendationCatalog>();
 const SAFE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,158}[a-z0-9])?$/u;
 const WIKIDATA_ID_PATTERN = /^Q[1-9][0-9]{0,15}$/u;
 const DBPEDIA_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_()'.,-]{0,255}$/u;
@@ -236,6 +237,13 @@ function normalizeOptionalLocale(value: unknown): string | undefined {
   return locale;
 }
 
+function isAllowedEntityUriHost(hostname: string): boolean {
+  return hostname === "wikidata.org" ||
+    hostname === "www.wikidata.org" ||
+    hostname === "dbpedia.org" ||
+    hostname.endsWith(".dbpedia.org");
+}
+
 function normalizeOptionalUri(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -249,7 +257,7 @@ function normalizeOptionalUri(value: unknown): string | undefined {
     throw new TypeError("Invalid recommendation catalog entity URI.");
   }
 
-  if (parsed.protocol !== "https:" || (parsed.hostname !== "www.wikidata.org" && parsed.hostname !== "dbpedia.org")) {
+  if (parsed.protocol !== "https:" || !isAllowedEntityUriHost(parsed.hostname.toLocaleLowerCase("und"))) {
     throw new TypeError("Invalid recommendation catalog entity URI.");
   }
 
@@ -408,11 +416,17 @@ function assertCatalogLinks(catalog: RecommendationCatalog): void {
       if (primaryTopic === undefined || primaryTopic.kind !== "primary") {
         throw new TypeError("Subtopic recommendation catalog topic must reference a known primary topic.");
       }
+      if ((topic.subtopicIds?.length ?? 0) > 0) {
+        throw new TypeError("Subtopic recommendation catalog topic cannot reference child subtopics.");
+      }
     }
     for (const subtopicId of topic.subtopicIds ?? []) {
       const subtopic = topicMap.get(subtopicId);
       if (subtopic === undefined || subtopic.kind !== "subtopic") {
         throw new TypeError("Recommendation catalog topic references unknown subtopic.");
+      }
+      if (topic.kind === "primary" && subtopic.primaryTopicId !== topic.id) {
+        throw new TypeError("Recommendation catalog topic references subtopic owned by another primary topic.");
       }
     }
     for (const tagId of topic.canonicalTagIds ?? []) {
@@ -432,6 +446,13 @@ function assertCatalogLinks(catalog: RecommendationCatalog): void {
 }
 
 export function normalizeRecommendationCatalog(value: unknown): RecommendationCatalog {
+  if (isObject(value)) {
+    const possibleCatalog = value as unknown as RecommendationCatalog;
+    if (NORMALIZED_RECOMMENDATION_CATALOGS.has(possibleCatalog)) {
+      return possibleCatalog;
+    }
+  }
+
   if (!isObject(value)) {
     throw new TypeError("Invalid recommendation catalog.");
   }
@@ -457,6 +478,7 @@ export function normalizeRecommendationCatalog(value: unknown): RecommendationCa
   }
 
   assertCatalogLinks(catalog);
+  NORMALIZED_RECOMMENDATION_CATALOGS.add(catalog);
   return Object.freeze(catalog);
 }
 
@@ -493,8 +515,8 @@ function expandedCanonicalTagsForTopics(catalog: RecommendationCatalog, selected
   const queue = [...selectedTopicIds];
   const visited = new Set<string>();
 
-  while (queue.length > 0) {
-    const topicId = queue.shift();
+  for (let index = 0; index < queue.length; index += 1) {
+    const topicId = queue[index];
     if (topicId === undefined || visited.has(topicId)) {
       continue;
     }
@@ -525,11 +547,6 @@ export function createRecommendationOnboardingSelection(
   const selectedTopicIds = normalizeRequiredStringArray(input.selectedTopicIds, (item) => normalizeCatalogId(item, "Invalid recommendation onboarding topic id."), "Invalid recommendation onboarding topic ids.");
   const selectedCanonicalTagIds = normalizeRequiredStringArray(input.selectedCanonicalTagIds ?? [], (item) => normalizeCatalogId(item, "Invalid recommendation onboarding canonical tag id."), "Invalid recommendation onboarding canonical tag ids.", false);
   const tagIds = new Set(catalog.canonicalTags.map((tag) => tag.id));
-  for (const topicId of selectedTopicIds) {
-    if (!catalog.topics.some((topic) => topic.id === topicId)) {
-      throw new TypeError("Recommendation onboarding selection references unknown topic.");
-    }
-  }
   for (const tagId of selectedCanonicalTagIds) {
     if (!tagIds.has(tagId)) {
       throw new TypeError("Recommendation onboarding selection references unknown canonical tag.");
