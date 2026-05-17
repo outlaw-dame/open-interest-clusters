@@ -274,14 +274,19 @@ function normalizeEntityRef(value: unknown): RecommendationCatalogEntityRef {
     throw new TypeError("Invalid recommendation catalog DBpedia id.");
   }
 
-  const entity: RecommendationCatalogEntityRef = Object.freeze({
-    source,
-    id,
-    ...(value.label === undefined ? {} : { label: assertSafeLabel(value.label, "Invalid recommendation catalog entity label.") }),
-    ...(value.uri === undefined ? {} : { uri: normalizeOptionalUri(value.uri) })
-  });
+  const entity: RecommendationCatalogEntityRef = {
+    source: source as RecommendationCatalogEntitySource,
+    id
+  };
+  if (value.label !== undefined) {
+    entity.label = assertSafeLabel(value.label, "Invalid recommendation catalog entity label.");
+  }
+  const uri = normalizeOptionalUri(value.uri);
+  if (uri !== undefined) {
+    entity.uri = uri;
+  }
 
-  return entity;
+  return Object.freeze(entity);
 }
 
 function normalizeEntityRefs(value: unknown): readonly RecommendationCatalogEntityRef[] | undefined {
@@ -384,10 +389,10 @@ function normalizeTopic(value: unknown): RecommendationCatalogTopic {
 }
 
 function assertCatalogLinks(catalog: RecommendationCatalog): void {
-  const topicIds = new Set(catalog.topics.map((topic) => topic.id));
+  const topicMap = new Map(catalog.topics.map((topic) => [topic.id, topic]));
   const tagIds = new Set(catalog.canonicalTags.map((tag) => tag.id));
 
-  if (topicIds.size !== catalog.topics.length) {
+  if (topicMap.size !== catalog.topics.length) {
     throw new TypeError("Duplicate recommendation catalog topic id.");
   }
   if (tagIds.size !== catalog.canonicalTags.length) {
@@ -398,11 +403,15 @@ function assertCatalogLinks(catalog: RecommendationCatalog): void {
     if (topic.kind === "primary" && topic.primaryTopicId !== undefined) {
       throw new TypeError("Primary recommendation catalog topic cannot have a parent topic.");
     }
-    if (topic.kind === "subtopic" && (topic.primaryTopicId === undefined || !topicIds.has(topic.primaryTopicId))) {
-      throw new TypeError("Subtopic recommendation catalog topic must reference a known primary topic.");
+    if (topic.kind === "subtopic") {
+      const primaryTopic = topic.primaryTopicId === undefined ? undefined : topicMap.get(topic.primaryTopicId);
+      if (primaryTopic === undefined || primaryTopic.kind !== "primary") {
+        throw new TypeError("Subtopic recommendation catalog topic must reference a known primary topic.");
+      }
     }
     for (const subtopicId of topic.subtopicIds ?? []) {
-      if (!topicIds.has(subtopicId)) {
+      const subtopic = topicMap.get(subtopicId);
+      if (subtopic === undefined || subtopic.kind !== "subtopic") {
         throw new TypeError("Recommendation catalog topic references unknown subtopic.");
       }
     }
@@ -415,7 +424,7 @@ function assertCatalogLinks(catalog: RecommendationCatalog): void {
 
   for (const tag of catalog.canonicalTags) {
     for (const topicId of tag.parentTopicIds ?? []) {
-      if (!topicIds.has(topicId)) {
+      if (!topicMap.has(topicId)) {
         throw new TypeError("Recommendation canonical tag references unknown topic.");
       }
     }
