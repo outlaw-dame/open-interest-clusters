@@ -5,6 +5,7 @@ import {
   RECOMMENDATION_GLOBAL_CATALOG_V1,
   RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID,
   RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1,
+  createEntityEnrichedRecommendationCatalog,
   createRecommendationCatalogEntityKey,
   findRecommendationCanonicalTagsForEntity,
   findRecommendationCatalogTopicsForEntity,
@@ -23,6 +24,17 @@ test("entity-enriched global catalog preserves catalog shape and adds stable ent
   assert.equal(entityCatalog.canonicalTags.length, baseCatalog.canonicalTags.length);
   assert.equal(hasRecommendationCatalogEntity(entityCatalog, { source: "wikidata", id: "Q155223" }), true);
   assert.equal(hasRecommendationCatalogEntity(baseCatalog, { source: "wikidata", id: "Q155223" }), false);
+});
+
+test("entity enrichment helper preserves caller catalog ids", () => {
+  const tenantCatalog = normalizeRecommendationCatalog({
+    ...RECOMMENDATION_GLOBAL_CATALOG_V1,
+    catalogId: "tenant.catalog.v1"
+  });
+  const enriched = createEntityEnrichedRecommendationCatalog(tenantCatalog);
+
+  assert.equal(enriched.catalogId, "tenant.catalog.v1");
+  assert.equal(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1.catalogId, RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID);
 });
 
 test("entity resolver maps stable entities to topics and canonical tags", () => {
