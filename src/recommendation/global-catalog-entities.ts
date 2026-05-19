@@ -101,16 +101,29 @@ function withCanonicalTagCoverageFixes(item: RecommendationCanonicalTag): Recomm
   }));
 }
 
+function withCatalogId(catalog: RecommendationCatalog, catalogId: string): RecommendationCatalog {
+  return normalizeRecommendationCatalog({
+    schemaVersion: RECOMMENDATION_CATALOG_SCHEMA_VERSION,
+    catalogId,
+    locale: catalog.locale,
+    topics: catalog.topics,
+    canonicalTags: catalog.canonicalTags
+  });
+}
+
 export function createEntityEnrichedRecommendationCatalog(catalog: RecommendationCatalog): RecommendationCatalog {
   const normalizedCatalog = normalizeRecommendationCatalog(catalog);
 
   return normalizeRecommendationCatalog({
     schemaVersion: RECOMMENDATION_CATALOG_SCHEMA_VERSION,
-    catalogId: RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID,
+    catalogId: normalizedCatalog.catalogId,
     locale: normalizedCatalog.locale,
     topics: normalizedCatalog.topics.map(withCatalogCoverageFixes),
     canonicalTags: normalizedCatalog.canonicalTags.map(withCanonicalTagCoverageFixes)
   });
 }
 
-export const RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1 = createEntityEnrichedRecommendationCatalog(RECOMMENDATION_GLOBAL_CATALOG_V1);
+export const RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1 = withCatalogId(
+  createEntityEnrichedRecommendationCatalog(RECOMMENDATION_GLOBAL_CATALOG_V1),
+  RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID
+);
