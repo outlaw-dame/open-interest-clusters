@@ -67,12 +67,15 @@ test("global recommendation catalog resolves major gaming showcase hashtags", ()
   assert.ok(playstation.keywords?.includes("sony state of play"));
   assert.ok(playstation.keywords?.includes("playstation state of play"));
   assert.ok(xbox.keywords?.includes("xbox games showcase"));
+  assert.ok(showcases.keywords?.includes("summer game fest"));
   assert.ok(showcases.keywords?.includes("summer games fest"));
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#StateOfPlay")?.id, "gaming.playstation");
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#SonyStateOfPlay")?.id, "gaming.playstation");
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#PlayStationStateOfPlay")?.id, "gaming.playstation");
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#XboxGamesShowcase")?.id, "gaming.xbox");
+  assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#SummerGameFest")?.id, "gaming.showcases");
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#SummerGamesFest")?.id, "gaming.showcases");
+  assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_CATALOG_V1, "#GamingShowcases")?.id, "gaming.showcases");
 });
 
 test("global recommendation catalog avoids duplicate hashtag shadowing for EV and streaming tags", () => {
@@ -115,5 +118,7 @@ test("global recommendation catalog includes primary topic hashtags in follow pl
   assert.ok(plan.hashtags.includes("newmusic"));
   assert.ok(plan.hashtags.includes("stateofplay"));
   assert.ok(plan.hashtags.includes("xboxgamesshowcase"));
+  assert.ok(plan.hashtags.includes("summergamefest"));
   assert.ok(plan.hashtags.includes("summergamesfest"));
+  assert.ok(plan.hashtags.includes("gamingshowcases"));
 });
