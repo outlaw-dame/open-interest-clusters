@@ -132,20 +132,6 @@ function createOnboardingEvidence(observedAt: string): RecommendationInterestEvi
   });
 }
 
-function cloneConsentEvent(consent: PrivacySafeRecommendationConsentEvent): PrivacySafeRecommendationConsentEvent {
-  return Object.freeze({
-    decision: consent.decision,
-    reason: consent.reason,
-    dataUse: consent.dataUse,
-    protocol: consent.protocol,
-    sourceVisibility: consent.sourceVisibility,
-    accessBasis: consent.accessBasis,
-    containsPrivateData: consent.containsPrivateData,
-    containsThirdPartyData: consent.containsThirdPartyData,
-    serverSideProcessing: consent.serverSideProcessing
-  });
-}
-
 function selectionForCatalogIndex(
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord
@@ -165,12 +151,11 @@ function selectionForCatalogIndex(
 }
 
 function createSignal(input: RecommendationInterestSignalInput, expiresAt: string | undefined): RecommendationInterestSignal {
-  const signalInput: RecommendationInterestSignalInput = { ...input };
-  if (expiresAt !== undefined) {
-    signalInput.expiresAt = expiresAt;
+  if (expiresAt === undefined) {
+    return normalizeRecommendationInterestSignal(input);
   }
 
-  return normalizeRecommendationInterestSignal(signalInput);
+  return normalizeRecommendationInterestSignal({ ...input, expiresAt });
 }
 
 function createSignalAccumulator(): OnboardingSignalAccumulator {
@@ -327,7 +312,7 @@ export async function createRecommendationOnboardingProfileSeed(
     }),
     input.enforcementOptions
   );
-  const consent = cloneConsentEvent(consentEvaluation.auditEvent);
+  const consent = consentEvaluation.auditEvent;
   const accumulator = createSignalAccumulator();
   appendCanonicalInterestSignals(
     accumulator,
