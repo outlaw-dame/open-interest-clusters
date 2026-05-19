@@ -60,6 +60,7 @@ export function resolveRecommendationCatalogEntity(
   const normalizedCatalog = normalizeRecommendationCatalog(catalog);
   const lookup = normalizeEntityLookupInput(input);
   const topicMap = new Map<string, RecommendationCatalogTopic>();
+  const catalogTopicMap = new Map(normalizedCatalog.topics.map((topic) => [topic.id, topic]));
   const canonicalTagMap = new Map<string, RecommendationCanonicalTag>();
   let representativeRef: RecommendationCatalogEntityRef | null = null;
 
@@ -77,7 +78,7 @@ export function resolveRecommendationCatalogEntity(
       canonicalTagMap.set(tag.id, tag);
       representativeRef ??= ref;
       for (const topicId of tag.parentTopicIds ?? []) {
-        const topic = normalizedCatalog.topics.find((candidate) => candidate.id === topicId);
+        const topic = catalogTopicMap.get(topicId);
         if (topic !== undefined) {
           topicMap.set(topic.id, topic);
         }
