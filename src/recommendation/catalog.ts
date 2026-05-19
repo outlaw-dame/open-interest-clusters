@@ -494,19 +494,41 @@ export function findRecommendationCanonicalTag(catalog: RecommendationCatalog, c
   return normalizedCatalog.canonicalTags.find((tag) => tag.id === normalizedTagId) ?? null;
 }
 
+function canonicalTagSpecificity(tag: RecommendationCanonicalTag, topicMap: ReadonlyMap<string, RecommendationCatalogTopic>): number {
+  let specificity = 0;
+  for (const topicId of tag.parentTopicIds ?? []) {
+    const topic = topicMap.get(topicId);
+    if (topic?.kind === "subtopic") {
+      specificity = Math.max(specificity, 2);
+    } else if (topic?.kind === "primary") {
+      specificity = Math.max(specificity, 1);
+    }
+  }
+
+  return specificity;
+}
+
 export function resolveRecommendationCanonicalTagForHashtag(
   catalog: RecommendationCatalog,
   hashtag: string
 ): RecommendationCanonicalTag | null {
   const normalizedCatalog = normalizeRecommendationCatalog(catalog);
   const normalizedHashtag = normalizeHashtagValue(hashtag);
+  const topicMap = new Map(normalizedCatalog.topics.map((topic) => [topic.id, topic]));
+  let bestMatch: RecommendationCanonicalTag | null = null;
+  let bestSpecificity = -1;
+
   for (const tag of normalizedCatalog.canonicalTags) {
     if (tag.hashtags.includes(normalizedHashtag) || tag.variants.includes(normalizedHashtag)) {
-      return tag;
+      const specificity = canonicalTagSpecificity(tag, topicMap);
+      if (bestMatch === null || specificity > bestSpecificity) {
+        bestMatch = tag;
+        bestSpecificity = specificity;
+      }
     }
   }
 
-  return null;
+  return bestMatch;
 }
 
 function expandedCanonicalTagsForTopics(catalog: RecommendationCatalog, selectedTopicIds: readonly string[]): readonly string[] {
