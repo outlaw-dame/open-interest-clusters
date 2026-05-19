@@ -65,13 +65,17 @@ const ENTITY_REFS_BY_TARGET_ID: Readonly<Record<string, readonly RecommendationC
   ])
 });
 
+function appendUnique(values: readonly string[] | undefined, value: string): readonly string[] {
+  return Object.freeze([...new Set([...(values ?? []), value])]);
+}
+
 function withEntityRefs<T extends RecommendationCatalogTopic | RecommendationCanonicalTag>(item: T): T {
   const entityRefs = ENTITY_REFS_BY_TARGET_ID[item.id];
   if (entityRefs === undefined) {
     return item;
   }
 
-  return Object.freeze({ ...item, entityRefs }) as T;
+  return Object.freeze({ ...item, entityRefs }) as unknown as T;
 }
 
 function withCatalogCoverageFixes(item: RecommendationCatalogTopic): RecommendationCatalogTopic {
@@ -81,7 +85,7 @@ function withCatalogCoverageFixes(item: RecommendationCatalogTopic): Recommendat
 
   return withEntityRefs(Object.freeze({
     ...item,
-    hashtags: Object.freeze([...(item.hashtags ?? []), "#Streamers"])
+    hashtags: appendUnique(item.hashtags, "#Streamers")
   }));
 }
 
@@ -92,8 +96,8 @@ function withCanonicalTagCoverageFixes(item: RecommendationCanonicalTag): Recomm
 
   return withEntityRefs(Object.freeze({
     ...item,
-    variants: Object.freeze([...item.variants, "Streamers"]),
-    hashtags: Object.freeze([...item.hashtags, "#Streamers"])
+    variants: appendUnique(item.variants, "Streamers"),
+    hashtags: appendUnique(item.hashtags, "#Streamers")
   }));
 }
 
