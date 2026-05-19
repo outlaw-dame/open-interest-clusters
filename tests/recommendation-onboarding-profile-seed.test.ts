@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  RECOMMENDATION_CATALOG_SCHEMA_VERSION,
   RECOMMENDATION_GLOBAL_CATALOG_V1,
   RECOMMENDATION_ONBOARDING_PROFILE_SEED_SCHEMA_VERSION,
   RecommendationConsentDeniedError,
@@ -9,19 +10,54 @@ import {
   createRecommendationCatalogIndex,
   createRecommendationOnboardingProfileSeed,
   createRecommendationOnboardingSelection,
+  normalizeRecommendationCatalog,
   type PrivacySafeRecommendationConsentEvent,
+  type RecommendationCanonicalTag,
+  type RecommendationCatalogTopic,
   type RecommendationConsentPolicy,
+  type RecommendationDataUse,
   type RecommendationProfileStore
 } from "../src/index.js";
 
 const SUBJECT_ID = "user-123";
 const SELECTED_AT = "2026-05-19T00:00:00.000Z";
+const LOCAL_PERSONALIZATION_USES: readonly RecommendationDataUse[] = Object.freeze(["local_personalization"]);
 
 function localPersonalizationPolicy(subjectId = SUBJECT_ID): RecommendationConsentPolicy {
   return Object.freeze({
     subjectId,
-    allowedDataUses: Object.freeze(["local_personalization"]),
-    privateDataUses: Object.freeze(["local_personalization"])
+    allowedDataUses: LOCAL_PERSONALIZATION_USES,
+    privateDataUses: LOCAL_PERSONALIZATION_USES
+  });
+}
+
+function createLargeOnboardingCatalog(tagCount: number) {
+  const canonicalTagIds = Array.from({ length: tagCount }, (_, index) => `bulk.tag${index}`);
+  const topics: RecommendationCatalogTopic[] = [
+    {
+      id: "bulk",
+      kind: "primary",
+      label: "Bulk",
+      popularityTier: "app_specific",
+      canonicalTagIds,
+      hashtags: ["#Bulk"],
+      keywords: ["bulk"]
+    }
+  ];
+  const canonicalTags: RecommendationCanonicalTag[] = canonicalTagIds.map((tagId, index) => ({
+    id: tagId,
+    displayLabel: `Bulk Tag ${index}`,
+    variants: [`BulkTag${index}`],
+    hashtags: [`#BulkSeed${index}`],
+    parentTopicIds: ["bulk"]
+  }));
+
+  return normalizeRecommendationCatalog({
+    schemaVersion: RECOMMENDATION_CATALOG_SCHEMA_VERSION,
+    catalogId: "bulk.catalog.v1",
+    locale: "en-US",
+    topics,
+    canonicalTags
   });
 }
 
@@ -185,9 +221,9 @@ test("onboarding profile seed blocks server-side profile seeding unless the poli
     selection,
     policy: Object.freeze({
       subjectId: SUBJECT_ID,
-      allowedDataUses: Object.freeze(["local_personalization"]),
-      privateDataUses: Object.freeze(["local_personalization"]),
-      serverSideDataUses: Object.freeze(["local_personalization"])
+      allowedDataUses: LOCAL_PERSONALIZATION_USES,
+      privateDataUses: LOCAL_PERSONALIZATION_USES,
+      serverSideDataUses: LOCAL_PERSONALIZATION_USES
     }),
     privacyBoundary: "server_allowed",
     profileStore: createInMemoryRecommendationProfileStore({
@@ -240,4 +276,39 @@ test("onboarding profile seed validates timestamps and expiration", async () => 
 
   assert.ok(expiring.signals.every((signal) => signal.expiresAt === "2026-06-19T00:00:00.000Z"));
   assert.ok(expiring.profile.entries.every((entry) => entry.expiresAt === "2026-06-19T00:00:00.000Z"));
+});
+
+test("onboarding profile seed enforces the signal cap before profile ingestion", async () => {
+  const catalog = createLargeOnboardingCatalog(5000);
+  const catalogIndex = createRecommendationCatalogIndex(catalog);
+  const selection = createRecommendationOnboardingSelection({
+    catalog,
+    selectedTopicIds: ["bulk"],
+    selectedAt: SELECTED_AT
+  });
+  let ingestCalled = false;
+  const profileStore: RecommendationProfileStore = {
+    async ingestSignals() {
+      ingestCalled = true;
+      throw new Error("ingest should not be called");
+    },
+    async readProfile() {
+      throw new Error("read should not be called");
+    },
+    async deleteProfile() {
+      throw new Error("delete should not be called");
+    }
+  };
+
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({
+      subjectId: SUBJECT_ID,
+      catalogIndex,
+      selection,
+      policy: localPersonalizationPolicy(),
+      profileStore
+    }),
+    (error: unknown) => error instanceof TypeError && error.message === "Recommendation onboarding profile seed generated too many signals."
+  );
+  assert.equal(ingestCalled, false);
 });
