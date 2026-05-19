@@ -58,6 +58,14 @@ export interface RecommendationOnboardingProfileSeedResult {
   consent: PrivacySafeRecommendationConsentEvent;
 }
 
+interface OnboardingSignalAccumulator {
+  signals: RecommendationInterestSignal[];
+  canonicalInterestSignalCount: number;
+  hashtagSignalCount: number;
+}
+
+type OnboardingSignalBucket = "canonical_interest" | "hashtag";
+
 const DEFAULT_DATA_USE: RecommendationDataUse = "local_personalization";
 const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_only";
 const ONBOARDING_EVIDENCE_PROTOCOL: RecommendationProtocol = "app_local";
@@ -165,7 +173,34 @@ function createSignal(input: RecommendationInterestSignalInput, expiresAt: strin
   return normalizeRecommendationInterestSignal(signalInput);
 }
 
-function createCanonicalInterestSignals(
+function createSignalAccumulator(): OnboardingSignalAccumulator {
+  return {
+    signals: [],
+    canonicalInterestSignalCount: 0,
+    hashtagSignalCount: 0
+  };
+}
+
+function appendSeedSignal(
+  accumulator: OnboardingSignalAccumulator,
+  bucket: OnboardingSignalBucket,
+  input: RecommendationInterestSignalInput,
+  expiresAt: string | undefined
+): void {
+  if (accumulator.signals.length >= MAX_SIGNAL_COUNT) {
+    throw new TypeError("Recommendation onboarding profile seed generated too many signals.");
+  }
+
+  accumulator.signals.push(createSignal(input, expiresAt));
+  if (bucket === "canonical_interest") {
+    accumulator.canonicalInterestSignalCount += 1;
+  } else {
+    accumulator.hashtagSignalCount += 1;
+  }
+}
+
+function appendCanonicalInterestSignals(
+  accumulator: OnboardingSignalAccumulator,
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord,
   observedAt: string,
@@ -173,8 +208,7 @@ function createCanonicalInterestSignals(
   dataUse: RecommendationDataUse,
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
-): RecommendationInterestSignal[] {
-  const signals: RecommendationInterestSignal[] = [];
+): void {
   const evidence = createOnboardingEvidence(observedAt);
   const selectedTopics = new Set(selection.selectedTopicIds);
   const selectedTags = new Set(selection.selectedCanonicalTagIds);
@@ -187,7 +221,7 @@ function createCanonicalInterestSignals(
     }
 
     emittedTargets.add(topic.id);
-    signals.push(createSignal({
+    appendSeedSignal(accumulator, "canonical_interest", {
       target: { kind: "canonical_interest", key: topic.id },
       action: "select",
       polarity: "positive",
@@ -197,7 +231,7 @@ function createCanonicalInterestSignals(
       privacyBoundary,
       evidence,
       consent
-    }, expiresAt));
+    }, expiresAt);
   }
 
   for (const tagId of selection.expandedCanonicalTagIds) {
@@ -212,7 +246,7 @@ function createCanonicalInterestSignals(
     emittedTargets.add(tag.id);
     const explicitlySelected = selectedTags.has(tagId);
     const parentSelected = (tag.parentTopicIds ?? []).some((topicId) => selectedTopics.has(topicId));
-    signals.push(createSignal({
+    appendSeedSignal(accumulator, "canonical_interest", {
       target: { kind: "canonical_interest", key: tag.id },
       action: "select",
       polarity: "positive",
@@ -222,13 +256,12 @@ function createCanonicalInterestSignals(
       privacyBoundary,
       evidence,
       consent
-    }, expiresAt));
+    }, expiresAt);
   }
-
-  return signals;
 }
 
-function createHashtagSignals(
+function appendHashtagSignals(
+  accumulator: OnboardingSignalAccumulator,
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord,
   observedAt: string,
@@ -236,8 +269,7 @@ function createHashtagSignals(
   dataUse: RecommendationDataUse,
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
-): RecommendationInterestSignal[] {
-  const signals: RecommendationInterestSignal[] = [];
+): void {
   const evidence = createOnboardingEvidence(observedAt);
   const seenHashtags = new Set<string>();
 
@@ -252,7 +284,7 @@ function createHashtagSignals(
         continue;
       }
       seenHashtags.add(hashtag);
-      signals.push(createSignal({
+      appendSeedSignal(accumulator, "hashtag", {
         target: { kind: "hashtag", key: hashtag },
         action: "select",
         polarity: "positive",
@@ -262,16 +294,8 @@ function createHashtagSignals(
         privacyBoundary,
         evidence,
         consent
-      }, expiresAt));
+      }, expiresAt);
     }
-  }
-
-  return signals;
-}
-
-function assertSignalLimit(signals: readonly RecommendationInterestSignal[]): void {
-  if (signals.length > MAX_SIGNAL_COUNT) {
-    throw new TypeError("Recommendation onboarding profile seed generated too many signals.");
   }
 }
 
@@ -304,7 +328,9 @@ export async function createRecommendationOnboardingProfileSeed(
     input.enforcementOptions
   );
   const consent = cloneConsentEvent(consentEvaluation.auditEvent);
-  const canonicalSignals = createCanonicalInterestSignals(
+  const accumulator = createSignalAccumulator();
+  appendCanonicalInterestSignals(
+    accumulator,
     catalogIndex,
     selection,
     observedAt,
@@ -313,7 +339,8 @@ export async function createRecommendationOnboardingProfileSeed(
     consent,
     expiresAt
   );
-  const hashtagSignals = createHashtagSignals(
+  appendHashtagSignals(
+    accumulator,
     catalogIndex,
     selection,
     observedAt,
@@ -322,8 +349,7 @@ export async function createRecommendationOnboardingProfileSeed(
     consent,
     expiresAt
   );
-  const signals = Object.freeze([...canonicalSignals, ...hashtagSignals]);
-  assertSignalLimit(signals);
+  const signals = Object.freeze([...accumulator.signals]);
 
   const profileStore = input.profileStore ?? createInMemoryRecommendationProfileStore({
     allowedPrivacyBoundaries: [privacyBoundary],
@@ -338,8 +364,8 @@ export async function createRecommendationOnboardingProfileSeed(
   return Object.freeze({
     schemaVersion: RECOMMENDATION_ONBOARDING_PROFILE_SEED_SCHEMA_VERSION,
     signalCount: signals.length,
-    canonicalInterestSignalCount: canonicalSignals.length,
-    hashtagSignalCount: hashtagSignals.length,
+    canonicalInterestSignalCount: accumulator.canonicalInterestSignalCount,
+    hashtagSignalCount: accumulator.hashtagSignalCount,
     profile: ingestResult.profile,
     signals,
     consent
