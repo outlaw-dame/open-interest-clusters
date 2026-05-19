@@ -245,7 +245,7 @@ const PRIMARY_TOPIC_SEEDS: PrimaryTopicSeed[] = [
     subtopics: [
       { suffix: "gardening", label: "Gardening", variants: ["PlantParent", "Gardening", "IndoorGarden"], keywords: ["gardening"] },
       { suffix: "sustainability", label: "Sustainability", variants: ["EcoFriendly", "Sustainable", "GreenLiving"], keywords: ["sustainability"] },
-      { suffix: "ev", label: "Electric Vehicles", variants: ["EV", "EVs", "ElectricVehicle"], keywords: ["electric vehicles"] }
+      { suffix: "ev", label: "Eco-Friendly Transportation", variants: ["GreenTransportation", "SustainableTransport", "CleanTransportation"], keywords: ["electric vehicles", "sustainable transport"] }
     ]
   },
   {
@@ -354,14 +354,14 @@ const PRIMARY_TOPIC_SEEDS: PrimaryTopicSeed[] = [
     popularityTier: "global_primary",
     subtopics: [
       { suffix: "esports", label: "Esports", variants: ["Esports", "CompetitiveGaming", "Tournament"], keywords: ["esports"] },
-      { suffix: "streaming", label: "Game Streaming", variants: ["Streamer", "Streamers", "Twitch"], keywords: ["game streaming"] },
+      { suffix: "streaming", label: "Game Streaming", variants: ["GameStreaming", "GamingStream", "Twitch"], keywords: ["game streaming"] },
       { suffix: "creators", label: "Gaming Creators", variants: ["GamingCreator", "LetsPlay", "Gameplay"], keywords: ["gaming creator"] }
     ]
   }
 ];
 
 function hashtagForLabel(label: string): string {
-  const compact = label.replace(/[^A-Za-z0-9]/gu, "");
+  const compact = label.replace(/[^\p{L}\p{N}]/gu, "");
   if (compact.length === 0) {
     throw new TypeError("Invalid recommendation global catalog label.");
   }
@@ -375,14 +375,16 @@ function buildGlobalCatalog(): RecommendationCatalog {
 
   for (const primary of PRIMARY_TOPIC_SEEDS) {
     const subtopicIds = primary.subtopics.map((subtopic) => `${primary.id}.${subtopic.suffix}`);
+    const primaryHashtag = hashtagForLabel(primary.label);
     const primaryTopic: RecommendationCatalogTopic = {
       id: primary.id,
       kind: "primary",
       label: primary.label,
       popularityTier: primary.popularityTier,
       subtopicIds,
+      canonicalTagIds: [primary.id],
       keywords: [primary.label],
-      hashtags: [hashtagForLabel(primary.label)]
+      hashtags: [primaryHashtag]
     };
 
     if (primary.sensitive === true) {
@@ -390,6 +392,13 @@ function buildGlobalCatalog(): RecommendationCatalog {
     }
 
     topics.push(primaryTopic);
+    canonicalTags.push({
+      id: primary.id,
+      displayLabel: primary.label,
+      variants: [primary.label],
+      hashtags: [primaryHashtag],
+      parentTopicIds: [primary.id]
+    });
 
     for (const subtopic of primary.subtopics) {
       const id = `${primary.id}.${subtopic.suffix}`;
