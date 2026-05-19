@@ -7,6 +7,7 @@ import {
   type RecommendationCatalogTopic
 } from "./catalog.js";
 import { RECOMMENDATION_GLOBAL_CATALOG_V1 } from "./global-catalog.js";
+import { RECOMMENDATION_GLOBAL_CATALOG_ENTITY_ANCHORS } from "./global-catalog-entity-anchors.js";
 
 export const RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID = "global.entity.v1" as const;
 
@@ -62,7 +63,8 @@ const ENTITY_REFS_BY_TARGET_ID: Readonly<Record<string, readonly RecommendationC
   "nfl.core": Object.freeze([
     Object.freeze({ source: "wikidata", id: "Q1215884", label: "National Football League", uri: "https://www.wikidata.org/wiki/Q1215884" }),
     Object.freeze({ source: "dbpedia", id: "National_Football_League", label: "National Football League", uri: "https://dbpedia.org/resource/National_Football_League" })
-  ])
+  ]),
+  ...RECOMMENDATION_GLOBAL_CATALOG_ENTITY_ANCHORS
 });
 
 function appendUnique(values: readonly string[] | undefined, value: string): readonly string[] {
