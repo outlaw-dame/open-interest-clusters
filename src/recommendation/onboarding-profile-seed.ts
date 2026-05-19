@@ -191,16 +191,39 @@ function appendSeedSignal(
   }
 }
 
+function addSensitiveTopicIdForTopic(
+  sensitiveTopicIds: Set<string>,
+  catalogIndex: RecommendationCatalogIndex,
+  topicId: string
+): void {
+  const topic = findRecommendationCatalogTopicInIndex(catalogIndex, topicId);
+  if (topic === null) {
+    throw new TypeError("Recommendation onboarding profile seed references unknown topic.");
+  }
+  if (topic.sensitive === true) {
+    sensitiveTopicIds.add(topic.id);
+    return;
+  }
+  if (topic.primaryTopicId === undefined) {
+    return;
+  }
+
+  const primaryTopic = findRecommendationCatalogTopicInIndex(catalogIndex, topic.primaryTopicId);
+  if (primaryTopic === null) {
+    throw new TypeError("Recommendation onboarding profile seed references unknown topic.");
+  }
+  if (primaryTopic.sensitive === true) {
+    sensitiveTopicIds.add(primaryTopic.id);
+  }
+}
+
 function addSensitiveParentTopicIds(
   sensitiveTopicIds: Set<string>,
   catalogIndex: RecommendationCatalogIndex,
   parentTopicIds: readonly string[] | undefined
 ): void {
   for (const parentTopicId of parentTopicIds ?? []) {
-    const parentTopic = findRecommendationCatalogTopicInIndex(catalogIndex, parentTopicId);
-    if (parentTopic?.sensitive === true) {
-      sensitiveTopicIds.add(parentTopic.id);
-    }
+    addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, parentTopicId);
   }
 }
 
@@ -211,13 +234,7 @@ function collectSensitiveSelectionTopicIds(
   const sensitiveTopicIds = new Set<string>();
 
   for (const topicId of selection.selectedTopicIds) {
-    const topic = findRecommendationCatalogTopicInIndex(catalogIndex, topicId);
-    if (topic === null) {
-      throw new TypeError("Recommendation onboarding profile seed references unknown topic.");
-    }
-    if (topic.sensitive === true) {
-      sensitiveTopicIds.add(topic.id);
-    }
+    addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, topicId);
   }
 
   for (const tagId of selection.expandedCanonicalTagIds) {
@@ -353,10 +370,12 @@ export async function createRecommendationOnboardingProfileSeed(
   const dataUse = input.dataUse ?? DEFAULT_DATA_USE;
   const privacyBoundary = input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY;
   assertSubjectLevelPrivacyBoundary(privacyBoundary);
-  assertSensitiveSelectionAllowed(
-    collectSensitiveSelectionTopicIds(catalogIndex, selection),
-    input.allowSensitiveSelections
-  );
+  if (input.allowSensitiveSelections !== true) {
+    assertSensitiveSelectionAllowed(
+      collectSensitiveSelectionTopicIds(catalogIndex, selection),
+      input.allowSensitiveSelections
+    );
+  }
   const observedAt = optionalTimestamp(input.observedAt, selection.selectedAt, "Invalid recommendation onboarding profile seed timestamp.");
   const expiresAt = assertExpiresAt(input.expiresAt, observedAt);
   const consentEvaluation = await requireRecommendationConsent(
