@@ -28,9 +28,9 @@ function assertEntityMapsToExpectedTargets(mapping: ExpectedEntityMapping): void
     id: mapping.id
   });
 
-  assert.notEqual(resolution, null, `${mapping.source}:${mapping.id} should resolve`);
-  assert.deepEqual(resolution?.topicIds, mapping.topicIds, `${mapping.source}:${mapping.id} topic ids`);
-  assert.deepEqual(resolution?.canonicalTagIds, mapping.canonicalTagIds, `${mapping.source}:${mapping.id} canonical tag ids`);
+  assert.ok(resolution, `${mapping.source}:${mapping.id} should resolve`);
+  assert.deepEqual(resolution.topicIds, mapping.topicIds, `${mapping.source}:${mapping.id} topic ids`);
+  assert.deepEqual(resolution.canonicalTagIds, mapping.canonicalTagIds, `${mapping.source}:${mapping.id} canonical tag ids`);
 }
 
 test("entity-enriched global catalog preserves catalog shape and adds stable entity refs", () => {
@@ -120,9 +120,9 @@ test("sensitive entity anchors inherit sensitive catalog boundaries", () => {
     id: "Q317309"
   });
 
-  assert.notEqual(resolution, null);
-  assert.deepEqual(resolution?.topicIds, ["mental-health-wellness", "mental-health-wellness.core"]);
-  assert.equal(resolution?.topics.every((topic) => topic.sensitive === true), true);
+  assert.ok(resolution);
+  assert.deepEqual(resolution.topicIds, ["mental-health-wellness", "mental-health-wellness.core"]);
+  assert.ok(resolution.topics.every((topic) => topic.sensitive === true));
 });
 
 test("hashtag resolution prefers specific subtopic tags over duplicate primary tags", () => {
