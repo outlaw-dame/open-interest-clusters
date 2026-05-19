@@ -306,7 +306,7 @@ const PRIMARY_TOPIC_SEEDS: PrimaryTopicSeed[] = [
     subtopics: [
       { suffix: "memes", label: "Memes", variants: ["InternetCulture", "Memes", "Meme", "Viral"], keywords: ["memes"] },
       { suffix: "platforms", label: "Platform Culture", variants: ["TikTok", "YouTube", "Fediverse", "Mastodon", "Bluesky"], keywords: ["fediverse"] },
-      { suffix: "fandoms", label: "Fandoms", "variants": ["Fandom", "FanCulture", "StanTwitter"], keywords: ["fandom"] }
+      { suffix: "fandoms", label: "Fandoms", variants: ["Fandom", "FanCulture", "StanTwitter"], keywords: ["fandom"] }
     ]
   },
   {
