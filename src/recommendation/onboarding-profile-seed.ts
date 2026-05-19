@@ -46,6 +46,7 @@ export interface RecommendationOnboardingProfileSeedInput {
   expiresAt?: string;
   profileStore?: RecommendationProfileStore;
   enforcementOptions?: RecommendationConsentEnforcementOptions;
+  allowSensitiveSelections?: boolean;
 }
 
 export interface RecommendationOnboardingProfileSeedResult {
@@ -121,6 +122,12 @@ function assertExpiresAt(value: string | undefined, observedAt: string): string 
   return expiresAt;
 }
 
+function assertSubjectLevelPrivacyBoundary(privacyBoundary: RecommendationInterestPrivacyBoundary): void {
+  if (privacyBoundary === "aggregate_only") {
+    throw new TypeError("Recommendation onboarding profile seed cannot create subject-level aggregate-only profile state.");
+  }
+}
+
 function createOnboardingEvidence(observedAt: string): RecommendationInterestEvidence {
   return Object.freeze({
     sourceItemKind: "collection",
@@ -181,6 +188,55 @@ function appendSeedSignal(
     accumulator.canonicalInterestSignalCount += 1;
   } else {
     accumulator.hashtagSignalCount += 1;
+  }
+}
+
+function addSensitiveParentTopicIds(
+  sensitiveTopicIds: Set<string>,
+  catalogIndex: RecommendationCatalogIndex,
+  parentTopicIds: readonly string[] | undefined
+): void {
+  for (const parentTopicId of parentTopicIds ?? []) {
+    const parentTopic = findRecommendationCatalogTopicInIndex(catalogIndex, parentTopicId);
+    if (parentTopic?.sensitive === true) {
+      sensitiveTopicIds.add(parentTopic.id);
+    }
+  }
+}
+
+function collectSensitiveSelectionTopicIds(
+  catalogIndex: RecommendationCatalogIndex,
+  selection: RecommendationOnboardingSelectionRecord
+): readonly string[] {
+  const sensitiveTopicIds = new Set<string>();
+
+  for (const topicId of selection.selectedTopicIds) {
+    const topic = findRecommendationCatalogTopicInIndex(catalogIndex, topicId);
+    if (topic === null) {
+      throw new TypeError("Recommendation onboarding profile seed references unknown topic.");
+    }
+    if (topic.sensitive === true) {
+      sensitiveTopicIds.add(topic.id);
+    }
+  }
+
+  for (const tagId of selection.expandedCanonicalTagIds) {
+    const tag = findRecommendationCanonicalTagInIndex(catalogIndex, tagId);
+    if (tag === null) {
+      throw new TypeError("Recommendation onboarding profile seed references unknown canonical tag.");
+    }
+    addSensitiveParentTopicIds(sensitiveTopicIds, catalogIndex, tag.parentTopicIds);
+  }
+
+  return Object.freeze([...sensitiveTopicIds].sort());
+}
+
+function assertSensitiveSelectionAllowed(
+  sensitiveTopicIds: readonly string[],
+  allowSensitiveSelections: boolean | undefined
+): void {
+  if (sensitiveTopicIds.length > 0 && allowSensitiveSelections !== true) {
+    throw new TypeError("Recommendation onboarding profile seed requires explicit sensitive selection opt-in.");
   }
 }
 
@@ -296,6 +352,11 @@ export async function createRecommendationOnboardingProfileSeed(
   const selection = selectionForCatalogIndex(catalogIndex, input.selection);
   const dataUse = input.dataUse ?? DEFAULT_DATA_USE;
   const privacyBoundary = input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY;
+  assertSubjectLevelPrivacyBoundary(privacyBoundary);
+  assertSensitiveSelectionAllowed(
+    collectSensitiveSelectionTopicIds(catalogIndex, selection),
+    input.allowSensitiveSelections
+  );
   const observedAt = optionalTimestamp(input.observedAt, selection.selectedAt, "Invalid recommendation onboarding profile seed timestamp.");
   const expiresAt = assertExpiresAt(input.expiresAt, observedAt);
   const consentEvaluation = await requireRecommendationConsent(
