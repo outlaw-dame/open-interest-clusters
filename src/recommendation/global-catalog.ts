@@ -31,10 +31,30 @@ const PRIMARY_TOPIC_SEEDS: PrimaryTopicSeed[] = [
     label: "Gaming",
     popularityTier: "global_primary",
     subtopics: [
-      { suffix: "playstation", label: "PlayStation", variants: ["PlayStation", "PS5", "PlayStation5", "PlayStationFive", "StateOfPlay", "SonyStateOfPlay", "PlayStationStateOfPlay"], keywords: ["playstation", "ps5", "sony console", "state of play", "sony state of play", "playstation state of play"] },
-      { suffix: "xbox", label: "Xbox", variants: ["Xbox", "XboxSeriesX", "XboxSeriesS", "XboxGamesShowcase"], keywords: ["xbox", "console gaming", "xbox games showcase"] },
-      { suffix: "rpg", label: "RPGs and JRPGs", variants: ["RPG", "RPGs", "JRPG", "JRPGs", "FinalFantasyVII", "FF7"], keywords: ["rpg", "jrpg", "final fantasy"] },
-      { suffix: "showcases", label: "Gaming Showcases", variants: ["SummerGamesFest"], keywords: ["gaming showcase", "game showcase", "summer games fest"] }
+      {
+        suffix: "playstation",
+        label: "PlayStation",
+        variants: ["PlayStation", "PS5", "PlayStation5", "PlayStationFive", "StateOfPlay", "SonyStateOfPlay", "PlayStationStateOfPlay"],
+        keywords: ["playstation", "ps5", "sony console", "state of play", "sony state of play", "playstation state of play"]
+      },
+      {
+        suffix: "xbox",
+        label: "Xbox",
+        variants: ["Xbox", "XboxSeriesX", "XboxSeriesS", "XboxGamesShowcase"],
+        keywords: ["xbox", "console gaming", "xbox games showcase"]
+      },
+      {
+        suffix: "rpg",
+        label: "RPGs and JRPGs",
+        variants: ["RPG", "RPGs", "JRPG", "JRPGs", "FinalFantasyVII", "FF7"],
+        keywords: ["rpg", "jrpg", "final fantasy"]
+      },
+      {
+        suffix: "showcases",
+        label: "Gaming Showcases",
+        variants: ["GamingShowcases", "SummerGameFest", "SummerGamesFest"],
+        keywords: ["gaming showcase", "game showcase", "summer game fest", "summer games fest"]
+      }
     ]
   },
   {
