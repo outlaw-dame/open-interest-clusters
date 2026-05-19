@@ -184,8 +184,8 @@ function createTagTokenIndexes(
 
   return {
     canonicalTagIdsByNormalizedToken: freezeStringArrayMap(tokenToTagIds),
-    canonicalTagByNormalizedToken: new Map([...canonicalTagByNormalizedToken.entries()].sort(([left], [right]) => left.localeCompare(right))),
-    tagTokenCollisions: Object.freeze(tagTokenCollisions.sort((left, right) => left.normalizedToken.localeCompare(right.normalizedToken)))
+    canonicalTagByNormalizedToken: new Map(canonicalTagByNormalizedToken),
+    tagTokenCollisions: Object.freeze(tagTokenCollisions)
   };
 }
 
@@ -239,10 +239,10 @@ export function createRecommendationCatalogIndex(
 
   return Object.freeze({
     catalog: normalizedCatalog,
-    topicsById: new Map([...topicsById.entries()].sort(([left], [right]) => left.localeCompare(right))),
-    primaryTopicsById: new Map([...primaryTopicsById.entries()].sort(([left], [right]) => left.localeCompare(right))),
-    subtopicsById: new Map([...subtopicsById.entries()].sort(([left], [right]) => left.localeCompare(right))),
-    canonicalTagsById: new Map([...canonicalTagsById.entries()].sort(([left], [right]) => left.localeCompare(right))),
+    topicsById: new Map(topicsById),
+    primaryTopicsById: new Map(primaryTopicsById),
+    subtopicsById: new Map(subtopicsById),
+    canonicalTagsById: new Map(canonicalTagsById),
     canonicalTagIdsByTopicId: freezeStringArrayMap(tagIdsByTopicId),
     canonicalTagIdsByNormalizedToken: tokenIndexes.canonicalTagIdsByNormalizedToken,
     canonicalTagByNormalizedToken: tokenIndexes.canonicalTagByNormalizedToken,
