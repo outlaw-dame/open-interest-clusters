@@ -31,6 +31,21 @@ function localPersonalizationPolicy(subjectId = SUBJECT_ID): RecommendationConse
   });
 }
 
+function createRejectingProfileStore(onIngest?: () => void): RecommendationProfileStore {
+  return {
+    async ingestSignals() {
+      onIngest?.();
+      throw new Error("ingest should not be called");
+    },
+    async readProfile() {
+      throw new Error("read should not be called");
+    },
+    async deleteProfile() {
+      throw new Error("delete should not be called");
+    }
+  };
+}
+
 function createLargeOnboardingCatalog(tagCount: number) {
   const canonicalTagIds = Array.from({ length: tagCount }, (_, index) => `bulk.tag${index}`);
   const topics: RecommendationCatalogTopic[] = [
@@ -148,18 +163,9 @@ test("onboarding profile seed is deny-by-default and does not ingest without exp
     selectedAt: SELECTED_AT
   });
   let ingestCalled = false;
-  const profileStore: RecommendationProfileStore = {
-    async ingestSignals() {
-      ingestCalled = true;
-      throw new Error("ingest should not be called");
-    },
-    async readProfile() {
-      throw new Error("read should not be called");
-    },
-    async deleteProfile() {
-      throw new Error("delete should not be called");
-    }
-  };
+  const profileStore = createRejectingProfileStore(() => {
+    ingestCalled = true;
+  });
 
   await assert.rejects(
     createRecommendationOnboardingProfileSeed({
@@ -236,6 +242,90 @@ test("onboarding profile seed blocks server-side profile seeding unless the poli
   assert.equal(serverAllowed.consent.serverSideProcessing, true);
 });
 
+test("onboarding profile seed refuses aggregate-only boundaries for subject-level profile state", async () => {
+  const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
+  const selection = createRecommendationOnboardingSelection({
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["gaming"],
+    selectedAt: SELECTED_AT
+  });
+  const auditEvents: PrivacySafeRecommendationConsentEvent[] = [];
+  let ingestCalled = false;
+
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({
+      subjectId: SUBJECT_ID,
+      catalogIndex,
+      selection,
+      policy: localPersonalizationPolicy(),
+      privacyBoundary: "aggregate_only",
+      profileStore: createRejectingProfileStore(() => {
+        ingestCalled = true;
+      }),
+      enforcementOptions: {
+        auditSink: {
+          record(event) {
+            auditEvents.push(event);
+          }
+        }
+      }
+    }),
+    (error: unknown) => error instanceof TypeError && error.message === "Recommendation onboarding profile seed cannot create subject-level aggregate-only profile state."
+  );
+  assert.equal(auditEvents.length, 0);
+  assert.equal(ingestCalled, false);
+});
+
+test("onboarding profile seed requires explicit sensitive selection opt-in", async () => {
+  const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
+  const selection = createRecommendationOnboardingSelection({
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["mental-health-wellness"],
+    selectedAt: SELECTED_AT
+  });
+  let ingestCalled = false;
+
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({
+      subjectId: SUBJECT_ID,
+      catalogIndex,
+      selection,
+      policy: localPersonalizationPolicy(),
+      profileStore: createRejectingProfileStore(() => {
+        ingestCalled = true;
+      })
+    }),
+    (error: unknown) => error instanceof TypeError && error.message === "Recommendation onboarding profile seed requires explicit sensitive selection opt-in."
+  );
+  assert.equal(ingestCalled, false);
+});
+
+test("onboarding profile seed allows sensitive selections after explicit opt-in", async () => {
+  const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
+  const selection = createRecommendationOnboardingSelection({
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["mental-health-wellness"],
+    selectedAt: SELECTED_AT
+  });
+
+  const result = await createRecommendationOnboardingProfileSeed({
+    subjectId: SUBJECT_ID,
+    catalogIndex,
+    selection,
+    policy: localPersonalizationPolicy(),
+    allowSensitiveSelections: true
+  });
+  const profileTargets = new Set(result.profile.entries.map((entry) => `${entry.target.kind}:${entry.target.key}`));
+
+  assert.ok(profileTargets.has("canonical_interest:mental-health-wellness"));
+  assert.ok(profileTargets.has("canonical_interest:mental-health-wellness.core"));
+  assert.ok(profileTargets.has("canonical_interest:mental-health-wellness.therapy"));
+  assert.ok(profileTargets.has("hashtag:mentalhealth"));
+  assert.ok(profileTargets.has("hashtag:therapy"));
+  assert.equal(result.consent.decision, "allow");
+  assert.equal(JSON.stringify(result.profile).includes(SUBJECT_ID), false);
+});
+
 test("onboarding profile seed validates timestamps and expiration", async () => {
   const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
   const selection = createRecommendationOnboardingSelection({
@@ -287,18 +377,9 @@ test("onboarding profile seed enforces the signal cap before profile ingestion",
     selectedAt: SELECTED_AT
   });
   let ingestCalled = false;
-  const profileStore: RecommendationProfileStore = {
-    async ingestSignals() {
-      ingestCalled = true;
-      throw new Error("ingest should not be called");
-    },
-    async readProfile() {
-      throw new Error("read should not be called");
-    },
-    async deleteProfile() {
-      throw new Error("delete should not be called");
-    }
-  };
+  const profileStore = createRejectingProfileStore(() => {
+    ingestCalled = true;
+  });
 
   await assert.rejects(
     createRecommendationOnboardingProfileSeed({
