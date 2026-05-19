@@ -15,6 +15,24 @@ import {
   resolveRecommendationCatalogEntity
 } from "../src/index.js";
 
+interface ExpectedEntityMapping {
+  source: "wikidata" | "dbpedia";
+  id: string;
+  topicIds: string[];
+  canonicalTagIds: string[];
+}
+
+function assertEntityMapsToExpectedTargets(mapping: ExpectedEntityMapping): void {
+  const resolution = resolveRecommendationCatalogEntity(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, {
+    source: mapping.source,
+    id: mapping.id
+  });
+
+  assert.notEqual(resolution, null, `${mapping.source}:${mapping.id} should resolve`);
+  assert.deepEqual(resolution?.topicIds, mapping.topicIds, `${mapping.source}:${mapping.id} topic ids`);
+  assert.deepEqual(resolution?.canonicalTagIds, mapping.canonicalTagIds, `${mapping.source}:${mapping.id} canonical tag ids`);
+}
+
 test("entity-enriched global catalog preserves catalog shape and adds stable entity refs", () => {
   const baseCatalog = normalizeRecommendationCatalog(RECOMMENDATION_GLOBAL_CATALOG_V1);
   const entityCatalog = normalizeRecommendationCatalog(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1);
@@ -57,6 +75,54 @@ test("entity resolver exposes topic and canonical tag convenience helpers", () =
   assert.deepEqual(topics.map((topic) => topic.id), ["ai", "ai.generative"]);
   assert.deepEqual(tags.map((tag) => tag.id), ["ai", "ai.generative"]);
   assert.equal(createRecommendationCatalogEntityKey({ source: "wikidata", id: "Q11660" }), "wikidata:Q11660");
+});
+
+test("expanded entity anchors resolve to intentional catalog targets only", () => {
+  const mappings: ExpectedEntityMapping[] = [
+    { source: "wikidata", id: "Q7889", topicIds: ["gaming"], canonicalTagIds: ["gaming"] },
+    { source: "dbpedia", id: "Video_game", topicIds: ["gaming"], canonicalTagIds: ["gaming"] },
+    { source: "wikidata", id: "Q8274", topicIds: ["anime.core"], canonicalTagIds: ["anime.core"] },
+    { source: "dbpedia", id: "Manga", topicIds: ["anime.core"], canonicalTagIds: ["anime.core"] },
+    { source: "wikidata", id: "Q638", topicIds: ["music"], canonicalTagIds: ["music"] },
+    { source: "wikidata", id: "Q11424", topicIds: ["movies-tv.film"], canonicalTagIds: ["movies-tv.film"] },
+    { source: "dbpedia", id: "Film", topicIds: ["movies-tv.film"], canonicalTagIds: ["movies-tv.film"] },
+    { source: "wikidata", id: "Q907311", topicIds: ["movies-tv.streaming"], canonicalTagIds: ["movies-tv.streaming"] },
+    { source: "wikidata", id: "Q2736", topicIds: ["sports.soccer"], canonicalTagIds: ["sports.soccer"] },
+    { source: "dbpedia", id: "Association_football", topicIds: ["sports.soccer"], canonicalTagIds: ["sports.soccer"] },
+    { source: "wikidata", id: "Q5389", topicIds: ["sports.general"], canonicalTagIds: ["sports.general"] },
+    { source: "wikidata", id: "Q309252", topicIds: ["fitness", "fitness.workouts"], canonicalTagIds: ["fitness", "fitness.workouts"] },
+    { source: "dbpedia", id: "Physical_fitness", topicIds: ["fitness", "fitness.workouts"], canonicalTagIds: ["fitness", "fitness.workouts"] },
+    { source: "wikidata", id: "Q9350", topicIds: ["fitness.yoga-pilates"], canonicalTagIds: ["fitness.yoga-pilates"] },
+    { source: "wikidata", id: "Q317309", topicIds: ["mental-health-wellness", "mental-health-wellness.core"], canonicalTagIds: ["mental-health-wellness", "mental-health-wellness.core"] },
+    { source: "dbpedia", id: "Mental_health", topicIds: ["mental-health-wellness", "mental-health-wellness.core"], canonicalTagIds: ["mental-health-wellness", "mental-health-wellness.core"] },
+    { source: "wikidata", id: "Q11016", topicIds: ["technology", "technology.consumer"], canonicalTagIds: ["technology", "technology.consumer"] },
+    { source: "wikidata", id: "Q7397", topicIds: ["technology.software"], canonicalTagIds: ["technology.software"] },
+    { source: "wikidata", id: "Q20514253", topicIds: ["business-finance.crypto"], canonicalTagIds: ["business-finance.crypto"] },
+    { source: "wikidata", id: "Q336", topicIds: ["science", "science.core"], canonicalTagIds: ["science", "science.core"] },
+    { source: "wikidata", id: "Q11633", topicIds: ["photography", "photography.gear"], canonicalTagIds: ["photography", "photography.gear"] },
+    { source: "wikidata", id: "Q40831", topicIds: ["comedy", "comedy.core"], canonicalTagIds: ["comedy", "comedy.core"] },
+    { source: "wikidata", id: "Q1420", topicIds: ["automobiles-evs.culture"], canonicalTagIds: ["automobiles-evs.culture"] },
+    { source: "wikidata", id: "Q193692", topicIds: ["automobiles-evs.ev"], canonicalTagIds: ["automobiles-evs.ev"] },
+    { source: "dbpedia", id: "Electric_car", topicIds: ["automobiles-evs.ev"], canonicalTagIds: ["automobiles-evs.ev"] },
+    { source: "wikidata", id: "Q729", topicIds: ["animals", "animals.wildlife"], canonicalTagIds: ["animals", "animals.wildlife"] },
+    { source: "wikidata", id: "Q571", topicIds: ["books-literature", "books-literature.core"], canonicalTagIds: ["books-literature", "books-literature.core"] },
+    { source: "wikidata", id: "Q2095", topicIds: ["food-cooking", "food-cooking.core"], canonicalTagIds: ["food-cooking", "food-cooking.core"] }
+  ];
+
+  for (const mapping of mappings) {
+    assertEntityMapsToExpectedTargets(mapping);
+  }
+});
+
+test("sensitive entity anchors inherit sensitive catalog boundaries", () => {
+  const resolution = resolveRecommendationCatalogEntity(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, {
+    source: "wikidata",
+    id: "Q317309"
+  });
+
+  assert.notEqual(resolution, null);
+  assert.deepEqual(resolution?.topicIds, ["mental-health-wellness", "mental-health-wellness.core"]);
+  assert.equal(resolution?.topics.every((topic) => topic.sensitive === true), true);
 });
 
 test("hashtag resolution prefers specific subtopic tags over duplicate primary tags", () => {
