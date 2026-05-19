@@ -31,6 +31,7 @@ export * from "./recommendation/profile-store-persistence.js";
 export * from "./recommendation/embedding-lifecycle.js";
 export * from "./recommendation/canonical-source-adapter.js";
 export * from "./recommendation/catalog.js";
+export * from "./recommendation/catalog-index.js";
 export * from "./recommendation/catalog-entity-resolution.js";
 export * from "./recommendation/global-catalog.js";
 export * from "./recommendation/global-catalog-entities.js";
