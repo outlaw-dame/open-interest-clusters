@@ -74,6 +74,29 @@ function withEntityRefs<T extends RecommendationCatalogTopic | RecommendationCan
   return Object.freeze({ ...item, entityRefs }) as T;
 }
 
+function withCatalogCoverageFixes(item: RecommendationCatalogTopic): RecommendationCatalogTopic {
+  if (item.id !== "content-creators.core") {
+    return withEntityRefs(item);
+  }
+
+  return withEntityRefs(Object.freeze({
+    ...item,
+    hashtags: Object.freeze([...(item.hashtags ?? []), "#Streamers"])
+  }));
+}
+
+function withCanonicalTagCoverageFixes(item: RecommendationCanonicalTag): RecommendationCanonicalTag {
+  if (item.id !== "content-creators.core") {
+    return withEntityRefs(item);
+  }
+
+  return withEntityRefs(Object.freeze({
+    ...item,
+    variants: Object.freeze([...item.variants, "Streamers"]),
+    hashtags: Object.freeze([...item.hashtags, "#Streamers"])
+  }));
+}
+
 export function createEntityEnrichedRecommendationCatalog(catalog: RecommendationCatalog): RecommendationCatalog {
   const normalizedCatalog = normalizeRecommendationCatalog(catalog);
 
@@ -81,8 +104,8 @@ export function createEntityEnrichedRecommendationCatalog(catalog: Recommendatio
     schemaVersion: RECOMMENDATION_CATALOG_SCHEMA_VERSION,
     catalogId: RECOMMENDATION_GLOBAL_ENTITY_CATALOG_ID,
     locale: normalizedCatalog.locale,
-    topics: normalizedCatalog.topics.map(withEntityRefs),
-    canonicalTags: normalizedCatalog.canonicalTags.map(withEntityRefs)
+    topics: normalizedCatalog.topics.map(withCatalogCoverageFixes),
+    canonicalTags: normalizedCatalog.canonicalTags.map(withCanonicalTagCoverageFixes)
   });
 }
 
