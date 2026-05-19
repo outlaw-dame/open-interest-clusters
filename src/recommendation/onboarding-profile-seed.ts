@@ -227,6 +227,21 @@ function addSensitiveParentTopicIds(
   }
 }
 
+function addSensitiveTopicIdsForTag(
+  sensitiveTopicIds: Set<string>,
+  catalogIndex: RecommendationCatalogIndex,
+  tagId: string,
+  parentTopicIds: readonly string[] | undefined
+): void {
+  addSensitiveParentTopicIds(sensitiveTopicIds, catalogIndex, parentTopicIds);
+
+  for (const [topicId, topicTagIds] of catalogIndex.canonicalTagIdsByTopicId.entries()) {
+    if (topicTagIds.includes(tagId)) {
+      addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, topicId);
+    }
+  }
+}
+
 function collectSensitiveSelectionTopicIds(
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord
@@ -242,7 +257,7 @@ function collectSensitiveSelectionTopicIds(
     if (tag === null) {
       throw new TypeError("Recommendation onboarding profile seed references unknown canonical tag.");
     }
-    addSensitiveParentTopicIds(sensitiveTopicIds, catalogIndex, tag.parentTopicIds);
+    addSensitiveTopicIdsForTag(sensitiveTopicIds, catalogIndex, tag.id, tag.parentTopicIds);
   }
 
   return Object.freeze([...sensitiveTopicIds].sort());
