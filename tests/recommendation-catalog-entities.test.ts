@@ -55,6 +55,12 @@ test("hashtag resolution prefers specific subtopic tags over duplicate primary t
   assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, "#Photography")?.id, "photography.gear");
 });
 
+test("entity-enriched catalog preserves singular and plural streamer coverage", () => {
+  assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, "#Streamer")?.id, "content-creators.core");
+  assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, "#Streamers")?.id, "content-creators.core");
+  assert.equal(resolveRecommendationCanonicalTagForHashtag(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, "#GameStreaming")?.id, "esports-game-streaming.streaming");
+});
+
 test("entity resolver validates lookup identifiers safely", () => {
   assert.throws(
     () => resolveRecommendationCatalogEntity(RECOMMENDATION_GLOBAL_ENTITY_CATALOG_V1, { source: "wikidata", id: "Artificial_intelligence" }),
