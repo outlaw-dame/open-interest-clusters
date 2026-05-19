@@ -15,7 +15,6 @@ import {
   type RecommendationOnboardingSelectionRecord
 } from "./catalog.js";
 import {
-  createRecommendationCatalogIndex,
   findRecommendationCanonicalTagInIndex,
   findRecommendationCatalogTopicInIndex,
   type RecommendationCatalogIndex
@@ -24,7 +23,8 @@ import {
   normalizeRecommendationInterestSignal,
   type RecommendationInterestEvidence,
   type RecommendationInterestPrivacyBoundary,
-  type RecommendationInterestSignal
+  type RecommendationInterestSignal,
+  type RecommendationInterestSignalInput
 } from "./interest-signal.js";
 import {
   createInMemoryRecommendationProfileStore,
@@ -142,7 +142,7 @@ function selectionForCatalogIndex(
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord
 ): RecommendationOnboardingSelectionRecord {
-  if (!isObject(selection) || selection.schemaVersion !== RECOMMENDATION_ONBOARDING_SELECTION_SCHEMA_VERSION) {
+  if (!isObject(catalogIndex) || !isObject(selection) || selection.schemaVersion !== RECOMMENDATION_ONBOARDING_SELECTION_SCHEMA_VERSION) {
     throw new TypeError("Invalid recommendation onboarding selection record.");
   }
 
@@ -154,6 +154,15 @@ function selectionForCatalogIndex(
     selectedAt: selection.selectedAt,
     storageTarget: selection.storageTarget
   });
+}
+
+function createSignal(input: RecommendationInterestSignalInput, expiresAt: string | undefined): RecommendationInterestSignal {
+  const signalInput: RecommendationInterestSignalInput = { ...input };
+  if (expiresAt !== undefined) {
+    signalInput.expiresAt = expiresAt;
+  }
+
+  return normalizeRecommendationInterestSignal(signalInput);
 }
 
 function createCanonicalInterestSignals(
@@ -169,6 +178,7 @@ function createCanonicalInterestSignals(
   const evidence = createOnboardingEvidence(observedAt);
   const selectedTopics = new Set(selection.selectedTopicIds);
   const selectedTags = new Set(selection.selectedCanonicalTagIds);
+  const emittedTargets = new Set<string>();
 
   for (const topicId of selection.selectedTopicIds) {
     const topic = findRecommendationCatalogTopicInIndex(catalogIndex, topicId);
@@ -176,7 +186,8 @@ function createCanonicalInterestSignals(
       throw new TypeError("Recommendation onboarding profile seed references unknown topic.");
     }
 
-    signals.push(normalizeRecommendationInterestSignal({
+    emittedTargets.add(topic.id);
+    signals.push(createSignal({
       target: { kind: "canonical_interest", key: topic.id },
       action: "select",
       polarity: "positive",
@@ -185,9 +196,8 @@ function createCanonicalInterestSignals(
       dataUse,
       privacyBoundary,
       evidence,
-      consent,
-      expiresAt
-    }));
+      consent
+    }, expiresAt));
   }
 
   for (const tagId of selection.expandedCanonicalTagIds) {
@@ -195,10 +205,14 @@ function createCanonicalInterestSignals(
     if (tag === null) {
       throw new TypeError("Recommendation onboarding profile seed references unknown canonical tag.");
     }
+    if (emittedTargets.has(tag.id)) {
+      continue;
+    }
 
+    emittedTargets.add(tag.id);
     const explicitlySelected = selectedTags.has(tagId);
     const parentSelected = (tag.parentTopicIds ?? []).some((topicId) => selectedTopics.has(topicId));
-    signals.push(normalizeRecommendationInterestSignal({
+    signals.push(createSignal({
       target: { kind: "canonical_interest", key: tag.id },
       action: "select",
       polarity: "positive",
@@ -207,9 +221,8 @@ function createCanonicalInterestSignals(
       dataUse,
       privacyBoundary,
       evidence,
-      consent,
-      expiresAt
-    }));
+      consent
+    }, expiresAt));
   }
 
   return signals;
@@ -239,7 +252,7 @@ function createHashtagSignals(
         continue;
       }
       seenHashtags.add(hashtag);
-      signals.push(normalizeRecommendationInterestSignal({
+      signals.push(createSignal({
         target: { kind: "hashtag", key: hashtag },
         action: "select",
         polarity: "positive",
@@ -248,9 +261,8 @@ function createHashtagSignals(
         dataUse,
         privacyBoundary,
         evidence,
-        consent,
-        expiresAt
-      }));
+        consent
+      }, expiresAt));
     }
   }
 
@@ -332,8 +344,4 @@ export async function createRecommendationOnboardingProfileSeed(
     signals,
     consent
   });
-}
-
-export function createRecommendationOnboardingProfileSeedIndex(catalogIndex: RecommendationCatalogIndex): RecommendationCatalogIndex {
-  return createRecommendationCatalogIndex(catalogIndex.catalog);
 }
