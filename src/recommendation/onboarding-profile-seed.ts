@@ -217,47 +217,28 @@ function addSensitiveTopicIdForTopic(
   }
 }
 
-function addSensitiveParentTopicIds(
-  sensitiveTopicIds: Set<string>,
-  catalogIndex: RecommendationCatalogIndex,
-  parentTopicIds: readonly string[] | undefined
-): void {
-  for (const parentTopicId of parentTopicIds ?? []) {
-    addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, parentTopicId);
-  }
-}
-
-function addSensitiveTopicIdsForTag(
-  sensitiveTopicIds: Set<string>,
-  catalogIndex: RecommendationCatalogIndex,
-  tagId: string,
-  parentTopicIds: readonly string[] | undefined
-): void {
-  addSensitiveParentTopicIds(sensitiveTopicIds, catalogIndex, parentTopicIds);
-
-  for (const [topicId, topicTagIds] of catalogIndex.canonicalTagIdsByTopicId.entries()) {
-    if (topicTagIds.includes(tagId)) {
-      addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, topicId);
-    }
-  }
-}
-
 function collectSensitiveSelectionTopicIds(
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord
 ): readonly string[] {
   const sensitiveTopicIds = new Set<string>();
+  const expandedTagIds = new Set(selection.expandedCanonicalTagIds);
 
   for (const topicId of selection.selectedTopicIds) {
     addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, topicId);
   }
 
-  for (const tagId of selection.expandedCanonicalTagIds) {
+  for (const tagId of expandedTagIds) {
     const tag = findRecommendationCanonicalTagInIndex(catalogIndex, tagId);
     if (tag === null) {
       throw new TypeError("Recommendation onboarding profile seed references unknown canonical tag.");
     }
-    addSensitiveTopicIdsForTag(sensitiveTopicIds, catalogIndex, tag.id, tag.parentTopicIds);
+  }
+
+  for (const [topicId, topicTagIds] of catalogIndex.canonicalTagIdsByTopicId.entries()) {
+    if (topicTagIds.some((tagId) => expandedTagIds.has(tagId))) {
+      addSensitiveTopicIdForTopic(sensitiveTopicIds, catalogIndex, topicId);
+    }
   }
 
   return Object.freeze([...sensitiveTopicIds].sort());
