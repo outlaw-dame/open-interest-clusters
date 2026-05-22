@@ -185,9 +185,9 @@ async function assertServerPersistenceAllowedBeforeSeeding(
 
 function selectedCanonicalInterestIdsFromSeed(seed: RecommendationOnboardingProfileSeedResult): readonly string[] {
   const ids = new Set<string>();
-  for (const entry of seed.profile.entries) {
-    if (entry.target.kind === "canonical_interest") {
-      ids.add(entry.target.key);
+  for (const signal of seed.signals) {
+    if (signal.target.kind === "canonical_interest") {
+      ids.add(signal.target.key);
     }
   }
 
