@@ -62,7 +62,7 @@ function boundaryCatalog(): RecommendationCatalog {
 }
 
 class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
-  readonly records = new Map<string, unknown>();
+  readonly records = new Map<string, RecommendationProfileStoreRecord>();
 
   async readProfileRecord(subjectKey: string): Promise<unknown | null> {
     return this.records.get(subjectKey) ?? null;
@@ -78,17 +78,15 @@ class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenc
 }
 
 class FailingProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
-  async readProfileRecord(): Promise<unknown | null> {
+  async readProfileRecord(_subjectKey: string): Promise<unknown | null> {
     return null;
   }
 
-  async writeProfileRecord(): Promise<void> {
+  async writeProfileRecord(_record: RecommendationProfileStoreRecord): Promise<void> {
     throw new Error("simulated adapter write failure");
   }
 
-  async deleteProfileRecord(): Promise<void> {
-    return undefined;
-  }
+  async deleteProfileRecord(_subjectKey: string): Promise<void> {}
 }
 
 test("bootstrap rejects guarded selections without explicit opt-in before persistence", async () => {
