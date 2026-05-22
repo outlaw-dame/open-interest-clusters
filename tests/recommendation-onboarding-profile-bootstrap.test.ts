@@ -6,6 +6,7 @@ import {
   RECOMMENDATION_GLOBAL_CATALOG_V1,
   RecommendationConsentDeniedError,
   bootstrapRecommendationProfileFromOnboarding,
+  createInMemoryRecommendationProfileStore,
   createRecommendationCatalogIndex,
   type RecommendationConsentPolicy,
   type RecommendationDataUse,
@@ -107,6 +108,35 @@ test("onboarding bootstrap creates a privacy-safe local profile and optional has
   assert.deepEqual(result.selectedCanonicalInterestIds, [...result.selectedCanonicalInterestIds].sort());
   assert.equal(JSON.stringify(result.profile).includes(SUBJECT_ID), false);
   assert.equal(JSON.stringify(result).includes(`\"subjectId\":\"${SUBJECT_ID}\"`), false);
+});
+
+test("onboarding bootstrap reports selected ids from the current onboarding run", async () => {
+  const profileStore = createInMemoryRecommendationProfileStore({ now: () => SELECTED_AT });
+  const first = await bootstrapRecommendationProfileFromOnboarding({
+    subjectId: SUBJECT_ID,
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["apple"],
+    selectedAt: SELECTED_AT,
+    policy: localPersonalizationPolicy(),
+    profileStore
+  });
+  const second = await bootstrapRecommendationProfileFromOnboarding({
+    subjectId: SUBJECT_ID,
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["gaming"],
+    selectedAt: "2026-05-22T01:00:00.000Z",
+    policy: localPersonalizationPolicy(),
+    profileStore
+  });
+  const mergedTargets = canonicalTargets(second.profile);
+
+  assert.ok(first.selectedCanonicalInterestIds.includes("apple"));
+  assert.ok(mergedTargets.has("apple"));
+  assert.ok(mergedTargets.has("gaming"));
+  assert.ok(second.selectedCanonicalInterestIds.includes("gaming"));
+  assert.ok(second.selectedCanonicalInterestIds.includes("gaming.playstation"));
+  assert.equal(second.selectedCanonicalInterestIds.includes("apple"), false);
+  assert.equal(second.selectedCanonicalInterestIds.includes("apple.products"), false);
 });
 
 test("onboarding bootstrap does not create a follow action unless auto-follow is explicit", async () => {
