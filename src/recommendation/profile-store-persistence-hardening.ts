@@ -58,7 +58,7 @@ export type RecommendationProfilePersistenceReasonCode =
 
 export interface RecommendationProfilePersistenceConsentInput {
   storageTarget?: RecommendationProfilePersistenceStorageTarget;
-  policy?: RecommendationConsentPolicy | null;
+  policy?: RecommendationConsentPolicy | null | undefined;
   dataUse?: RecommendationDataUse;
   privacyBoundary?: RecommendationInterestPrivacyBoundary;
 }
