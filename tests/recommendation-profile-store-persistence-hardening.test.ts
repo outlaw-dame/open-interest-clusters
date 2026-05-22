@@ -10,12 +10,16 @@ import {
   RecommendationProfilePersistenceError,
   type RecommendationConsentPolicy,
   type RecommendationDerivedDataDeletionIntent,
+  type RecommendationInterestPrivacyBoundary,
   type RecommendationProfilePersistenceAdapter,
   type RecommendationProfileSnapshot,
   type RecommendationProfileStoreRecord
 } from "../src/index.js";
 
-function profileEntry(key: string) {
+function profileEntry(
+  key: string,
+  privacyBoundaries: readonly RecommendationInterestPrivacyBoundary[] = ["local_only"]
+) {
   return {
     target: { kind: "canonical_interest" as const, key },
     score: 0.75,
@@ -24,15 +28,17 @@ function profileEntry(key: string) {
     positiveSignalCount: 1,
     negativeSignalCount: 0,
     neutralSignalCount: 0,
-    privacyBoundaries: ["local_only" as const],
+    privacyBoundaries,
     protocols: ["activitypub" as const],
     sourceVisibilities: ["public" as const],
     updatedAt: "2026-05-16T00:00:00.000Z"
   };
 }
 
-function profileSnapshot(): RecommendationProfileSnapshot {
-  const entries = [profileEntry("books.fiction")];
+function profileSnapshot(
+  privacyBoundaries: readonly RecommendationInterestPrivacyBoundary[] = ["local_only"]
+): RecommendationProfileSnapshot {
+  const entries = [profileEntry("books.fiction", privacyBoundaries)];
   return {
     schemaVersion: "recommendation-profile.v1",
     updatedAt: "2026-05-16T00:00:00.000Z",
@@ -77,6 +83,29 @@ class CorruptingWriteProfilePersistenceAdapter extends MemoryProfilePersistenceA
   }
 }
 
+class ReformattingTimestampProfilePersistenceAdapter extends MemoryProfilePersistenceAdapter {
+  override async writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<void> {
+    this.records.set(record.subjectKey, {
+      ...record,
+      writtenAt: "2026-05-16T01:00:00Z",
+      profile: {
+        ...record.profile,
+        updatedAt: "2026-05-16T00:00:00Z",
+        entries: record.profile.entries.map((entry) => ({
+          ...entry,
+          updatedAt: "2026-05-16T00:00:00Z"
+        }))
+      }
+    });
+  }
+}
+
+class FailingReadProfilePersistenceAdapter extends MemoryProfilePersistenceAdapter {
+  override async readProfileRecord(): Promise<unknown | null> {
+    throw new Error("simulated transient read failure with sensitive adapter details");
+  }
+}
+
 function assertPersistenceError(
   error: unknown,
   reason: RecommendationProfilePersistenceError["reason"]
@@ -102,6 +131,7 @@ test("safe profile persistence verifies local writes without requiring server co
 
   assert.equal(result.storageTarget, "local_app");
   assert.equal(result.verified, true);
+  assert.equal(result.verificationConsistency, "strong");
   assert.equal(result.consent, undefined);
   assert.equal(read?.subjectKey, result.record.subjectKey);
   assert.equal(read?.profile.signalCount, 1);
@@ -134,13 +164,14 @@ test("safe profile persistence allows server storage only when consent includes 
   });
 
   assert.equal(result.storageTarget, "server_profile");
-  assert.equal(result.verified, true);
+  assert.equal(result.verified, false);
+  assert.equal(result.verificationConsistency, "eventual");
   assert.equal(result.consent?.decision, "allow");
   assert.equal(result.consent?.serverSideProcessing, true);
   assert.equal(adapter.records.has(result.record.subjectKey), true);
 });
 
-test("safe profile persistence rejects aggregate-only subject profile writes", async () => {
+test("safe profile persistence rejects aggregate-only subject profile writes from top-level boundary", async () => {
   const adapter = new MemoryProfilePersistenceAdapter();
 
   await assert.rejects(
@@ -156,7 +187,53 @@ test("safe profile persistence rejects aggregate-only subject profile writes", a
   assert.equal(adapter.records.size, 0);
 });
 
-test("safe profile persistence verifies persisted bytes and deletes corrupted writes", async () => {
+test("safe profile persistence rejects aggregate-only subject profile writes from persisted profile content", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter();
+
+  await assert.rejects(
+    () => writeRecommendationProfileStoreRecordSafely(adapter, {
+      subjectId: "subject-1",
+      writtenAt: "2026-05-16T01:00:00.000Z",
+      profile: profileSnapshot(["aggregate_only"])
+    }),
+    (error) => assertPersistenceError(error, "persistence.deny.aggregate_subject_profile")
+  );
+
+  assert.equal(adapter.records.size, 0);
+});
+
+test("safe profile persistence semantically verifies timestamp reformatting", async () => {
+  const adapter = new ReformattingTimestampProfilePersistenceAdapter();
+  const result = await writeRecommendationProfileStoreRecordSafely(adapter, {
+    subjectId: "subject-1",
+    writtenAt: "2026-05-16T01:00:00.000Z",
+    profile: profileSnapshot()
+  });
+
+  assert.equal(result.verified, true);
+  assert.equal(adapter.deletedKeys.length, 0);
+  assert.equal(adapter.records.has(result.record.subjectKey), true);
+});
+
+test("safe profile persistence does not delete records when verification reads transiently fail", async () => {
+  const adapter = new FailingReadProfilePersistenceAdapter();
+  const subjectKey = createRecommendationProfileSubjectKey({ subjectId: "subject-1" });
+
+  await assert.rejects(
+    () => writeRecommendationProfileStoreRecordSafely(adapter, {
+      subjectId: "subject-1",
+      writtenAt: "2026-05-16T01:00:00.000Z",
+      profile: profileSnapshot(),
+      deleteOnVerificationFailure: true
+    }),
+    (error) => assertPersistenceError(error, "persistence.error.write_verification_failed")
+  );
+
+  assert.equal(adapter.records.has(subjectKey), true);
+  assert.deepEqual(adapter.deletedKeys, []);
+});
+
+test("safe profile persistence verifies persisted content and can clean up confirmed corrupted writes", async () => {
   const adapter = new CorruptingWriteProfilePersistenceAdapter();
   const subjectKey = createRecommendationProfileSubjectKey({ subjectId: "subject-1" });
 
@@ -164,7 +241,8 @@ test("safe profile persistence verifies persisted bytes and deletes corrupted wr
     () => writeRecommendationProfileStoreRecordSafely(adapter, {
       subjectId: "subject-1",
       writtenAt: "2026-05-16T01:00:00.000Z",
-      profile: profileSnapshot()
+      profile: profileSnapshot(),
+      deleteOnVerificationFailure: true
     }),
     (error) => assertPersistenceError(error, "persistence.error.write_verification_failed")
   );
