@@ -1,4 +1,5 @@
 import {
+  RECOMMENDATION_DATA_USES,
   type RecommendationConsentEvaluation,
   type RecommendationConsentPolicy,
   type RecommendationDataUse,
@@ -7,7 +8,10 @@ import {
   type RecommendationSourceVisibility
 } from "./consent.js";
 import { requireRecommendationConsent } from "./consent-enforcement.js";
-import type { RecommendationInterestPrivacyBoundary } from "./interest-signal.js";
+import {
+  RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES,
+  type RecommendationInterestPrivacyBoundary
+} from "./interest-signal.js";
 import type {
   RecommendationProfilePersistenceAdapter,
   RecommendationProfilePersistenceDeleteInput,
@@ -40,6 +44,7 @@ export type RecommendationProfilePersistenceStorageTarget = typeof RECOMMENDATIO
 export type RecommendationProfilePersistenceOperation = "read" | "write" | "delete";
 
 export type RecommendationProfilePersistenceReasonCode =
+  | "persistence.deny.aggregate_subject_profile"
   | "persistence.deny.ephemeral_durable_write"
   | "persistence.deny.server_consent_required"
   | "persistence.error.adapter_read_failed"
@@ -102,6 +107,8 @@ const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_o
 const PERSISTENCE_PROTOCOL: RecommendationProtocol = "app_local";
 const PERSISTENCE_VISIBILITY: RecommendationSourceVisibility = "local_only";
 const STORAGE_TARGET_SET = new Set<string>(RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS);
+const DATA_USE_SET = new Set<string>(RECOMMENDATION_DATA_USES);
+const PRIVACY_BOUNDARY_SET = new Set<string>(RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -127,6 +134,22 @@ function normalizeStorageTarget(value: unknown): RecommendationProfilePersistenc
   }
 
   return value as RecommendationProfilePersistenceStorageTarget;
+}
+
+function normalizeDataUse(value: unknown): RecommendationDataUse {
+  if (typeof value !== "string" || !DATA_USE_SET.has(value)) {
+    throw new TypeError("Invalid recommendation profile persistence data use.");
+  }
+
+  return value as RecommendationDataUse;
+}
+
+function normalizePrivacyBoundary(value: unknown): RecommendationInterestPrivacyBoundary {
+  if (typeof value !== "string" || !PRIVACY_BOUNDARY_SET.has(value)) {
+    throw new TypeError("Invalid recommendation profile persistence privacy boundary.");
+  }
+
+  return value as RecommendationInterestPrivacyBoundary;
 }
 
 function assertPersistenceAdapter(adapter: RecommendationProfilePersistenceAdapter): void {
@@ -175,16 +198,21 @@ async function enforceWriteConsent(
     throw createPersistenceError("write", "persistence.deny.ephemeral_durable_write", storageTarget);
   }
 
+  const dataUse = normalizeDataUse(input.dataUse ?? DEFAULT_DATA_USE);
+  const privacyBoundary = normalizePrivacyBoundary(input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY);
+  if (privacyBoundary === "aggregate_only") {
+    throw createPersistenceError("write", "persistence.deny.aggregate_subject_profile", storageTarget);
+  }
+
+  const serverSideProcessing = requiresServerSideConsent(storageTarget) || privacyBoundary === "server_allowed";
   const policy = input.policy;
   if (policy === undefined || policy === null) {
-    if (requiresServerSideConsent(storageTarget)) {
+    if (serverSideProcessing) {
       throw createPersistenceError("write", "persistence.deny.server_consent_required", storageTarget);
     }
     return undefined;
   }
 
-  const dataUse = input.dataUse ?? DEFAULT_DATA_USE;
-  const privacyBoundary = input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY;
   return requireRecommendationConsent(
     policy,
     Object.freeze({
@@ -195,7 +223,7 @@ async function enforceWriteConsent(
       accessBasis: "owner",
       containsPrivateData: true,
       containsThirdPartyData: false,
-      serverSideProcessing: requiresServerSideConsent(storageTarget) || privacyBoundary === "server_allowed"
+      serverSideProcessing
     })
   );
 }
