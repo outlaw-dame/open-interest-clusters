@@ -44,9 +44,9 @@ function profileSnapshot(): RecommendationProfileSnapshot {
 function explicitProfileConsent(subjectId: string): RecommendationConsentPolicy {
   return Object.freeze({
     subjectId,
-    allowedDataUses: ["local_personalization"],
-    privateDataUses: ["local_personalization"],
-    serverSideDataUses: ["local_personalization"]
+    allowedDataUses: ["local_personalization" as const],
+    privateDataUses: ["local_personalization" as const],
+    serverSideDataUses: ["local_personalization" as const]
   });
 }
 
