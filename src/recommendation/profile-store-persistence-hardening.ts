@@ -25,11 +25,10 @@ import {
 } from "./profile-store-persistence-key.js";
 import {
   createRecommendationProfileStoreRecord,
-  normalizeRecommendationProfileStoreRecord,
-  serializeRecommendationProfileStoreRecord
+  normalizeRecommendationProfileStoreRecord
 } from "./profile-store-persistence-record.js";
 import { createEmptyRecommendationProfileSnapshot } from "./profile-store-persistence-snapshot.js";
-import type { RecommendationProfileSnapshot } from "./profile-store.js";
+import type { RecommendationProfileEntry, RecommendationProfileSnapshot } from "./profile-store.js";
 
 export const RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS = [
   "local_app",
@@ -39,7 +38,10 @@ export const RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS = [
   "ephemeral_session"
 ] as const;
 
+export const RECOMMENDATION_PROFILE_PERSISTENCE_VERIFICATION_CONSISTENCIES = ["strong", "eventual"] as const;
+
 export type RecommendationProfilePersistenceStorageTarget = typeof RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS[number];
+export type RecommendationProfilePersistenceVerificationConsistency = typeof RECOMMENDATION_PROFILE_PERSISTENCE_VERIFICATION_CONSISTENCIES[number];
 
 export type RecommendationProfilePersistenceOperation = "read" | "write" | "delete";
 
@@ -66,6 +68,7 @@ export interface HardenedRecommendationProfilePersistenceWriteInput
     RecommendationProfilePersistenceConsentInput {
   verifyWrite?: boolean;
   deleteOnVerificationFailure?: boolean;
+  verificationConsistency?: RecommendationProfilePersistenceVerificationConsistency;
 }
 
 export interface HardenedRecommendationProfilePersistenceReadInput extends RecommendationProfilePersistenceReadInput {
@@ -80,6 +83,7 @@ export interface HardenedRecommendationProfilePersistenceWriteResult {
   record: RecommendationProfileStoreRecord;
   storageTarget: RecommendationProfilePersistenceStorageTarget;
   verified: boolean;
+  verificationConsistency: RecommendationProfilePersistenceVerificationConsistency;
   consent?: RecommendationConsentEvaluation;
 }
 
@@ -107,6 +111,7 @@ const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_o
 const PERSISTENCE_PROTOCOL: RecommendationProtocol = "app_local";
 const PERSISTENCE_VISIBILITY: RecommendationSourceVisibility = "local_only";
 const STORAGE_TARGET_SET = new Set<string>(RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS);
+const VERIFICATION_CONSISTENCY_SET = new Set<string>(RECOMMENDATION_PROFILE_PERSISTENCE_VERIFICATION_CONSISTENCIES);
 const DATA_USE_SET = new Set<string>(RECOMMENDATION_DATA_USES);
 const PRIVACY_BOUNDARY_SET = new Set<string>(RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES);
 
@@ -124,6 +129,72 @@ function assertTimestamp(value: unknown): void {
   }
 }
 
+function timestampMillis(value: string): number {
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis)) {
+    throw new TypeError("Invalid recommendation profile timestamp.");
+  }
+
+  return millis;
+}
+
+function timestampsEqual(left: string, right: string): boolean {
+  return timestampMillis(left) === timestampMillis(right);
+}
+
+function optionalTimestampsEqual(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  return timestampsEqual(left, right);
+}
+
+function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function profileEntriesEqual(left: RecommendationProfileEntry, right: RecommendationProfileEntry): boolean {
+  return (
+    left.target.kind === right.target.kind &&
+    left.target.key === right.target.key &&
+    Object.is(left.score, right.score) &&
+    Object.is(left.confidence, right.confidence) &&
+    left.signalCount === right.signalCount &&
+    left.positiveSignalCount === right.positiveSignalCount &&
+    left.negativeSignalCount === right.negativeSignalCount &&
+    left.neutralSignalCount === right.neutralSignalCount &&
+    arraysEqual(left.privacyBoundaries, right.privacyBoundaries) &&
+    arraysEqual(left.protocols, right.protocols) &&
+    arraysEqual(left.sourceVisibilities, right.sourceVisibilities) &&
+    timestampsEqual(left.updatedAt, right.updatedAt) &&
+    optionalTimestampsEqual(left.expiresAt, right.expiresAt)
+  );
+}
+
+function profilesEqual(left: RecommendationProfileSnapshot, right: RecommendationProfileSnapshot): boolean {
+  return (
+    left.schemaVersion === right.schemaVersion &&
+    left.signalCount === right.signalCount &&
+    timestampsEqual(left.updatedAt, right.updatedAt) &&
+    left.entries.length === right.entries.length &&
+    left.entries.every((entry, index) => {
+      const rightEntry = right.entries[index];
+      return rightEntry !== undefined && profileEntriesEqual(entry, rightEntry);
+    })
+  );
+}
+
+function profileRecordsEqual(left: RecommendationProfileStoreRecord, right: RecommendationProfileStoreRecord): boolean {
+  return (
+    left.schemaVersion === right.schemaVersion &&
+    left.subjectKey === right.subjectKey &&
+    timestampsEqual(left.writtenAt, right.writtenAt) &&
+    optionalTimestampsEqual(left.expiresAt, right.expiresAt) &&
+    profilesEqual(left.profile, right.profile)
+  );
+}
+
 function normalizeStorageTarget(value: unknown): RecommendationProfilePersistenceStorageTarget {
   if (value === undefined) {
     return DEFAULT_STORAGE_TARGET;
@@ -134,6 +205,33 @@ function normalizeStorageTarget(value: unknown): RecommendationProfilePersistenc
   }
 
   return value as RecommendationProfilePersistenceStorageTarget;
+}
+
+function normalizeVerificationConsistency(
+  value: unknown,
+  storageTarget: RecommendationProfilePersistenceStorageTarget
+): RecommendationProfilePersistenceVerificationConsistency {
+  if (value === undefined) {
+    return storageTarget === "local_app" ? "strong" : "eventual";
+  }
+
+  if (typeof value !== "string" || !VERIFICATION_CONSISTENCY_SET.has(value)) {
+    throw new TypeError("Invalid recommendation profile persistence verification consistency.");
+  }
+
+  return value as RecommendationProfilePersistenceVerificationConsistency;
+}
+
+function normalizeOptionalBoolean(value: unknown, message: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    throw new TypeError(message);
+  }
+
+  return value;
 }
 
 function normalizeDataUse(value: unknown): RecommendationDataUse {
@@ -190,13 +288,43 @@ function createPersistenceError(
   return new RecommendationProfilePersistenceError(operation, reason, storageTarget);
 }
 
+function shouldVerifyWrite(
+  verifyWrite: boolean | undefined,
+  consistency: RecommendationProfilePersistenceVerificationConsistency
+): boolean {
+  if (verifyWrite !== undefined) {
+    return verifyWrite;
+  }
+
+  return consistency === "strong";
+}
+
+function shouldCleanupVerificationFailure(
+  deleteOnVerificationFailure: boolean | undefined,
+  consistency: RecommendationProfilePersistenceVerificationConsistency
+): boolean {
+  return deleteOnVerificationFailure === true && consistency === "strong";
+}
+
+function assertNoAggregateOnlyProfileState(
+  profile: RecommendationProfileSnapshot,
+  storageTarget: RecommendationProfilePersistenceStorageTarget
+): void {
+  if (profile.entries.some((entry) => entry.privacyBoundaries.includes("aggregate_only"))) {
+    throw createPersistenceError("write", "persistence.deny.aggregate_subject_profile", storageTarget);
+  }
+}
+
 async function enforceWriteConsent(
   input: HardenedRecommendationProfilePersistenceWriteInput,
-  storageTarget: RecommendationProfilePersistenceStorageTarget
+  storageTarget: RecommendationProfilePersistenceStorageTarget,
+  profile: RecommendationProfileSnapshot
 ): Promise<RecommendationConsentEvaluation | undefined> {
   if (storageTarget === "ephemeral_session") {
     throw createPersistenceError("write", "persistence.deny.ephemeral_durable_write", storageTarget);
   }
+
+  assertNoAggregateOnlyProfileState(profile, storageTarget);
 
   const dataUse = normalizeDataUse(input.dataUse ?? DEFAULT_DATA_USE);
   const privacyBoundary = normalizePrivacyBoundary(input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY);
@@ -240,19 +368,27 @@ async function deleteRecordBestEffort(
   }
 }
 
+async function cleanupConfirmedVerificationFailure(
+  adapter: RecommendationProfilePersistenceAdapter,
+  subjectKey: string,
+  storageTarget: RecommendationProfilePersistenceStorageTarget,
+  shouldCleanup: boolean
+): Promise<void> {
+  if (shouldCleanup) {
+    await deleteRecordBestEffort(adapter, subjectKey, storageTarget);
+  }
+}
+
 async function verifyWrittenRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   record: RecommendationProfileStoreRecord,
-  input: HardenedRecommendationProfilePersistenceWriteInput,
-  storageTarget: RecommendationProfilePersistenceStorageTarget
+  storageTarget: RecommendationProfilePersistenceStorageTarget,
+  shouldCleanup: boolean
 ): Promise<void> {
   let raw: unknown;
   try {
     raw = await adapter.readProfileRecord(record.subjectKey);
   } catch {
-    if (input.deleteOnVerificationFailure !== false) {
-      await deleteRecordBestEffort(adapter, record.subjectKey, storageTarget);
-    }
     throw createPersistenceError("write", "persistence.error.write_verification_failed", storageTarget);
   }
 
@@ -260,16 +396,12 @@ async function verifyWrittenRecord(
   try {
     normalized = normalizeRecommendationProfileStoreRecord(raw, { pruneExpiredEntries: false });
   } catch {
-    if (input.deleteOnVerificationFailure !== false) {
-      await deleteRecordBestEffort(adapter, record.subjectKey, storageTarget);
-    }
+    await cleanupConfirmedVerificationFailure(adapter, record.subjectKey, storageTarget, shouldCleanup);
     throw createPersistenceError("write", "persistence.error.write_verification_failed", storageTarget);
   }
 
-  if (normalized === null || serializeRecommendationProfileStoreRecord(normalized) !== serializeRecommendationProfileStoreRecord(record)) {
-    if (input.deleteOnVerificationFailure !== false) {
-      await deleteRecordBestEffort(adapter, record.subjectKey, storageTarget);
-    }
+  if (normalized === null || !profileRecordsEqual(normalized, record)) {
+    await cleanupConfirmedVerificationFailure(adapter, record.subjectKey, storageTarget, shouldCleanup);
     throw createPersistenceError("write", "persistence.error.write_verification_failed", storageTarget);
   }
 }
@@ -280,8 +412,16 @@ export async function writeRecommendationProfileStoreRecordSafely(
 ): Promise<HardenedRecommendationProfilePersistenceWriteResult> {
   assertPersistenceAdapter(adapter);
   const storageTarget = normalizeStorageTarget(input.storageTarget);
-  const consent = await enforceWriteConsent(input, storageTarget);
+  const verificationConsistency = normalizeVerificationConsistency(input.verificationConsistency, storageTarget);
+  const verifyWrite = normalizeOptionalBoolean(input.verifyWrite, "Invalid recommendation profile persistence verification option.");
+  const deleteOnVerificationFailure = normalizeOptionalBoolean(
+    input.deleteOnVerificationFailure,
+    "Invalid recommendation profile persistence cleanup option."
+  );
+  const shouldVerify = shouldVerifyWrite(verifyWrite, verificationConsistency);
+  const shouldCleanup = shouldCleanupVerificationFailure(deleteOnVerificationFailure, verificationConsistency);
   const record = createRecommendationProfileStoreRecord(input);
+  const consent = await enforceWriteConsent(input, storageTarget, record.profile);
 
   try {
     await adapter.writeProfileRecord(record);
@@ -289,15 +429,15 @@ export async function writeRecommendationProfileStoreRecordSafely(
     throw createPersistenceError("write", "persistence.error.adapter_write_failed", storageTarget);
   }
 
-  const shouldVerify = input.verifyWrite !== false;
   if (shouldVerify) {
-    await verifyWrittenRecord(adapter, record, input, storageTarget);
+    await verifyWrittenRecord(adapter, record, storageTarget, shouldCleanup);
   }
 
   return Object.freeze({
     record,
     storageTarget,
     verified: shouldVerify,
+    verificationConsistency,
     ...(consent === undefined ? {} : { consent })
   });
 }
