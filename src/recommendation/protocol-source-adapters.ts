@@ -17,10 +17,12 @@ import {
   RECOMMENDATION_SOURCE_ADAPTER_CAPABILITIES,
   normalizeRecommendationSourceAdapterReadRequest,
   normalizeRecommendationSourceAdapterReadResult,
+  normalizeRecommendationSourceItem,
   type RecommendationSourceAdapter,
   type RecommendationSourceAdapterCapability,
   type RecommendationSourceAdapterReadRequest,
   type RecommendationSourceAdapterReadResult,
+  type RecommendationSourceContext,
   type RecommendationSourceItem
 } from "./source-adapter.js";
 
@@ -154,7 +156,7 @@ function normalizeMaxRecordsPerRead(value: unknown): number {
     return DEFAULT_MAX_RECORDS_PER_READ;
   }
 
-  if (!Number.isInteger(value) || typeof value !== "number" || value < 1 || value > MAX_RECORDS_PER_READ) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_RECORDS_PER_READ) {
     throw new TypeError("Invalid protocol source max records per read.");
   }
 
@@ -248,12 +250,34 @@ function authorizationRequiresPrivateRead(authorization: RecommendationProtocolS
   return authorization.containsPrivateData === true || privateVisibility(authorization.sourceVisibility);
 }
 
+function sourceItemRequiresPrivateRead(item: RecommendationSourceItem): boolean {
+  return item.context.containsPrivateData === true || privateVisibility(item.context.sourceVisibility);
+}
+
 function requireCapabilitiesForAuthorization(
   capabilities: readonly RecommendationSourceAdapterCapability[],
   authorization: RecommendationProtocolSourceReadAuthorization
 ): void {
   if (authorizationRequiresPrivateRead(authorization) && !capabilities.includes("read_private_with_authorization")) {
     throw new TypeError("Protocol source adapter lacks private-read authorization capability.");
+  }
+}
+
+function requireCapabilitiesForSourceItem(
+  capabilities: readonly RecommendationSourceAdapterCapability[],
+  item: RecommendationSourceItem
+): void {
+  if (sourceItemRequiresPrivateRead(item) && !capabilities.includes("read_private_with_authorization")) {
+    throw new TypeError("Protocol source adapter lacks private-read authorization capability.");
+  }
+}
+
+function requireAuthorizationCoversSourceItem(
+  authorization: RecommendationProtocolSourceReadAuthorization,
+  item: RecommendationSourceItem
+): void {
+  if (sourceItemRequiresPrivateRead(item) && !authorizationRequiresPrivateRead(authorization)) {
+    throw new TypeError("Protocol source read authorization does not cover private source item.");
   }
 }
 
@@ -283,6 +307,54 @@ function normalizeProviderReadResult<TRecord>(
   return Object.freeze(result);
 }
 
+function providerPolicyFlag(
+  sourceValue: boolean | undefined,
+  authorizationValue: boolean | undefined
+): boolean | undefined {
+  if (sourceValue === false || authorizationValue === false) return false;
+  if (sourceValue === true || authorizationValue === true) return true;
+  return undefined;
+}
+
+function sourceContextWithAuthorization(
+  context: RecommendationSourceContext,
+  authorization: RecommendationProtocolSourceReadAuthorization
+): RecommendationSourceContext {
+  const next: RecommendationSourceContext = {
+    ...context,
+    containsPrivateData:
+      context.containsPrivateData === true ||
+      authorization.containsPrivateData === true ||
+      privateVisibility(context.sourceVisibility)
+  };
+  const containsThirdPartyData = context.containsThirdPartyData === true || authorization.containsThirdPartyData === true;
+  const serverSideProcessing = context.serverSideProcessing === true || authorization.serverSideProcessing === true;
+  const providerPolicyAllowsProcessing = providerPolicyFlag(
+    context.providerPolicyAllowsProcessing,
+    authorization.providerPolicyAllowsProcessing
+  );
+
+  if (containsThirdPartyData) next.containsThirdPartyData = true;
+  if (serverSideProcessing) next.serverSideProcessing = true;
+  if (providerPolicyAllowsProcessing !== undefined) next.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
+  return Object.freeze(next);
+}
+
+function applyAuthorizationToSourceItem(
+  item: RecommendationSourceItem,
+  authorization: RecommendationProtocolSourceReadAuthorization,
+  capabilities: readonly RecommendationSourceAdapterCapability[]
+): RecommendationSourceItem {
+  requireAuthorizationCoversSourceItem(authorization, item);
+  requireCapabilitiesForSourceItem(capabilities, item);
+
+  return normalizeRecommendationSourceItem({
+    kind: item.kind,
+    context: sourceContextWithAuthorization(item.context, authorization),
+    provenance: item.provenance
+  });
+}
+
 function mergeAuthorizationIntoNormalizerOptions(
   base: RecommendationProtocolSourceNormalizerOptions,
   adapterId: string,
@@ -295,16 +367,18 @@ function mergeAuthorizationIntoNormalizerOptions(
     sourceSystem
   };
 
-  if (authorization.containsThirdPartyData !== undefined && next.containsThirdPartyData === undefined) {
-    next.containsThirdPartyData = authorization.containsThirdPartyData;
+  if (authorization.containsThirdPartyData === true) {
+    next.containsThirdPartyData = true;
   }
 
-  if (authorization.serverSideProcessing !== undefined && next.serverSideProcessing === undefined) {
-    next.serverSideProcessing = authorization.serverSideProcessing;
+  if (authorization.serverSideProcessing === true) {
+    next.serverSideProcessing = true;
   }
 
-  if (authorization.providerPolicyAllowsProcessing !== undefined && next.providerPolicyAllowsProcessing === undefined) {
-    next.providerPolicyAllowsProcessing = authorization.providerPolicyAllowsProcessing;
+  if (authorization.providerPolicyAllowsProcessing === false) {
+    next.providerPolicyAllowsProcessing = false;
+  } else if (authorization.providerPolicyAllowsProcessing === true && next.providerPolicyAllowsProcessing === undefined) {
+    next.providerPolicyAllowsProcessing = true;
   }
 
   return Object.freeze(next);
@@ -396,7 +470,7 @@ export function createActivityPubRecommendationSourceAdapter(
       for (const record of providerResult.records) {
         const item = createActivityPubRecommendationSourceItem(record, normalizerOptions);
         if (item !== null) {
-          items.push(item);
+          items.push(applyAuthorizationToSourceItem(item, providerResult.authorization, safeInput.capabilities));
         }
       }
 
@@ -437,7 +511,7 @@ export function createAtprotoRecommendationSourceAdapter(
       for (const record of providerResult.records) {
         const item = createAtprotoRecommendationSourceItem(record, normalizerOptions);
         if (item !== null) {
-          items.push(item);
+          items.push(applyAuthorizationToSourceItem(item, providerResult.authorization, safeInput.capabilities));
         }
       }
 
