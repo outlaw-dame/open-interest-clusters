@@ -184,7 +184,8 @@ function parseStrictRfc3339Timestamp(value: unknown): ParsedRfc3339Timestamp | n
     minute < 0 ||
     minute > 59 ||
     second < 0 ||
-    second > 60
+    second > 60 ||
+    (second === 60 && minute !== 59)
   ) {
     return null;
   }
