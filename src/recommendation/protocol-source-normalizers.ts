@@ -163,7 +163,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127 || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
+    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
       return true;
     }
   }
@@ -172,33 +172,46 @@ function hasControlCharacter(value: string): boolean {
 }
 
 function isBoundedIdentifier(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= MAX_PROTOCOL_ID_LENGTH &&
-    !hasControlCharacter(value)
-  );
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_PROTOCOL_ID_LENGTH && !hasControlCharacter(value);
 }
 
 function requiredBoundedIdentifier(value: unknown, label: string): string {
-  if (!isBoundedIdentifier(value)) throw new TypeError(`Invalid ${label}.`);
+  if (!isBoundedIdentifier(value)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
   return value;
 }
 
 function optionalBoundedIdentifier(value: unknown, label: string): string | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
   return requiredBoundedIdentifier(value, label);
 }
 
 function optionalText(value: unknown, label: string): string | null | undefined {
-  if (value === undefined || value === null) return value;
-  if (typeof value !== "string" || value.length > MAX_PROTOCOL_TEXT_LENGTH) throw new TypeError(`Invalid ${label}.`);
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (typeof value !== "string" || value.length > MAX_PROTOCOL_TEXT_LENGTH) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
   return value;
 }
 
 function optionalStringList(value: unknown, maxCount: number, label: string): readonly string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > maxCount) throw new TypeError(`Invalid ${label}.`);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value) || value.length > maxCount) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
   return Object.freeze(value.map((item) => requiredBoundedIdentifier(item, label)));
 }
 
@@ -225,15 +238,15 @@ function optionalHttpUrl(value: unknown, label: string): string | undefined {
 
 function isDidMethodChar(char: string): boolean {
   const code = char.charCodeAt(0);
-  return (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+  return (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39);
 }
 
 function isDidIdentifierChar(char: string): boolean {
   const code = char.charCodeAt(0);
   return (
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    (code >= 48 && code <= 57) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
     char === "." ||
     char === "_" ||
     char === ":" ||
@@ -245,20 +258,101 @@ function isDidIdentifierChar(char: string): boolean {
 function normalizeDid(value: unknown, label: string): string {
   const raw = requiredBoundedIdentifier(value, label).trim();
   const parts = raw.split(":");
-  if (parts.length < 3 || parts[0] !== "did" || parts[1]?.length === 0 || parts.slice(2).join(":").length === 0) {
+  const method = parts[1] ?? "";
+  const identifier = parts.slice(2).join(":");
+  if (parts.length < 3 || parts[0] !== "did" || method.length === 0 || identifier.length === 0) {
     throw new TypeError(`Invalid ${label}.`);
   }
 
-  if (![...(parts[1] ?? "")].every(isDidMethodChar) || ![...parts.slice(2).join(":")].every(isDidIdentifierChar)) {
+  if (![...method].every(isDidMethodChar) || ![...identifier].every(isDidIdentifierChar)) {
     throw new TypeError(`Invalid ${label}.`);
   }
 
   return raw;
 }
 
+function isHandleLabelChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || char === "-";
+}
+
+function isAtprotoHandleAuthority(value: string): boolean {
+  if (value.length === 0 || value.length > 253 || value.startsWith(".") || value.endsWith(".")) {
+    return false;
+  }
+
+  const labels = value.toLocaleLowerCase("en-US").split(".");
+  if (labels.length < 2) {
+    return false;
+  }
+
+  return labels.every((label) => {
+    if (label.length === 0 || label.length > 63 || label.startsWith("-") || label.endsWith("-")) {
+      return false;
+    }
+
+    return [...label].every(isHandleLabelChar);
+  });
+}
+
+function isAtUriPathSegmentChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    char === "." ||
+    char === "_" ||
+    char === "-" ||
+    char === "~" ||
+    char === "%" ||
+    char === ":"
+  );
+}
+
+function assertAtprotoAuthority(value: string, label: string): void {
+  if (value.includes("@") || value.includes("/") || value.includes("?") || value.includes("#")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  if (value.startsWith("did:")) {
+    normalizeDid(value, label);
+    return;
+  }
+
+  if (!isAtprotoHandleAuthority(value)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+}
+
+function assertAtUriPath(value: string, label: string): void {
+  const segments = value.split("/");
+  if (segments.length < 2) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  for (const segment of segments) {
+    if (segment.length === 0 || segment.length > MAX_PROTOCOL_ID_LENGTH || ![...segment].every(isAtUriPathSegmentChar)) {
+      throw new TypeError(`Invalid ${label}.`);
+    }
+  }
+}
+
 function normalizeAtUri(value: unknown, label: string): string {
   const raw = requiredBoundedIdentifier(value, label).trim();
-  if (!raw.startsWith("at://") || raw.includes("#") || raw.includes("?")) throw new TypeError(`Invalid ${label}.`);
+  const scheme = "at://";
+  if (!raw.startsWith(scheme) || raw.includes("#") || raw.includes("?")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  const rest = raw.slice(scheme.length);
+  const slashIndex = rest.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === rest.length - 1) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  assertAtprotoAuthority(rest.slice(0, slashIndex), label);
+  assertAtUriPath(rest.slice(slashIndex + 1), label);
   return raw;
 }
 
@@ -267,7 +361,10 @@ function optionalAtUri(value: unknown, label: string): string | undefined {
 }
 
 function knownValue<T extends string>(set: ReadonlySet<string>, value: unknown, label: string): T {
-  if (typeof value !== "string" || !set.has(value)) throw new TypeError(`Invalid ${label}.`);
+  if (typeof value !== "string" || !set.has(value)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
   return value as T;
 }
 
@@ -446,7 +543,6 @@ function normalizeProtocolOptions(
   const containsThirdPartyData = optionalBoolean(options.containsThirdPartyData, "protocol third-party data flag");
   const serverSideProcessing = optionalBoolean(options.serverSideProcessing, "protocol server-side processing flag");
   const providerPolicyAllowsProcessing = optionalBoolean(options.providerPolicyAllowsProcessing, "protocol provider policy flag");
-
   if (includeMirroredEvents !== undefined) normalized.includeMirroredEvents = includeMirroredEvents;
   if (containsThirdPartyData !== undefined) normalized.containsThirdPartyData = containsThirdPartyData;
   if (serverSideProcessing !== undefined) normalized.serverSideProcessing = serverSideProcessing;
@@ -470,6 +566,15 @@ function addCanonicalOptionalFlags(
   if (input.serverSideProcessing !== undefined) event.serverSideProcessing = input.serverSideProcessing;
   if (input.providerPolicyAllowsProcessing !== undefined) event.providerPolicyAllowsProcessing = input.providerPolicyAllowsProcessing;
   return event;
+}
+
+function shouldIncludeDirectAtprotoRecord(
+  input: RecommendationAtprotoNormalizedRecordEvent,
+  options: CanonicalRecommendationSourceOptions
+): boolean {
+  if (input.projectionMode === undefined || input.projectionMode === "native") return true;
+  if (input.projectionMode === "mirrored") return options.includeMirroredEvents === true;
+  throw new TypeError("Invalid ATProto recommendation projection mode.");
 }
 
 export function toCanonicalActivityPubRecommendationEvent(input: RecommendationActivityPubNormalizedEvent): CanonicalRecommendationEvent {
@@ -500,10 +605,7 @@ export function toCanonicalActivityPubRecommendationEvent(input: RecommendationA
     visibility: activityPubCanonicalVisibility(visibility),
     createdAt: timestampFromNullable(publishedAt, timestampFromNullable(updatedAt, observedAt)),
     observedAt,
-    actor: Object.freeze({
-      activityPubActorUri: actorUri,
-      ...(actorHandle === undefined ? {} : { handle: actorHandle })
-    }),
+    actor: Object.freeze({ activityPubActorUri: actorUri, ...(actorHandle === undefined ? {} : { handle: actorHandle }) }),
     content: buildContentSummary(input, contentKindFromActivityPub(type, objectType))
   };
 
@@ -524,10 +626,7 @@ export function createActivityPubRecommendationSourceItem(
 ): RecommendationSourceItem | null {
   return createCanonicalRecommendationSourceItem(
     toCanonicalActivityPubRecommendationEvent(input),
-    normalizeProtocolOptions(options, {
-      adapterId: ACTIVITYPUB_RECOMMENDATION_SOURCE_NORMALIZER_ID,
-      sourceSystem: DEFAULT_ACTIVITYPUB_SOURCE_SYSTEM
-    })
+    normalizeProtocolOptions(options, { adapterId: ACTIVITYPUB_RECOMMENDATION_SOURCE_NORMALIZER_ID, sourceSystem: DEFAULT_ACTIVITYPUB_SOURCE_SYSTEM })
   );
 }
 
@@ -542,7 +641,6 @@ export function toCanonicalAtprotoRecommendationEvent(input: RecommendationAtpro
   const collection = knownValue<RecommendationAtprotoNormalizedCollection>(ATPROTO_COLLECTION_SET, input.collection, "ATProto recommendation collection");
   const kind = atprotoKind(operation, collection);
   if (kind === null) throw new TypeError("ATProto recommendation record must be converted directly to a source item.");
-
   const repositoryDid = normalizeDid(input.repositoryDid, "ATProto recommendation repository DID");
   const atUri = normalizeAtUri(input.atUri, "ATProto recommendation AT URI");
   const cid = optionalBoundedIdentifier(input.cid, "ATProto recommendation CID");
@@ -565,14 +663,8 @@ export function toCanonicalAtprotoRecommendationEvent(input: RecommendationAtpro
     visibility: atprotoCanonicalVisibility(repositoryVisibility),
     createdAt: timestampFromNullable(createdAt, timestampFromNullable(indexedAt, observedAt)),
     observedAt,
-    actor: Object.freeze({
-      did: repositoryDid,
-      ...(handle === undefined ? {} : { handle })
-    }),
-    object: Object.freeze({
-      atUri: subjectAtUri ?? atUri,
-      ...(cid === undefined ? {} : { cid })
-    }),
+    actor: Object.freeze({ did: repositoryDid, ...(handle === undefined ? {} : { handle }) }),
+    object: Object.freeze({ atUri: subjectAtUri ?? atUri, ...(cid === undefined ? {} : { cid }) }),
     content: buildContentSummary(input, contentKindFromAtproto(collection))
   };
 
@@ -602,12 +694,10 @@ export function createAtprotoRecommendationSourceItem(
   const operation = knownValue<RecommendationAtprotoNormalizedOperation>(ATPROTO_OPERATION_SET, input.operation, "ATProto recommendation operation");
   const collection = knownValue<RecommendationAtprotoNormalizedCollection>(ATPROTO_COLLECTION_SET, input.collection, "ATProto recommendation collection");
   const directKind = atprotoDirectSourceItemKind(operation, collection);
-  const normalizedOptions = normalizeProtocolOptions(options, {
-    adapterId: ATPROTO_RECOMMENDATION_SOURCE_NORMALIZER_ID,
-    sourceSystem: DEFAULT_ATPROTO_SOURCE_SYSTEM
-  });
+  const normalizedOptions = normalizeProtocolOptions(options, { adapterId: ATPROTO_RECOMMENDATION_SOURCE_NORMALIZER_ID, sourceSystem: DEFAULT_ATPROTO_SOURCE_SYSTEM });
 
   if (directKind === null) return createCanonicalRecommendationSourceItem(toCanonicalAtprotoRecommendationEvent(input), normalizedOptions);
+  if (!shouldIncludeDirectAtprotoRecord(input, normalizedOptions)) return null;
 
   normalizeDid(input.repositoryDid, "ATProto recommendation repository DID");
   if (input.subjectDid !== undefined && input.subjectDid !== null) normalizeDid(input.subjectDid, "ATProto recommendation subject DID");
@@ -625,7 +715,7 @@ export function createAtprotoRecommendationSourceItem(
       sourceSystem: normalizedOptions.sourceSystem ?? DEFAULT_ATPROTO_SOURCE_SYSTEM,
       observedAt,
       trustBoundary: input.trustBoundary ?? normalizedOptions.defaultTrustBoundary ?? DEFAULT_PROTOCOL_TRUST_BOUNDARY,
-      opaqueSourceId: `${operation}:${atUri}`
+      opaqueSourceId: `atproto:${atUri}:${operation}`
     }
   });
 }
