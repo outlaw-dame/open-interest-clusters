@@ -322,10 +322,13 @@ function sourceContextWithAuthorization(
 ): RecommendationSourceContext {
   const next: RecommendationSourceContext = {
     ...context,
+    sourceVisibility: authorization.sourceVisibility,
+    accessBasis: authorization.accessBasis,
     containsPrivateData:
       context.containsPrivateData === true ||
       authorization.containsPrivateData === true ||
-      privateVisibility(context.sourceVisibility)
+      privateVisibility(context.sourceVisibility) ||
+      privateVisibility(authorization.sourceVisibility)
   };
   const containsThirdPartyData = context.containsThirdPartyData === true || authorization.containsThirdPartyData === true;
   const serverSideProcessing = context.serverSideProcessing === true || authorization.serverSideProcessing === true;
