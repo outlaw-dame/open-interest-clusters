@@ -179,7 +179,19 @@ test("protocol evidence read result feeds ActivityPub adapter shells without raw
   assert.equal(allowed.items[0]?.context.serverSideProcessing, true);
 });
 
-test("ActivityPods Solid ACL evidence maps to ACL-controlled private reads", async () => {
+test("ActivityPods Solid ACL evidence creates ACL authorization for provider shells", async () => {
+  const authorization = createProtocolSourceReadAuthorizationFromEvidence({
+    kind: "activitypods.solid_acl_read",
+    subjectId: "reader-1",
+    checkedAt: "2026-05-21T12:05:01.000Z"
+  });
+
+  assert.equal(authorization.sourceVisibility, "acl_controlled");
+  assert.equal(authorization.accessBasis, "solid_acl_read");
+  assert.equal(authorization.containsPrivateData, true);
+  assert.equal(authorization.containsThirdPartyData, false);
+  assert.equal(authorization.serverSideProcessing, true);
+
   const adapter = createActivityPubRecommendationSourceAdapter({
     normalizerOptions: { adapterId: "activitypods-provider", sourceSystem: "activitypods.acl.normalized.v1" },
     read: () =>
@@ -202,8 +214,8 @@ test("ActivityPods Solid ACL evidence maps to ACL-controlled private reads", asy
 
   assert.equal(allowed.items.length, 1);
   assert.equal(allowed.items[0]?.context.protocol, "activitypub");
-  assert.equal(allowed.items[0]?.context.sourceVisibility, "acl_controlled");
-  assert.equal(allowed.items[0]?.context.accessBasis, "solid_acl_read");
+  assert.equal(allowed.items[0]?.context.sourceVisibility, "followers_only");
+  assert.equal(allowed.items[0]?.context.accessBasis, "follower_relationship");
   assert.equal(allowed.items[0]?.context.containsPrivateData, true);
   assert.equal(allowed.items[0]?.context.containsThirdPartyData, undefined);
 });
@@ -232,7 +244,7 @@ test("ATProto public repo evidence remains public and local-processing friendly 
   assert.equal(allowed.items[0]?.context.protocol, "atproto");
   assert.equal(allowed.items[0]?.context.sourceVisibility, "atproto_public_repo");
   assert.equal(allowed.items[0]?.context.accessBasis, "atproto_public_repo");
-  assert.equal(allowed.items[0]?.context.containsPrivateData, undefined);
+  assert.equal(allowed.items[0]?.context.containsPrivateData, false);
   assert.equal(allowed.items[0]?.context.containsThirdPartyData, true);
   assert.equal(allowed.items[0]?.context.serverSideProcessing, undefined);
 });
