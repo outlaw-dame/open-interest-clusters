@@ -174,7 +174,7 @@ test("Fediverse recommendation eligibility allows normalized public discoverable
       indexable: true
     },
     instance: {
-      domain: "example.com"
+      domain: " example.com "
     }
   });
 
@@ -188,7 +188,14 @@ test("Fediverse recommendation eligibility allows normalized public discoverable
 test("Fediverse recommendation eligibility denies non-discoverable, non-indexable, and explicit noindex accounts", () => {
   assert.equal(
     evaluateRecommendationFediverseEligibility({
-      account: { acct: "alice@example.com", discoverable: false, indexable: true }
+      account: { acct: "alice@example.com", indexable: true }
+    }).reason,
+    "excluded.account_discoverable_false"
+  );
+  assert.equal(
+    evaluateRecommendationFediverseEligibility({
+      account: { acct: "alice@example.com", discoverable: false, indexable: true },
+      policy: { requireDiscoverable: false }
     }).reason,
     "excluded.account_discoverable_false"
   );
@@ -212,13 +219,13 @@ test("Fediverse recommendation eligibility respects account opt-out tags", () =>
       acct: "alice@example.com",
       discoverable: true,
       indexable: true,
-      profileTags: ["#" + "no" + "ai", "#NoIndex"]
+      profileTags: ["#" + "no" + "ai", "#NoIndex", "#NoScraping", "#Robotxt", "#!!!"]
     }
   });
 
   assert.equal(result.eligible, false);
   assert.equal(result.reason, "excluded.account_opt_out_tag");
-  assert.equal(result.matchedOptOutTagCount, 2);
+  assert.equal(result.matchedOptOutTagCount, 4);
 });
 
 test("Fediverse recommendation eligibility applies instance and provider denial policy", () => {
