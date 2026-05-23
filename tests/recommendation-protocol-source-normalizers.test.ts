@@ -42,6 +42,17 @@ const atprotoPost: RecommendationAtprotoNormalizedRecordEvent = {
   plaintext: "ATProto public repo signal"
 };
 
+const atprotoBlock: RecommendationAtprotoNormalizedRecordEvent = {
+  operation: "create",
+  repositoryDid: "did:plc:alice123",
+  collection: "app.bsky.graph.block",
+  atUri: "at://did:plc:alice123/app.bsky.graph.block/block1",
+  subjectDid: "did:plc:bob456",
+  repositoryVisibility: "public_repo",
+  observedAt: "2026-05-20T13:01:00.000Z",
+  containsThirdPartyData: true
+};
+
 test("ActivityPub normalizer maps private/followers visibility before consent", () => {
   const event = toCanonicalActivityPubRecommendationEvent(activityPubNote);
   assert.equal(event.kind, "PostCreate");
@@ -130,16 +141,7 @@ test("ATProto normalizer maps public repo posts to public-repo source context", 
 });
 
 test("ATProto normalizer maps block records directly to block source items", () => {
-  const item = createAtprotoRecommendationSourceItem({
-    operation: "create",
-    repositoryDid: "did:plc:alice123",
-    collection: "app.bsky.graph.block",
-    atUri: "at://did:plc:alice123/app.bsky.graph.block/block1",
-    subjectDid: "did:plc:bob456",
-    repositoryVisibility: "public_repo",
-    observedAt: "2026-05-20T13:01:00.000Z",
-    containsThirdPartyData: true
-  });
+  const item = createAtprotoRecommendationSourceItem(atprotoBlock);
 
   assert.notEqual(item, null);
   assert.equal(item?.kind, "block");
@@ -148,7 +150,19 @@ test("ATProto normalizer maps block records directly to block source items", () 
   assert.equal(item?.context.accessBasis, "atproto_public_repo");
   assert.equal(item?.context.containsPrivateData, false);
   assert.equal(item?.context.containsThirdPartyData, true);
-  assert.equal(item?.provenance.opaqueSourceId, "create:at://did:plc:alice123/app.bsky.graph.block/block1");
+  assert.equal(item?.provenance.opaqueSourceId, "atproto:at://did:plc:alice123/app.bsky.graph.block/block1:create");
+});
+
+test("ATProto normalizer applies mirrored filtering to direct block source items", () => {
+  const mirrored = createAtprotoRecommendationSourceItem({ ...atprotoBlock, projectionMode: "mirrored" });
+  assert.equal(mirrored, null);
+
+  const included = createAtprotoRecommendationSourceItem(
+    { ...atprotoBlock, projectionMode: "mirrored" },
+    { includeMirroredEvents: true }
+  );
+  assert.notEqual(included, null);
+  assert.equal(included?.kind, "block");
 });
 
 test("ATProto normalizer rejects invalid operations and unsafe URIs", () => {
@@ -168,6 +182,24 @@ test("ATProto normalizer rejects invalid operations and unsafe URIs", () => {
       createAtprotoRecommendationSourceItem({
         ...atprotoPost,
         atUri: "at://did:plc:alice123/app.bsky.feed.post/post1?bad=true"
+      }),
+    TypeError
+  );
+
+  assert.throws(
+    () =>
+      createAtprotoRecommendationSourceItem({
+        ...atprotoPost,
+        atUri: "at://user:pass@example.com/app.bsky.feed.post/post1"
+      }),
+    TypeError
+  );
+
+  assert.throws(
+    () =>
+      createAtprotoRecommendationSourceItem({
+        ...atprotoPost,
+        atUri: "at://not-a-valid-authority/app.bsky.feed.post/post1"
       }),
     TypeError
   );
