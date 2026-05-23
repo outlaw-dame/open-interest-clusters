@@ -87,6 +87,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function headerValue(value: string | undefined, message: string): string | undefined {
   if (value === undefined) return undefined;
   if (value.length === 0 || /[\r\n]/u.test(value)) throw new TypeError(message);
@@ -275,7 +279,7 @@ function isRetryableStatus(status: number): boolean {
 
 function failure(
   reason: RecommendationFediverseEvidenceFailureReason,
-  input: { status?: number; retryAfterMs?: number } = {}
+  input: { status?: number | undefined; retryAfterMs?: number | undefined } = {}
 ): { ok: false; reason: RecommendationFediverseEvidenceFailureReason; status?: number; retryAfterMs?: number; stale: false } {
   return {
     ok: false,
@@ -342,7 +346,10 @@ export async function fetchMastodonAccountEligibilityEvidence(input: Recommendat
       }
       let account: RecommendationFediverseAccountEligibilityInput;
       try {
-        account = mapMastodonAccountToFediverseEligibilityAccount(rawAccount, { instanceDomain, featuredTags: input.featuredTags });
+        account = mapMastodonAccountToFediverseEligibilityAccount(rawAccount, {
+          instanceDomain,
+          ...(input.featuredTags === undefined ? {} : { featuredTags: input.featuredTags })
+        });
       } catch {
         return failure("invalid_response", { status: response.status });
       }
@@ -356,9 +363,14 @@ export async function fetchMastodonAccountEligibilityEvidence(input: Recommendat
         })
       };
     } catch (error) {
-      if (input.signal?.aborted === true || (error instanceof Error && error.name === "AbortError")) return failure("aborted");
+      if (input.signal?.aborted === true || isAbortError(error)) return failure("aborted");
       if (attempt >= attempts) return failure("network_error", { retryAfterMs: lastRetryAfter });
-      await retrySleep(retryDelay(delayMs, maxDelayMs, lastRetryAfter), input.signal);
+      try {
+        await retrySleep(retryDelay(delayMs, maxDelayMs, lastRetryAfter), input.signal);
+      } catch (sleepError) {
+        if (input.signal?.aborted === true || isAbortError(sleepError)) return failure("aborted");
+        return failure("network_error", { retryAfterMs: lastRetryAfter });
+      }
       delayMs = Math.min(maxDelayMs, delayMs * 2);
     }
   }
@@ -477,10 +489,15 @@ export async function fetchFediverseDomainPolicyList(input: RecommendationFetchF
         })
       };
     } catch (error) {
-      if (input.signal?.aborted === true || (error instanceof Error && error.name === "AbortError")) return failure("aborted");
+      if (input.signal?.aborted === true || isAbortError(error)) return failure("aborted");
       lastFailure = failure("network_error");
       if (attempt >= attempts) break;
-      await retrySleep(retryDelay(delayMs, maxDelayMs, undefined), input.signal);
+      try {
+        await retrySleep(retryDelay(delayMs, maxDelayMs, undefined), input.signal);
+      } catch (sleepError) {
+        if (input.signal?.aborted === true || isAbortError(sleepError)) return failure("aborted");
+        break;
+      }
       delayMs = Math.min(maxDelayMs, delayMs * 2);
     }
   }
