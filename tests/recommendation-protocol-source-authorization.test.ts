@@ -179,7 +179,7 @@ test("protocol evidence read result feeds ActivityPub adapter shells without raw
   assert.equal(allowed.items[0]?.context.serverSideProcessing, true);
 });
 
-test("ActivityPods Solid ACL evidence creates ACL authorization for provider shells", async () => {
+test("ActivityPods Solid ACL evidence projects ACL authorization onto emitted source context", async () => {
   const authorization = createProtocolSourceReadAuthorizationFromEvidence({
     kind: "activitypods.solid_acl_read",
     subjectId: "reader-1",
@@ -214,10 +214,11 @@ test("ActivityPods Solid ACL evidence creates ACL authorization for provider she
 
   assert.equal(allowed.items.length, 1);
   assert.equal(allowed.items[0]?.context.protocol, "activitypub");
-  assert.equal(allowed.items[0]?.context.sourceVisibility, "followers_only");
-  assert.equal(allowed.items[0]?.context.accessBasis, "follower_relationship");
+  assert.equal(allowed.items[0]?.context.sourceVisibility, "acl_controlled");
+  assert.equal(allowed.items[0]?.context.accessBasis, "solid_acl_read");
   assert.equal(allowed.items[0]?.context.containsPrivateData, true);
   assert.equal(allowed.items[0]?.context.containsThirdPartyData, undefined);
+  assert.equal(allowed.items[0]?.context.serverSideProcessing, true);
 });
 
 test("ATProto public repo evidence remains public and local-processing friendly by default", async () => {
