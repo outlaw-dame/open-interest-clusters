@@ -11,7 +11,8 @@ import {
 import {
   createAtprotoSourceContext,
   type RecommendationActivityPubVisibility,
-  type RecommendationAtprotoRepositoryVisibility
+  type RecommendationAtprotoRepositoryVisibility,
+  type RecommendationAtprotoSourceContextInput
 } from "./protocol-source-contexts.js";
 import {
   normalizeRecommendationSourceItem,
@@ -146,8 +147,20 @@ const C1_CONTROL_CODE_BLOCK = 4;
 const ACTIVITYPUB_EVENT_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES);
 const ACTIVITYPUB_UNDO_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES);
 const ACTIVITYPUB_OBJECT_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES);
+const ACTIVITYPUB_VISIBILITY_SET = new Set<string>([
+  "public",
+  "unlisted",
+  "private",
+  "followers_only",
+  "direct",
+  "mentioned_only",
+  "mutuals_only",
+  "local_only",
+  "unknown"
+]);
 const ATPROTO_OPERATION_SET = new Set<string>(RECOMMENDATION_ATPROTO_NORMALIZED_OPERATIONS);
 const ATPROTO_COLLECTION_SET = new Set<string>(RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS);
+const ATPROTO_REPOSITORY_VISIBILITY_SET = new Set<string>(["public_repo", "unknown"]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -496,17 +509,7 @@ export function toCanonicalActivityPubRecommendationEvent(
   const undoType = input.undoType === undefined
     ? undefined
     : knownValue<RecommendationActivityPubNormalizedUndoType>(ACTIVITYPUB_UNDO_TYPE_SET, input.undoType, "ActivityPub recommendation undo type");
-  const visibility = knownValue<RecommendationActivityPubVisibility>(new Set<string>([
-    "public",
-    "unlisted",
-    "private",
-    "followers_only",
-    "direct",
-    "mentioned_only",
-    "mutuals_only",
-    "local_only",
-    "unknown"
-  ]), input.visibility, "ActivityPub recommendation visibility");
+  const visibility = knownValue<RecommendationActivityPubVisibility>(ACTIVITYPUB_VISIBILITY_SET, input.visibility, "ActivityPub recommendation visibility");
   const observedAt = requiredBoundedIdentifier(input.observedAt, "ActivityPub recommendation observed timestamp");
   const activityId = normalizeHttpUrl(input.activityId, "ActivityPub recommendation activity id");
   const actorUri = normalizeHttpUrl(input.actorUri, "ActivityPub recommendation actor URI");
@@ -586,11 +589,16 @@ export function toCanonicalAtprotoRecommendationEvent(
   const handle = optionalBoundedIdentifier(input.handle, "ATProto recommendation handle");
   const repositoryVisibility = input.repositoryVisibility === undefined
     ? undefined
-    : knownValue<RecommendationAtprotoRepositoryVisibility>(new Set<string>(["public_repo", "unknown"]), input.repositoryVisibility, "ATProto recommendation repository visibility");
+    : knownValue<RecommendationAtprotoRepositoryVisibility>(ATPROTO_REPOSITORY_VISIBILITY_SET, input.repositoryVisibility, "ATProto recommendation repository visibility");
   const observedAt = requiredBoundedIdentifier(input.observedAt, "ATProto recommendation observed timestamp");
   const createdAt = optionalBoundedIdentifier(input.createdAt, "ATProto recommendation created timestamp");
   const indexedAt = optionalBoundedIdentifier(input.indexedAt, "ATProto recommendation indexed timestamp");
   const content = buildContentSummary(input, contentKindFromAtproto(collection));
+
+  const objectRef = Object.freeze({
+    atUri: subjectAtUri ?? atUri,
+    ...(cid === undefined ? {} : { cid })
+  });
 
   const event: CanonicalRecommendationEvent = {
     kind,
@@ -603,17 +611,32 @@ export function toCanonicalAtprotoRecommendationEvent(
       did: repositoryDid,
       ...(handle === undefined ? {} : { handle })
     }),
-    object: Object.freeze({
-      atUri,
-      ...(cid === undefined ? {} : { cid })
-    })
+    object: objectRef
   };
 
-  if (subjectAtUri !== undefined) event.object = Object.freeze({ ...event.object, atUri: subjectAtUri });
   if (subjectDid !== undefined) event.subject = Object.freeze({ did: subjectDid });
   if (content !== undefined) event.content = content;
 
   return normalizeCanonicalRecommendationEvent(addCanonicalOptionalFlags(event, input));
+}
+
+function createDirectAtprotoContextInput(
+  input: RecommendationAtprotoNormalizedRecordEvent,
+  normalizedOptions: CanonicalRecommendationSourceOptions,
+  repositoryVisibility: RecommendationAtprotoRepositoryVisibility
+): RecommendationAtprotoSourceContextInput {
+  const contextInput: RecommendationAtprotoSourceContextInput = { repositoryVisibility };
+  const containsThirdPartyData = input.containsThirdPartyData ?? normalizedOptions.containsThirdPartyData;
+  const serverSideProcessing = input.serverSideProcessing ?? normalizedOptions.serverSideProcessing;
+  const providerPolicyAllowsProcessing = input.providerPolicyAllowsProcessing ?? normalizedOptions.providerPolicyAllowsProcessing;
+
+  if (containsThirdPartyData !== undefined) contextInput.containsThirdPartyData = containsThirdPartyData;
+  if (serverSideProcessing !== undefined) contextInput.serverSideProcessing = serverSideProcessing;
+  if (providerPolicyAllowsProcessing !== undefined) {
+    contextInput.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
+  }
+
+  return contextInput;
 }
 
 export function createAtprotoRecommendationSourceItem(
@@ -632,20 +655,16 @@ export function createAtprotoRecommendationSourceItem(
     return createCanonicalRecommendationSourceItem(toCanonicalAtprotoRecommendationEvent(input), normalizedOptions);
   }
 
+  normalizeDid(input.repositoryDid, "ATProto recommendation repository DID");
   const observedAt = requiredBoundedIdentifier(input.observedAt, "ATProto recommendation observed timestamp");
   const atUri = normalizeAtUri(input.atUri, "ATProto recommendation AT URI");
   const repositoryVisibility = input.repositoryVisibility === undefined
     ? "public_repo"
-    : knownValue<RecommendationAtprotoRepositoryVisibility>(new Set<string>(["public_repo", "unknown"]), input.repositoryVisibility, "ATProto recommendation repository visibility");
+    : knownValue<RecommendationAtprotoRepositoryVisibility>(ATPROTO_REPOSITORY_VISIBILITY_SET, input.repositoryVisibility, "ATProto recommendation repository visibility");
 
   return normalizeRecommendationSourceItem({
     kind: directKind,
-    context: createAtprotoSourceContext({
-      repositoryVisibility,
-      containsThirdPartyData: input.containsThirdPartyData ?? normalizedOptions.containsThirdPartyData,
-      serverSideProcessing: input.serverSideProcessing ?? normalizedOptions.serverSideProcessing,
-      providerPolicyAllowsProcessing: input.providerPolicyAllowsProcessing ?? normalizedOptions.providerPolicyAllowsProcessing
-    }),
+    context: createAtprotoSourceContext(createDirectAtprotoContextInput(input, normalizedOptions, repositoryVisibility)),
     provenance: {
       adapterId: normalizedOptions.adapterId ?? ATPROTO_RECOMMENDATION_SOURCE_NORMALIZER_ID,
       sourceSystem: normalizedOptions.sourceSystem ?? DEFAULT_ATPROTO_SOURCE_SYSTEM,
