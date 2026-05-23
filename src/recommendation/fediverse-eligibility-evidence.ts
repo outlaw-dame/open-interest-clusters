@@ -54,6 +54,7 @@ export interface RecommendationFetchFediverseDomainPolicyListInput extends Recom
   source: RecommendationFediverseDomainPolicySource;
   cache?: RecommendationFediverseDomainPolicyListCache;
   allowStaleOnError?: boolean;
+  maxBodyBytes?: number;
   userAgent?: string;
 }
 
@@ -74,10 +75,14 @@ export type RecommendationFetchFediverseDomainPolicyListResult =
   | { ok: false; reason: RecommendationFediverseEvidenceFailureReason; status?: number; retryAfterMs?: number; stale: false };
 
 const DOMAIN_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+const PROFILE_HASHTAG_PATTERN = /^[\p{Letter}\p{Number}_]{1,80}$/u;
+const AUTHORIZATION_HEADER = "Authorization";
+const BEARER_AUTH_SCHEME = "Bearer";
 const MAX_DOMAIN_LENGTH = 253;
 const MAX_IDENTITY_LENGTH = 2048;
 const MAX_TEXT_FIELD_LENGTH = 16_384;
 const MAX_EXTRACTED_TAGS = 128;
+const DEFAULT_MAX_POLICY_LIST_BYTES = 1_048_576;
 const DEFAULT_ATTEMPTS = 4;
 const DEFAULT_INITIAL_DELAY_MS = 300;
 const DEFAULT_MAX_DELAY_MS = 3000;
@@ -89,6 +94,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function abortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
 }
 
 function isSignalAborted(signal: AbortSignal | undefined): boolean {
@@ -104,6 +115,12 @@ function headerValue(value: string | undefined, message: string): string | undef
 function positiveInteger(value: unknown, fallback: number, message: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new TypeError(message);
+  return value;
+}
+
+function positiveNonZeroInteger(value: unknown, fallback: number, message: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new TypeError(message);
   return value;
 }
 
@@ -201,31 +218,50 @@ function boundedString(value: unknown): string | undefined {
   return typeof value === "string" ? value.slice(0, MAX_TEXT_FIELD_LENGTH) : undefined;
 }
 
+function addProfileTag(tags: Set<string>, tag: unknown): void {
+  if (typeof tag !== "string") return;
+  const normalized = tag.trim().replace(/^#/u, "");
+  if (PROFILE_HASHTAG_PATTERN.test(normalized)) tags.add(normalized);
+}
+
 function extractTags(text: unknown): string[] {
   const value = boundedString(text);
   if (value === undefined) return [];
   const stripped = value.replace(/<[^>]*>/gu, " ");
   const tags: string[] = [];
-  for (const match of stripped.matchAll(/#([\p{Letter}\p{Number}_-]{1,80})/gu)) {
+  for (const match of stripped.matchAll(/#([\p{Letter}\p{Number}_]{1,80})/gu)) {
     if (match[1] !== undefined) tags.push(match[1]);
     if (tags.length >= MAX_EXTRACTED_TAGS) break;
   }
   return tags;
 }
 
+function addMastodonApiTags(tags: Set<string>, rawTags: unknown): void {
+  if (!Array.isArray(rawTags)) return;
+  for (const tag of rawTags) {
+    if (isPlainRecord(tag)) addProfileTag(tags, tag.name);
+    else addProfileTag(tags, tag);
+    if (tags.size >= MAX_EXTRACTED_TAGS) break;
+  }
+}
+
 function profileTags(rawAccount: Record<string, unknown>, explicitFeaturedTags: readonly string[] | undefined): readonly string[] {
   const tags = new Set<string>();
-  for (const tag of extractTags(rawAccount.note)) tags.add(tag);
+  addMastodonApiTags(tags, rawAccount.tags);
+  for (const tag of extractTags(rawAccount.note)) {
+    addProfileTag(tags, tag);
+    if (tags.size >= MAX_EXTRACTED_TAGS) break;
+  }
   if (Array.isArray(rawAccount.fields)) {
     for (const field of rawAccount.fields) {
       if (!isPlainRecord(field)) continue;
-      for (const tag of extractTags(field.name)) tags.add(tag);
-      for (const tag of extractTags(field.value)) tags.add(tag);
+      for (const tag of extractTags(field.name)) addProfileTag(tags, tag);
+      for (const tag of extractTags(field.value)) addProfileTag(tags, tag);
       if (tags.size >= MAX_EXTRACTED_TAGS) break;
     }
   }
   for (const tag of explicitFeaturedTags ?? Object.freeze([])) {
-    if (typeof tag === "string" && tag.length <= 128) tags.add(tag);
+    addProfileTag(tags, tag);
     if (tags.size >= MAX_EXTRACTED_TAGS) break;
   }
   return Object.freeze([...tags].sort());
@@ -327,7 +363,7 @@ export async function fetchMastodonAccountEligibilityEvidence(input: Recommendat
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const headers = new Headers({ Accept: "application/json" });
-      if (auth !== undefined) headers.set("Auth" + "orization", ["Bear", "er"].join("") + ` ${auth}`);
+      if (auth !== undefined) headers.set(AUTHORIZATION_HEADER, `${BEARER_AUTH_SCHEME} ${auth}`);
       if (userAgent !== undefined) headers.set("User-Agent", userAgent);
       const init: RequestInit = { method: "GET", headers };
       if (input.signal !== undefined) init.signal = input.signal;
@@ -437,10 +473,56 @@ function stalePolicy(source: RecommendationFediverseDomainPolicySource, cache: R
   };
 }
 
+function contentLengthBytes(headers: Headers): number | undefined {
+  const value = headers.get("content-length");
+  if (value === null) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+async function responseTextWithinLimit(response: Response, maxBodyBytes: number, signal: AbortSignal | undefined): Promise<string> {
+  const contentLength = contentLengthBytes(response.headers);
+  if (contentLength !== undefined && contentLength > maxBodyBytes) throw new TypeError("Fediverse domain policy response is too large.");
+  if (response.body === null) return "";
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = "";
+  try {
+    for (;;) {
+      if (isSignalAborted(signal)) throw abortError();
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > maxBodyBytes) throw new TypeError("Fediverse domain policy response is too large.");
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } catch (error) {
+    try {
+      await reader.cancel(error);
+    } catch {
+      // Ignore cancellation failures; the original read failure is more useful to callers.
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function canReturnStalePolicy(lastFailure: RecommendationFetchFediverseDomainPolicyListResult | undefined): boolean {
+  if (lastFailure === undefined || lastFailure.ok) return false;
+  if (lastFailure.reason === "network_error") return true;
+  return lastFailure.reason === "http_status" && lastFailure.status !== undefined && isRetryableStatus(lastFailure.status);
+}
+
 export async function fetchFediverseDomainPolicyList(input: RecommendationFetchFediverseDomainPolicyListInput): Promise<RecommendationFetchFediverseDomainPolicyListResult> {
   const source = policySource(input.source);
   const userAgent = headerValue(input.userAgent, "Invalid Fediverse domain policy user agent.");
   const { attempts, initialDelayMs, maxDelayMs, fetchImpl } = fetchConfig(input);
+  const maxBodyBytes = positiveNonZeroInteger(input.maxBodyBytes, DEFAULT_MAX_POLICY_LIST_BYTES, "Invalid Fediverse domain policy maximum body size.");
   let delayMs = initialDelayMs;
   let lastFailure: RecommendationFetchFediverseDomainPolicyListResult | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -476,8 +558,9 @@ export async function fetchFediverseDomainPolicyList(input: RecommendationFetchF
       }
       let text: string;
       try {
-        text = await response.text();
-      } catch {
+        text = await responseTextWithinLimit(response, maxBodyBytes, input.signal);
+      } catch (error) {
+        if (isSignalAborted(input.signal) || isAbortError(error)) return failure("aborted");
         lastFailure = failure("invalid_response", { status: response.status });
         break;
       }
@@ -505,7 +588,7 @@ export async function fetchFediverseDomainPolicyList(input: RecommendationFetchF
       delayMs = Math.min(maxDelayMs, delayMs * 2);
     }
   }
-  if (input.allowStaleOnError !== false) {
+  if (input.allowStaleOnError !== false && canReturnStalePolicy(lastFailure)) {
     const stale = stalePolicy(source, input.cache);
     if (stale !== undefined) return stale;
   }
