@@ -39,9 +39,8 @@ const atprotoPost: RecommendationAtprotoNormalizedRecordEvent = {
   repositoryVisibility: "public_repo",
   createdAt: "2026-05-20T13:00:00.000Z",
   observedAt: "2026-05-20T13:00:02.000Z",
-  plaintext: "ATProto public repo signal",
-  labels: undefined
-} as RecommendationAtprotoNormalizedRecordEvent;
+  plaintext: "ATProto public repo signal"
+};
 
 test("ActivityPub normalizer maps private/followers visibility before consent", () => {
   const event = toCanonicalActivityPubRecommendationEvent(activityPubNote);
