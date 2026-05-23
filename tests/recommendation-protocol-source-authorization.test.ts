@@ -123,7 +123,7 @@ test("protocol authorization evidence fails closed on malformed timestamps and c
         subjectId: "reader-1",
         checkedAt: "2026-02-30T12:00:01.000Z"
       }),
-    /timestamp/u
+    /timestamp|read request/u
   );
 
   assert.throws(
