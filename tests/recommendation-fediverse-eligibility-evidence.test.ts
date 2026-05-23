@@ -20,6 +20,16 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+function textFailureResponse(status = 200): Response {
+  const response = new Response("unavailable", { status });
+  Object.defineProperty(response, "text", {
+    value: async () => {
+      throw new Error("response body unavailable");
+    }
+  });
+  return response;
+}
+
 test("Mastodon account mapper normalizes account evidence for eligibility evaluation", () => {
   const account = mapMastodonAccountToFediverseEligibilityAccount(
     {
@@ -49,6 +59,37 @@ test("Mastodon account mapper normalizes account evidence for eligibility evalua
   assert.equal(result.reason, "excluded.account_opt_out_tag");
 });
 
+test("Mastodon account mapper uses returned remote account domain instead of lookup instance domain", () => {
+  const account = mapMastodonAccountToFediverseEligibilityAccount(
+    {
+      acct: "alice@remote.example",
+      uri: "https://remote.example/users/alice",
+      discoverable: true,
+      indexable: true
+    },
+    { instanceDomain: "lookup.example" }
+  );
+
+  assert.equal(account.acct, "alice@remote.example");
+  assert.equal(account.domain, "remote.example");
+  assert.equal(account.actorUri, "https://remote.example/users/alice");
+  assert.equal(evaluateRecommendationFediverseEligibility({ account }).eligible, true);
+});
+
+test("Mastodon account mapper rejects internally conflicting identity domains", () => {
+  assert.throws(
+    () =>
+      mapMastodonAccountToFediverseEligibilityAccount(
+        {
+          acct: "alice@remote.example",
+          uri: "https://other.example/users/alice"
+        },
+        { instanceDomain: "lookup.example" }
+      ),
+    /Conflicting Mastodon account identity domains/u
+  );
+});
+
 test("Mastodon account fetch uses lookup endpoint, retries transient failures, and maps JSON", async () => {
   const calls: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -73,6 +114,42 @@ test("Mastodon account fetch uses lookup endpoint, retries transient failures, a
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.evidence.account.acct, "alice@example.com");
   assert.equal(result.ok && result.evidence.account.discoverable, true);
+});
+
+test("Mastodon account fetch returns invalid_response for malformed JSON without retrying", async () => {
+  let calls = 0;
+  const result = await fetchMastodonAccountEligibilityEvidence({
+    instanceDomain: "example.com",
+    acct: "alice",
+    attempts: 3,
+    initialDelayMs: 0,
+    maxDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response("{not json", { status: 200, headers: { "content-type": "application/json" } });
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result, { ok: false, reason: "invalid_response", status: 200, stale: false });
+});
+
+test("Mastodon account fetch returns invalid_response for structurally invalid account payloads without retrying", async () => {
+  let calls = 0;
+  const result = await fetchMastodonAccountEligibilityEvidence({
+    instanceDomain: "lookup.example",
+    acct: "alice@remote.example",
+    attempts: 3,
+    initialDelayMs: 0,
+    maxDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({ acct: "alice@remote.example", uri: "https://other.example/users/alice" });
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result, { ok: false, reason: "invalid_response", status: 200, stale: false });
 });
 
 test("Mastodon account fetch returns privacy-safe failures for missing or failed accounts", async () => {
@@ -113,6 +190,24 @@ test("domain policy list fetch normalizes lists, supports etags, and ignores mal
   assert.equal(result.ok && result.evidence.ignoredEntryCount, 1);
   assert.equal(result.ok && result.evidence.etag, "abc");
   assert.equal(result.ok && result.evidence.stale, false);
+});
+
+test("domain policy list fetch returns invalid_response for unreadable successful responses without retrying", async () => {
+  let calls = 0;
+  const result = await fetchFediverseDomainPolicyList({
+    source: { provider: "custom", url: "https://lists.example/custom.txt" },
+    allowStaleOnError: false,
+    attempts: 3,
+    initialDelayMs: 0,
+    maxDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return textFailureResponse();
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result, { ok: false, reason: "invalid_response", status: 200, stale: false });
 });
 
 test("domain policy list fetch uses cached domains for 304 and stale fallback", async () => {
