@@ -81,15 +81,25 @@ const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const SOURCE_VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 
+function sourceVisibilities(
+  ...values: readonly RecommendationSourceVisibility[]
+): readonly RecommendationSourceVisibility[] {
+  return Object.freeze([...values]);
+}
+
+function accessBases(...values: readonly RecommendationAccessBasis[]): readonly RecommendationAccessBasis[] {
+  return Object.freeze([...values]);
+}
+
 const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   Record<RecommendationProtocolSourceAuthorizationEvidenceKind, AuthorizationEvidenceKindProfile>
 > = Object.freeze({
   "activitypub.public_web": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "public",
-    sourceVisibilities: Object.freeze(["public", "unlisted"]),
+    sourceVisibilities: sourceVisibilities("public", "unlisted"),
     defaultAccessBasis: "public_web",
-    accessBases: Object.freeze(["public_web"]),
+    accessBases: accessBases("public_web"),
     defaultContainsPrivateData: false,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: false
@@ -97,9 +107,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypub.authenticated_api": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "public",
-    sourceVisibilities: Object.freeze(["public", "unlisted"]),
+    sourceVisibilities: sourceVisibilities("public", "unlisted"),
     defaultAccessBasis: "authenticated_api",
-    accessBases: Object.freeze(["authenticated_api"]),
+    accessBases: accessBases("authenticated_api"),
     defaultContainsPrivateData: false,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
@@ -107,9 +117,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypub.follower_relationship": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "followers_only",
-    sourceVisibilities: Object.freeze(["followers_only"]),
+    sourceVisibilities: sourceVisibilities("followers_only"),
     defaultAccessBasis: "follower_relationship",
-    accessBases: Object.freeze(["follower_relationship", "mutual_relationship", "owner"]),
+    accessBases: accessBases("follower_relationship", "mutual_relationship", "owner"),
     defaultContainsPrivateData: true,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
@@ -117,9 +127,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypub.mentioned_recipient": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "mentioned_only",
-    sourceVisibilities: Object.freeze(["mentioned_only"]),
+    sourceVisibilities: sourceVisibilities("mentioned_only"),
     defaultAccessBasis: "mentioned_recipient",
-    accessBases: Object.freeze(["mentioned_recipient", "owner"]),
+    accessBases: accessBases("mentioned_recipient", "owner"),
     defaultContainsPrivateData: true,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
@@ -127,9 +137,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypub.mutual_relationship": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "mutuals_only",
-    sourceVisibilities: Object.freeze(["mutuals_only", "followers_only"]),
+    sourceVisibilities: sourceVisibilities("mutuals_only", "followers_only"),
     defaultAccessBasis: "mutual_relationship",
-    accessBases: Object.freeze(["mutual_relationship", "owner"]),
+    accessBases: accessBases("mutual_relationship", "owner"),
     defaultContainsPrivateData: true,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
@@ -137,18 +147,18 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypub.provider_policy": Object.freeze({
     protocol: "activitypub",
     defaultSourceVisibility: "local_only",
-    sourceVisibilities: Object.freeze(["local_only"]),
+    sourceVisibilities: sourceVisibilities("local_only"),
     defaultAccessBasis: "provider_policy",
-    accessBases: Object.freeze(["provider_policy"]),
+    accessBases: accessBases("provider_policy"),
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
   }),
   "activitypods.solid_acl_read": Object.freeze({
     protocol: "activitypods",
     defaultSourceVisibility: "acl_controlled",
-    sourceVisibilities: Object.freeze(["acl_controlled"]),
+    sourceVisibilities: sourceVisibilities("acl_controlled"),
     defaultAccessBasis: "solid_acl_read",
-    accessBases: Object.freeze(["solid_acl_read", "solid_acl_control", "owner"]),
+    accessBases: accessBases("solid_acl_read", "solid_acl_control", "owner"),
     defaultContainsPrivateData: true,
     defaultContainsThirdPartyData: false,
     defaultServerSideProcessing: true
@@ -156,9 +166,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypods.solid_acl_control": Object.freeze({
     protocol: "activitypods",
     defaultSourceVisibility: "acl_controlled",
-    sourceVisibilities: Object.freeze(["acl_controlled"]),
+    sourceVisibilities: sourceVisibilities("acl_controlled"),
     defaultAccessBasis: "solid_acl_control",
-    accessBases: Object.freeze(["solid_acl_control", "owner"]),
+    accessBases: accessBases("solid_acl_control", "owner"),
     defaultContainsPrivateData: true,
     defaultContainsThirdPartyData: false,
     defaultServerSideProcessing: true
@@ -166,7 +176,7 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "activitypods.owner": Object.freeze({
     protocol: "activitypods",
     defaultSourceVisibility: "acl_controlled",
-    sourceVisibilities: Object.freeze([
+    sourceVisibilities: sourceVisibilities(
       "public",
       "unlisted",
       "followers_only",
@@ -174,18 +184,18 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
       "mutuals_only",
       "local_only",
       "acl_controlled"
-    ]),
+    ),
     defaultAccessBasis: "owner",
-    accessBases: Object.freeze(["owner"]),
+    accessBases: accessBases("owner"),
     defaultContainsThirdPartyData: false,
     defaultServerSideProcessing: true
   }),
   "atproto.public_repo": Object.freeze({
     protocol: "atproto",
     defaultSourceVisibility: "atproto_public_repo",
-    sourceVisibilities: Object.freeze(["atproto_public_repo"]),
+    sourceVisibilities: sourceVisibilities("atproto_public_repo"),
     defaultAccessBasis: "atproto_public_repo",
-    accessBases: Object.freeze(["atproto_public_repo"]),
+    accessBases: accessBases("atproto_public_repo"),
     defaultContainsPrivateData: false,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: false
@@ -193,9 +203,9 @@ const AUTHORIZATION_EVIDENCE_KIND_PROFILES: Readonly<
   "atproto.oauth_scope": Object.freeze({
     protocol: "atproto",
     defaultSourceVisibility: "atproto_public_repo",
-    sourceVisibilities: Object.freeze(["atproto_public_repo"]),
+    sourceVisibilities: sourceVisibilities("atproto_public_repo"),
     defaultAccessBasis: "oauth_scope",
-    accessBases: Object.freeze(["oauth_scope", "atproto_public_repo"]),
+    accessBases: accessBases("oauth_scope", "atproto_public_repo"),
     defaultContainsPrivateData: false,
     defaultContainsThirdPartyData: true,
     defaultServerSideProcessing: true
