@@ -56,6 +56,23 @@ test("source items reject loose timestamps and impossible calendar dates", () =>
   );
 });
 
+test("source items restrict leap-second timestamps to the 59th minute", () => {
+  assert.equal(
+    isRecommendationSourceItem({
+      ...validSourceItem,
+      provenance: { ...validSourceItem.provenance, observedAt: "2026-05-15T12:34:60Z" }
+    }),
+    false
+  );
+  assert.equal(
+    isRecommendationSourceItem({
+      ...validSourceItem,
+      provenance: { ...validSourceItem.provenance, observedAt: "2026-05-15T12:59:60Z" }
+    }),
+    true
+  );
+});
+
 test("source items reject overlong adapter and source identifiers", () => {
   assert.equal(
     isRecommendationSourceItem({
@@ -73,6 +90,30 @@ test("source items reject overlong adapter and source identifiers", () => {
   );
 });
 
+test("source items reject C0, DEL, and C1 control characters in identifiers", () => {
+  assert.equal(
+    isRecommendationSourceItem({
+      ...validSourceItem,
+      provenance: { ...validSourceItem.provenance, adapterId: `adapter-${String.fromCharCode(10)}` }
+    }),
+    false
+  );
+  assert.equal(
+    isRecommendationSourceItem({
+      ...validSourceItem,
+      provenance: { ...validSourceItem.provenance, sourceSystem: `source-${String.fromCharCode(127)}` }
+    }),
+    false
+  );
+  assert.equal(
+    isRecommendationSourceItem({
+      ...validSourceItem,
+      provenance: { ...validSourceItem.provenance, opaqueSourceId: `opaque-${String.fromCharCode(133)}` }
+    }),
+    false
+  );
+});
+
 test("source adapter read requests reject loose since timestamps and oversized cursors", () => {
   assert.throws(
     () => normalizeRecommendationSourceAdapterReadRequest({ subjectId: "subject-1", since: "2026-05-16T00:00:00" }),
@@ -80,6 +121,10 @@ test("source adapter read requests reject loose since timestamps and oversized c
   );
   assert.throws(
     () => normalizeRecommendationSourceAdapterReadRequest({ subjectId: "subject-1", since: "2026-02-30T00:00:00.000Z" }),
+    TypeError
+  );
+  assert.throws(
+    () => normalizeRecommendationSourceAdapterReadRequest({ subjectId: "subject-1", since: "2026-05-16T12:34:60Z" }),
     TypeError
   );
   assert.throws(
