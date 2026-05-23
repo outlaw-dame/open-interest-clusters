@@ -121,7 +121,7 @@ const STRICT_RFC3339_TIMESTAMP_PATTERN =
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if ((code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
+    if (code <= 0x1f || code === 0x7f) {
       return true;
     }
   }
