@@ -466,7 +466,16 @@ export async function fetchFediverseDomainPolicyList(input: RecommendationFetchF
         break;
       }
       const parsed = parseDomainPolicyList(text);
-      return { ok: true, evidence: policyEvidence(source, parsed.domains, { etag: response.headers.get("etag") ?? undefined, notModified: false, stale: false, ignoredEntryCount: parsed.ignoredEntryCount }) };
+      const etag = response.headers.get("etag") ?? undefined;
+      return {
+        ok: true,
+        evidence: policyEvidence(source, parsed.domains, {
+          ...(etag === undefined ? {} : { etag }),
+          notModified: false,
+          stale: false,
+          ignoredEntryCount: parsed.ignoredEntryCount
+        })
+      };
     } catch (error) {
       if (input.signal?.aborted === true || (error instanceof Error && error.name === "AbortError")) return failure("aborted");
       lastFailure = failure("network_error");
