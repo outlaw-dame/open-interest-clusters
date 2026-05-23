@@ -91,6 +91,10 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function isSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 function headerValue(value: string | undefined, message: string): string | undefined {
   if (value === undefined) return undefined;
   if (value.length === 0 || /[\r\n]/u.test(value)) throw new TypeError(message);
@@ -363,12 +367,12 @@ export async function fetchMastodonAccountEligibilityEvidence(input: Recommendat
         })
       };
     } catch (error) {
-      if (input.signal?.aborted === true || isAbortError(error)) return failure("aborted");
+      if (isSignalAborted(input.signal) || isAbortError(error)) return failure("aborted");
       if (attempt >= attempts) return failure("network_error", { retryAfterMs: lastRetryAfter });
       try {
         await retrySleep(retryDelay(delayMs, maxDelayMs, lastRetryAfter), input.signal);
       } catch (sleepError) {
-        if (input.signal?.aborted === true || isAbortError(sleepError)) return failure("aborted");
+        if (isSignalAborted(input.signal) || isAbortError(sleepError)) return failure("aborted");
         return failure("network_error", { retryAfterMs: lastRetryAfter });
       }
       delayMs = Math.min(maxDelayMs, delayMs * 2);
@@ -489,13 +493,13 @@ export async function fetchFediverseDomainPolicyList(input: RecommendationFetchF
         })
       };
     } catch (error) {
-      if (input.signal?.aborted === true || isAbortError(error)) return failure("aborted");
+      if (isSignalAborted(input.signal) || isAbortError(error)) return failure("aborted");
       lastFailure = failure("network_error");
       if (attempt >= attempts) break;
       try {
         await retrySleep(retryDelay(delayMs, maxDelayMs, undefined), input.signal);
       } catch (sleepError) {
-        if (input.signal?.aborted === true || isAbortError(sleepError)) return failure("aborted");
+        if (isSignalAborted(input.signal) || isAbortError(sleepError)) return failure("aborted");
         break;
       }
       delayMs = Math.min(maxDelayMs, delayMs * 2);
