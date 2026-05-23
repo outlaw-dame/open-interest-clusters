@@ -34,14 +34,10 @@ export const RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES = [
   "Undo",
   "Flag"
 ] as const;
-
-export type RecommendationActivityPubNormalizedEventType =
-  typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES[number];
+export type RecommendationActivityPubNormalizedEventType = typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES[number];
 
 export const RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES = ["Like", "Announce", "Follow"] as const;
-
-export type RecommendationActivityPubNormalizedUndoType =
-  typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES[number];
+export type RecommendationActivityPubNormalizedUndoType = typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES[number];
 
 export const RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES = [
   "Note",
@@ -52,12 +48,9 @@ export const RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES = [
   "Collection",
   "Unknown"
 ] as const;
-
-export type RecommendationActivityPubNormalizedObjectType =
-  typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES[number];
+export type RecommendationActivityPubNormalizedObjectType = typeof RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES[number];
 
 export const RECOMMENDATION_ATPROTO_NORMALIZED_OPERATIONS = ["create", "update", "delete"] as const;
-
 export type RecommendationAtprotoNormalizedOperation = typeof RECOMMENDATION_ATPROTO_NORMALIZED_OPERATIONS[number];
 
 export const RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS = [
@@ -69,8 +62,9 @@ export const RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS = [
   "app.bsky.graph.block",
   "com.atproto.label.defs#label"
 ] as const;
-
 export type RecommendationAtprotoNormalizedCollection = typeof RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS[number];
+
+type CanonicalRecommendationContentKind = NonNullable<CanonicalRecommendationContentSummary["kind"]>;
 
 export interface RecommendationProtocolContentInput {
   title?: string | null;
@@ -169,7 +163,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
+    if (code <= 31 || code === 127 || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
       return true;
     }
   }
@@ -186,47 +180,25 @@ function isBoundedIdentifier(value: unknown): value is string {
   );
 }
 
-function optionalBoundedIdentifier(value: unknown, label: string): string | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  if (!isBoundedIdentifier(value)) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
+function requiredBoundedIdentifier(value: unknown, label: string): string {
+  if (!isBoundedIdentifier(value)) throw new TypeError(`Invalid ${label}.`);
   return value;
 }
 
-function requiredBoundedIdentifier(value: unknown, label: string): string {
-  if (!isBoundedIdentifier(value)) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
-  return value;
+function optionalBoundedIdentifier(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requiredBoundedIdentifier(value, label);
 }
 
 function optionalText(value: unknown, label: string): string | null | undefined {
-  if (value === undefined || value === null) {
-    return value;
-  }
-
-  if (typeof value !== "string" || value.length > MAX_PROTOCOL_TEXT_LENGTH) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
+  if (value === undefined || value === null) return value;
+  if (typeof value !== "string" || value.length > MAX_PROTOCOL_TEXT_LENGTH) throw new TypeError(`Invalid ${label}.`);
   return value;
 }
 
 function optionalStringList(value: unknown, maxCount: number, label: string): readonly string[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (!Array.isArray(value) || value.length > maxCount) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > maxCount) throw new TypeError(`Invalid ${label}.`);
   return Object.freeze(value.map((item) => requiredBoundedIdentifier(item, label)));
 }
 
@@ -251,9 +223,33 @@ function optionalHttpUrl(value: unknown, label: string): string | undefined {
   return value === undefined || value === null ? undefined : normalizeHttpUrl(value, label);
 }
 
+function isDidMethodChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+}
+
+function isDidIdentifierChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) ||
+    char === "." ||
+    char === "_" ||
+    char === ":" ||
+    char === "%" ||
+    char === "-"
+  );
+}
+
 function normalizeDid(value: unknown, label: string): string {
   const raw = requiredBoundedIdentifier(value, label).trim();
-  if (!/^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u.test(raw)) {
+  const parts = raw.split(":");
+  if (parts.length < 3 || parts[0] !== "did" || parts[1]?.length === 0 || parts.slice(2).join(":").length === 0) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  if (![...(parts[1] ?? "")].every(isDidMethodChar) || ![...parts.slice(2).join(":")].every(isDidIdentifierChar)) {
     throw new TypeError(`Invalid ${label}.`);
   }
 
@@ -262,10 +258,7 @@ function normalizeDid(value: unknown, label: string): string {
 
 function normalizeAtUri(value: unknown, label: string): string {
   const raw = requiredBoundedIdentifier(value, label).trim();
-  if (!raw.startsWith("at://") || raw.includes("#") || raw.includes("?")) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
+  if (!raw.startsWith("at://") || raw.includes("#") || raw.includes("?")) throw new TypeError(`Invalid ${label}.`);
   return raw;
 }
 
@@ -274,10 +267,7 @@ function optionalAtUri(value: unknown, label: string): string | undefined {
 }
 
 function knownValue<T extends string>(set: ReadonlySet<string>, value: unknown, label: string): T {
-  if (typeof value !== "string" || !set.has(value)) {
-    throw new TypeError(`Invalid ${label}.`);
-  }
-
+  if (typeof value !== "string" || !set.has(value)) throw new TypeError(`Invalid ${label}.`);
   return value as T;
 }
 
@@ -294,7 +284,7 @@ function timestampFromNullable(value: string | null | undefined, fallback: strin
 function contentKindFromActivityPub(
   type: RecommendationActivityPubNormalizedEventType,
   objectType: RecommendationActivityPubNormalizedObjectType
-): CanonicalRecommendationContentSummary["kind"] {
+): CanonicalRecommendationContentKind {
   if (objectType === "Article") return "article";
   if (objectType === "Question") return "poll";
   if (objectType === "Person" || objectType === "Group") return "profile";
@@ -305,7 +295,7 @@ function contentKindFromActivityPub(
   return "note";
 }
 
-function contentKindFromAtproto(collection: RecommendationAtprotoNormalizedCollection): CanonicalRecommendationContentSummary["kind"] {
+function contentKindFromAtproto(collection: RecommendationAtprotoNormalizedCollection): CanonicalRecommendationContentKind {
   switch (collection) {
     case "app.bsky.feed.post":
       return "note";
@@ -325,8 +315,8 @@ function contentKindFromAtproto(collection: RecommendationAtprotoNormalizedColle
 
 function buildContentSummary(
   input: RecommendationProtocolContentInput,
-  kind: CanonicalRecommendationContentSummary["kind"]
-): CanonicalRecommendationContentSummary | undefined {
+  kind: CanonicalRecommendationContentKind
+): CanonicalRecommendationContentSummary {
   const title = optionalText(input.title, "protocol source content title");
   const summary = optionalText(input.summary, "protocol source content summary");
   const plaintext = optionalText(input.plaintext, "protocol source content plaintext");
@@ -349,7 +339,6 @@ function buildContentSummary(
   if (links !== undefined) content.links = links;
   if (externalUrl !== undefined) content.externalUrl = externalUrl;
   if (linkPreviewUrl !== undefined) content.linkPreviewUrl = linkPreviewUrl;
-
   return Object.freeze(content);
 }
 
@@ -398,12 +387,9 @@ function activityPubKind(
     case "Flag":
       return "ReportCreate";
     case "Undo":
-      if (undoType === undefined) {
-        throw new TypeError("Invalid ActivityPub recommendation undo type.");
-      }
+      if (undoType === undefined) throw new TypeError("Invalid ActivityPub recommendation undo type.");
       if (undoType === "Like") return "ReactionRemove";
-      if (undoType === "Announce") return "ShareRemove";
-      return "FollowRemove";
+      return undoType === "Announce" ? "ShareRemove" : "FollowRemove";
   }
 }
 
@@ -414,8 +400,7 @@ function atprotoKind(
   switch (collection) {
     case "app.bsky.feed.post":
       if (operation === "create") return "PostCreate";
-      if (operation === "update") return "PostEdit";
-      return "PostDelete";
+      return operation === "update" ? "PostEdit" : "PostDelete";
     case "app.bsky.actor.profile":
       return operation === "delete" ? "AccountState" : "ProfileUpdate";
     case "app.bsky.feed.like":
@@ -439,14 +424,8 @@ function atprotoDirectSourceItemKind(
   operation: RecommendationAtprotoNormalizedOperation,
   collection: RecommendationAtprotoNormalizedCollection
 ): RecommendationSourceItemKind | null {
-  if (collection !== "app.bsky.graph.block") {
-    return null;
-  }
-
-  if (operation === "update") {
-    throw new TypeError("Invalid ATProto recommendation block operation.");
-  }
-
+  if (collection !== "app.bsky.graph.block") return null;
+  if (operation === "update") throw new TypeError("Invalid ATProto recommendation block operation.");
   return "block";
 }
 
@@ -454,9 +433,8 @@ function normalizeProtocolOptions(
   options: RecommendationProtocolSourceNormalizerOptions,
   defaults: { adapterId: string; sourceSystem: string }
 ): CanonicalRecommendationSourceOptions {
-  if (!isPlainRecord(options)) {
-    throw new TypeError("Invalid protocol recommendation source normalizer options.");
-  }
+  const rawOptions: unknown = options;
+  if (!isPlainRecord(rawOptions)) throw new TypeError("Invalid protocol recommendation source normalizer options.");
 
   const normalized: CanonicalRecommendationSourceOptions = {
     adapterId: optionalBoundedIdentifier(options.adapterId, "protocol source adapter id") ?? defaults.adapterId,
@@ -464,13 +442,15 @@ function normalizeProtocolOptions(
     defaultTrustBoundary: options.defaultTrustBoundary ?? DEFAULT_PROTOCOL_TRUST_BOUNDARY
   };
 
-  if (options.includeMirroredEvents !== undefined) normalized.includeMirroredEvents = optionalBoolean(options.includeMirroredEvents, "protocol mirrored event flag");
-  if (options.containsThirdPartyData !== undefined) normalized.containsThirdPartyData = optionalBoolean(options.containsThirdPartyData, "protocol third-party data flag");
-  if (options.serverSideProcessing !== undefined) normalized.serverSideProcessing = optionalBoolean(options.serverSideProcessing, "protocol server-side processing flag");
-  if (options.providerPolicyAllowsProcessing !== undefined) {
-    normalized.providerPolicyAllowsProcessing = optionalBoolean(options.providerPolicyAllowsProcessing, "protocol provider policy flag");
-  }
+  const includeMirroredEvents = optionalBoolean(options.includeMirroredEvents, "protocol mirrored event flag");
+  const containsThirdPartyData = optionalBoolean(options.containsThirdPartyData, "protocol third-party data flag");
+  const serverSideProcessing = optionalBoolean(options.serverSideProcessing, "protocol server-side processing flag");
+  const providerPolicyAllowsProcessing = optionalBoolean(options.providerPolicyAllowsProcessing, "protocol provider policy flag");
 
+  if (includeMirroredEvents !== undefined) normalized.includeMirroredEvents = includeMirroredEvents;
+  if (containsThirdPartyData !== undefined) normalized.containsThirdPartyData = containsThirdPartyData;
+  if (serverSideProcessing !== undefined) normalized.serverSideProcessing = serverSideProcessing;
+  if (providerPolicyAllowsProcessing !== undefined) normalized.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
   return Object.freeze(normalized);
 }
 
@@ -488,19 +468,12 @@ function addCanonicalOptionalFlags(
   if (input.trustBoundary !== undefined) event.trustBoundary = input.trustBoundary;
   if (input.containsThirdPartyData !== undefined) event.containsThirdPartyData = input.containsThirdPartyData;
   if (input.serverSideProcessing !== undefined) event.serverSideProcessing = input.serverSideProcessing;
-  if (input.providerPolicyAllowsProcessing !== undefined) {
-    event.providerPolicyAllowsProcessing = input.providerPolicyAllowsProcessing;
-  }
-
+  if (input.providerPolicyAllowsProcessing !== undefined) event.providerPolicyAllowsProcessing = input.providerPolicyAllowsProcessing;
   return event;
 }
 
-export function toCanonicalActivityPubRecommendationEvent(
-  input: RecommendationActivityPubNormalizedEvent
-): CanonicalRecommendationEvent {
-  if (!isPlainRecord(input)) {
-    throw new TypeError("Invalid ActivityPub recommendation source event.");
-  }
+export function toCanonicalActivityPubRecommendationEvent(input: RecommendationActivityPubNormalizedEvent): CanonicalRecommendationEvent {
+  if (!isPlainRecord(input)) throw new TypeError("Invalid ActivityPub recommendation source event.");
 
   const type = knownValue<RecommendationActivityPubNormalizedEventType>(ACTIVITYPUB_EVENT_TYPE_SET, input.type, "ActivityPub recommendation event type");
   const objectType = input.objectType === undefined
@@ -519,7 +492,6 @@ export function toCanonicalActivityPubRecommendationEvent(
   const targetHandle = optionalBoundedIdentifier(input.targetHandle, "ActivityPub recommendation target handle");
   const publishedAt = optionalBoundedIdentifier(input.publishedAt, "ActivityPub recommendation published timestamp");
   const updatedAt = optionalBoundedIdentifier(input.updatedAt, "ActivityPub recommendation updated timestamp");
-  const content = buildContentSummary(input, contentKindFromActivityPub(type, objectType));
 
   const event: CanonicalRecommendationEvent = {
     kind: activityPubKind(type, objectType, undoType),
@@ -531,7 +503,8 @@ export function toCanonicalActivityPubRecommendationEvent(
     actor: Object.freeze({
       activityPubActorUri: actorUri,
       ...(actorHandle === undefined ? {} : { handle: actorHandle })
-    })
+    }),
+    content: buildContentSummary(input, contentKindFromActivityPub(type, objectType))
   };
 
   if (objectId !== undefined) event.object = Object.freeze({ activityPubObjectId: objectId });
@@ -541,7 +514,6 @@ export function toCanonicalActivityPubRecommendationEvent(
       ...(targetHandle === undefined ? {} : { handle: targetHandle })
     });
   }
-  if (content !== undefined) event.content = content;
 
   return normalizeCanonicalRecommendationEvent(addCanonicalOptionalFlags(event, input));
 }
@@ -559,25 +531,17 @@ export function createActivityPubRecommendationSourceItem(
   );
 }
 
-function atprotoCanonicalVisibility(
-  repositoryVisibility: RecommendationAtprotoRepositoryVisibility | undefined
-): CanonicalRecommendationVisibility {
+function atprotoCanonicalVisibility(repositoryVisibility: RecommendationAtprotoRepositoryVisibility | undefined): CanonicalRecommendationVisibility {
   return repositoryVisibility === undefined || repositoryVisibility === "public_repo" ? "public" : "unknown";
 }
 
-export function toCanonicalAtprotoRecommendationEvent(
-  input: RecommendationAtprotoNormalizedRecordEvent
-): CanonicalRecommendationEvent {
-  if (!isPlainRecord(input)) {
-    throw new TypeError("Invalid ATProto recommendation source event.");
-  }
+export function toCanonicalAtprotoRecommendationEvent(input: RecommendationAtprotoNormalizedRecordEvent): CanonicalRecommendationEvent {
+  if (!isPlainRecord(input)) throw new TypeError("Invalid ATProto recommendation source event.");
 
   const operation = knownValue<RecommendationAtprotoNormalizedOperation>(ATPROTO_OPERATION_SET, input.operation, "ATProto recommendation operation");
   const collection = knownValue<RecommendationAtprotoNormalizedCollection>(ATPROTO_COLLECTION_SET, input.collection, "ATProto recommendation collection");
   const kind = atprotoKind(operation, collection);
-  if (kind === null) {
-    throw new TypeError("ATProto recommendation record must be converted directly to a source item.");
-  }
+  if (kind === null) throw new TypeError("ATProto recommendation record must be converted directly to a source item.");
 
   const repositoryDid = normalizeDid(input.repositoryDid, "ATProto recommendation repository DID");
   const atUri = normalizeAtUri(input.atUri, "ATProto recommendation AT URI");
@@ -593,12 +557,6 @@ export function toCanonicalAtprotoRecommendationEvent(
   const observedAt = requiredBoundedIdentifier(input.observedAt, "ATProto recommendation observed timestamp");
   const createdAt = optionalBoundedIdentifier(input.createdAt, "ATProto recommendation created timestamp");
   const indexedAt = optionalBoundedIdentifier(input.indexedAt, "ATProto recommendation indexed timestamp");
-  const content = buildContentSummary(input, contentKindFromAtproto(collection));
-
-  const objectRef = Object.freeze({
-    atUri: subjectAtUri ?? atUri,
-    ...(cid === undefined ? {} : { cid })
-  });
 
   const event: CanonicalRecommendationEvent = {
     kind,
@@ -611,12 +569,14 @@ export function toCanonicalAtprotoRecommendationEvent(
       did: repositoryDid,
       ...(handle === undefined ? {} : { handle })
     }),
-    object: objectRef
+    object: Object.freeze({
+      atUri: subjectAtUri ?? atUri,
+      ...(cid === undefined ? {} : { cid })
+    }),
+    content: buildContentSummary(input, contentKindFromAtproto(collection))
   };
 
   if (subjectDid !== undefined) event.subject = Object.freeze({ did: subjectDid });
-  if (content !== undefined) event.content = content;
-
   return normalizeCanonicalRecommendationEvent(addCanonicalOptionalFlags(event, input));
 }
 
@@ -629,13 +589,9 @@ function createDirectAtprotoContextInput(
   const containsThirdPartyData = input.containsThirdPartyData ?? normalizedOptions.containsThirdPartyData;
   const serverSideProcessing = input.serverSideProcessing ?? normalizedOptions.serverSideProcessing;
   const providerPolicyAllowsProcessing = input.providerPolicyAllowsProcessing ?? normalizedOptions.providerPolicyAllowsProcessing;
-
   if (containsThirdPartyData !== undefined) contextInput.containsThirdPartyData = containsThirdPartyData;
   if (serverSideProcessing !== undefined) contextInput.serverSideProcessing = serverSideProcessing;
-  if (providerPolicyAllowsProcessing !== undefined) {
-    contextInput.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
-  }
-
+  if (providerPolicyAllowsProcessing !== undefined) contextInput.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
   return contextInput;
 }
 
@@ -651,11 +607,10 @@ export function createAtprotoRecommendationSourceItem(
     sourceSystem: DEFAULT_ATPROTO_SOURCE_SYSTEM
   });
 
-  if (directKind === null) {
-    return createCanonicalRecommendationSourceItem(toCanonicalAtprotoRecommendationEvent(input), normalizedOptions);
-  }
+  if (directKind === null) return createCanonicalRecommendationSourceItem(toCanonicalAtprotoRecommendationEvent(input), normalizedOptions);
 
   normalizeDid(input.repositoryDid, "ATProto recommendation repository DID");
+  if (input.subjectDid !== undefined && input.subjectDid !== null) normalizeDid(input.subjectDid, "ATProto recommendation subject DID");
   const observedAt = requiredBoundedIdentifier(input.observedAt, "ATProto recommendation observed timestamp");
   const atUri = normalizeAtUri(input.atUri, "ATProto recommendation AT URI");
   const repositoryVisibility = input.repositoryVisibility === undefined
