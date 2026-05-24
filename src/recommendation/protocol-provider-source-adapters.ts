@@ -1,9 +1,14 @@
-import { CANONICAL_RECOMMENDATION_PROJECTION_MODES } from "./canonical-source-adapter.js";
+import {
+  CANONICAL_RECOMMENDATION_PROJECTION_MODES,
+  type CanonicalRecommendationProjectionMode
+} from "./canonical-source-adapter.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   createActivityPubRecommendationSourceAdapter,
   createAtprotoRecommendationSourceAdapter,
   type RecommendationProtocolSourceAdapterBaseInput,
-  type RecommendationProtocolSourceAdapterRecordReadResult
+  type RecommendationProtocolSourceAdapterRecordReadResult,
+  type RecommendationProtocolSourceReadAuthorization
 } from "./protocol-source-adapters.js";
 import {
   mapActivityPubProviderActivityToNormalizedEvent,
@@ -18,7 +23,8 @@ import {
   RECOMMENDATION_SOURCE_TRUST_BOUNDARIES,
   type RecommendationSourceAdapter,
   type RecommendationSourceAdapterCapability,
-  type RecommendationSourceAdapterReadRequest
+  type RecommendationSourceAdapterReadRequest,
+  type RecommendationSourceTrustBoundary
 } from "./source-adapter.js";
 import type {
   RecommendationActivityPubNormalizedEvent,
@@ -74,8 +80,6 @@ export type RecommendationAtprotoProviderRecordSourceAdapterInput =
 const DEFAULT_MAX_RECORDS_PER_READ = 500;
 const MAX_RECORDS_PER_READ = 1_000;
 const MAX_CURSOR_LENGTH = 1_024;
-const CONTROL_CODE_BLOCK_SIZE = 32;
-const C1_CONTROL_CODE_BLOCK = 4;
 const TRUST_BOUNDARY_SET = new Set<string>(RECOMMENDATION_SOURCE_TRUST_BOUNDARIES);
 const PROJECTION_MODE_SET = new Set<string>(CANONICAL_RECOMMENDATION_PROJECTION_MODES);
 
@@ -83,20 +87,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function optionalBoundedNonEmptyString(value: unknown, maxLength: number, label: string): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || hasControlCharacter(value)) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || hasUnsafeControlCharacter(value)) {
     throw new TypeError(`Invalid ${label}.`);
   }
 
@@ -129,12 +122,12 @@ function normalizeRecordDefaults(value: unknown): RecommendationProtocolProvider
   if (!isPlainRecord(value)) throw new TypeError("Invalid protocol provider record defaults.");
 
   const defaults: RecommendationProtocolProviderRecordFlags = {};
-  const projectionMode = optionalKnownString(
+  const projectionMode = optionalKnownString<CanonicalRecommendationProjectionMode>(
     value.projectionMode,
     PROJECTION_MODE_SET,
     "protocol provider record default projection mode"
   );
-  const trustBoundary = optionalKnownString(
+  const trustBoundary = optionalKnownString<RecommendationSourceTrustBoundary>(
     value.trustBoundary,
     TRUST_BOUNDARY_SET,
     "protocol provider record default trust boundary"
@@ -205,7 +198,7 @@ function normalizeProviderRecordReadResultShape<TRecord>(
   const cursor = optionalBoundedNonEmptyString(value.cursor, MAX_CURSOR_LENGTH, "protocol provider record source cursor");
   const result: RecommendationProtocolProviderRecordSourceReadResult<TRecord> = {
     records: Object.freeze([...value.records]) as readonly TRecord[],
-    authorization: value.authorization as RecommendationProtocolProviderRecordSourceReadResult<TRecord>["authorization"]
+    authorization: value.authorization as unknown as RecommendationProtocolSourceReadAuthorization
   };
 
   if (cursor !== undefined) result.cursor = cursor;
@@ -270,12 +263,9 @@ function createMappedProviderRecordSourceAdapter<
   mapRecord: (record: TRecord) => TNormalizedRecord
 ): RecommendationSourceAdapter {
   const safeInput = normalizeProviderRecordAdapterInput(input, defaults);
-
-  return createProtocolAdapter({
+  const protocolAdapterInput: RecommendationProtocolSourceAdapterBaseInput<TNormalizedRecord> = {
     id: safeInput.id,
     sourceSystem: safeInput.sourceSystem,
-    capabilities: safeInput.capabilities,
-    normalizerOptions: safeInput.normalizerOptions,
     maxRecordsPerRead: safeInput.maxRecordsPerRead,
     read: async (request): Promise<RecommendationProtocolSourceAdapterRecordReadResult<TNormalizedRecord>> => {
       const providerResult = normalizeProviderRecordReadResultShape<TRecord>(
@@ -289,7 +279,11 @@ function createMappedProviderRecordSourceAdapter<
 
       return normalizedReadResult(mappedRecords, providerResult);
     }
-  });
+  };
+
+  if (safeInput.capabilities !== undefined) protocolAdapterInput.capabilities = safeInput.capabilities;
+  if (safeInput.normalizerOptions !== undefined) protocolAdapterInput.normalizerOptions = safeInput.normalizerOptions;
+  return createProtocolAdapter(protocolAdapterInput);
 }
 
 export function createActivityPubProviderActivitySourceAdapter(
