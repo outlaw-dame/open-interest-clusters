@@ -73,6 +73,11 @@ const AP_VISIBILITIES = new Set<string>([
 ]);
 const PUBLIC_RECIPIENTS = new Set<string>(["https://www.w3.org/ns/activitystreams#Public", "as:Public", "Public"]);
 
+interface ParsedAtUri {
+  authority: string;
+  pathSegments: readonly string[];
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -155,6 +160,108 @@ function actorUrl(value: unknown): string | undefined {
   if (typeof value === "string") return maybeHttpUrl(value);
   if (!isPlainRecord(value)) return undefined;
   return maybeHttpUrl(value.id) ?? maybeHttpUrl(value.uri) ?? maybeHttpUrl(value.url);
+}
+
+function isDidMethodChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39);
+}
+
+function isDidIdentifierChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    char === "." ||
+    char === "_" ||
+    char === ":" ||
+    char === "%" ||
+    char === "-"
+  );
+}
+
+function normalizeDid(value: unknown, label: string): string {
+  const raw = boundedString(value, label);
+  const parts = raw.split(":");
+  const method = parts[1] ?? "";
+  const identifier = parts.slice(2).join(":");
+  if (parts.length < 3 || parts[0] !== "did" || method.length === 0 || identifier.length === 0) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  if (![...method].every(isDidMethodChar) || ![...identifier].every(isDidIdentifierChar)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return raw;
+}
+
+function isHandleLabelChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || char === "-";
+}
+
+function isAtprotoHandleAuthority(value: string): boolean {
+  if (value.length === 0 || value.length > 253 || value.startsWith(".") || value.endsWith(".")) return false;
+  const labels = value.toLocaleLowerCase("en-US").split(".");
+  if (labels.length < 2) return false;
+  return labels.every((label) => {
+    if (label.length === 0 || label.length > 63 || label.startsWith("-") || label.endsWith("-")) return false;
+    return [...label].every(isHandleLabelChar);
+  });
+}
+
+function isAtUriPathSegmentChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    char === "." ||
+    char === "_" ||
+    char === "-" ||
+    char === "~" ||
+    char === "%" ||
+    char === ":"
+  );
+}
+
+function assertAtprotoAuthority(value: string, label: string): void {
+  if (value.includes("@") || value.includes("/") || value.includes("?") || value.includes("#")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  if (value.startsWith("did:")) {
+    normalizeDid(value, label);
+    return;
+  }
+  if (!isAtprotoHandleAuthority(value)) throw new TypeError(`Invalid ${label}.`);
+}
+
+function assertAtUriPathSegments(segments: readonly string[], label: string): void {
+  if (segments.length < 2) throw new TypeError(`Invalid ${label}.`);
+  for (const segment of segments) {
+    if (segment.length === 0 || segment.length > MAX_ID_LENGTH || ![...segment].every(isAtUriPathSegmentChar)) {
+      throw new TypeError(`Invalid ${label}.`);
+    }
+  }
+}
+
+function parseAtUri(value: unknown, label: string): ParsedAtUri {
+  const raw = boundedString(value, label);
+  const scheme = "at://";
+  if (!raw.startsWith(scheme) || raw.includes("#") || raw.includes("?")) throw new TypeError(`Invalid ${label}.`);
+  const rest = raw.slice(scheme.length);
+  const slashIndex = rest.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === rest.length - 1) throw new TypeError(`Invalid ${label}.`);
+  const authority = rest.slice(0, slashIndex);
+  const pathSegments = Object.freeze(rest.slice(slashIndex + 1).split("/"));
+  assertAtprotoAuthority(authority, label);
+  assertAtUriPathSegments(pathSegments, label);
+  return Object.freeze({ authority, pathSegments });
+}
+
+function normalizeAtUri(value: unknown, label: string): string {
+  parseAtUri(value, label);
+  return boundedString(value, label);
 }
 
 function cleanText(value: unknown): string | undefined {
@@ -355,19 +462,52 @@ export function mapMastodonProviderStatusToActivityPubNormalizedEvent(input: Rec
   return addActivityPubFlags(event, flags(input));
 }
 
+function canVerifyAtUriCollection(collection: RecommendationAtprotoNormalizedCollection): boolean {
+  return !collection.includes("#");
+}
+
 function atUri(repositoryDid: string, collection: RecommendationAtprotoNormalizedCollection, rkey: string | undefined): string {
-  if (rkey === undefined) throw new TypeError("Invalid ATProto provider record key.");
-  return `at://${repositoryDid}/${collection}/${boundedString(rkey, "ATProto provider record key")}`;
+  if (rkey === undefined || !canVerifyAtUriCollection(collection)) throw new TypeError("Invalid ATProto provider AT URI.");
+  return normalizeAtUri(`at://${repositoryDid}/${collection}/${boundedString(rkey, "ATProto provider record key")}`, "ATProto provider AT URI");
+}
+
+function verifyAtUriRecordTriple(
+  parsed: ParsedAtUri,
+  repositoryDid: string,
+  collection: RecommendationAtprotoNormalizedCollection,
+  rkey: string | undefined,
+  label: string
+): void {
+  if (rkey === undefined) return;
+  if (parsed.authority !== repositoryDid) throw new TypeError(`Invalid ${label}.`);
+  if (!canVerifyAtUriCollection(collection)) return;
+  if (parsed.pathSegments.length !== 2 || parsed.pathSegments[0] !== collection || parsed.pathSegments[1] !== rkey) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+}
+
+function providerAtUri(
+  value: unknown,
+  repositoryDid: string,
+  collection: RecommendationAtprotoNormalizedCollection,
+  rkey: string | undefined
+): string {
+  if (value === undefined || value === null) return atUri(repositoryDid, collection, rkey);
+  const parsed = parseAtUri(value, "ATProto provider AT URI");
+  verifyAtUriRecordTriple(parsed, repositoryDid, collection, rkey, "ATProto provider AT URI");
+  return boundedString(value, "ATProto provider AT URI");
 }
 
 function atUriString(value: unknown, label: string): string | undefined {
   const safe = optionalString(value, label);
-  return safe?.startsWith("at://") === true ? safe : undefined;
+  if (safe === undefined || !safe.startsWith("at://")) return undefined;
+  return normalizeAtUri(safe, label);
 }
 
 function didString(value: unknown, label: string): string | undefined {
   const safe = optionalString(value, label);
-  return safe?.startsWith("did:") === true ? safe : undefined;
+  if (safe === undefined || !safe.startsWith("did:")) return undefined;
+  return normalizeDid(safe, label);
 }
 
 function subjectUri(value: unknown): string | undefined {
@@ -413,7 +553,7 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
   if (!isPlainRecord(input)) throw new TypeError("Invalid ATProto provider record mapping input.");
   const operation = known<RecommendationAtprotoNormalizedOperation>(AT_OPS, input.operation, "ATProto provider operation");
   const collection = known<RecommendationAtprotoNormalizedCollection>(AT_COLLECTIONS, input.collection, "ATProto provider collection");
-  const repositoryDid = boundedString(input.repositoryDid, "ATProto provider repository DID");
+  const repositoryDid = normalizeDid(input.repositoryDid, "ATProto provider repository DID");
   const record = input.record === undefined || input.record === null ? undefined : input.record;
   if (record !== undefined && !isPlainRecord(record)) throw new TypeError("Invalid ATProto provider record.");
   const subject = record?.subject;
@@ -429,7 +569,7 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
     repositoryDid,
     collection,
     ...(input.rkey === undefined ? {} : { rkey: boundedString(input.rkey, "ATProto provider record key") }),
-    atUri: optionalString(input.atUri, "ATProto provider AT URI") ?? atUri(repositoryDid, collection, input.rkey),
+    atUri: providerAtUri(input.atUri, repositoryDid, collection, input.rkey),
     ...(input.cid === undefined ? {} : { cid: boundedString(input.cid, "ATProto provider CID") }),
     ...(resolvedSubjectAtUri === undefined ? {} : { subjectAtUri: resolvedSubjectAtUri }),
     ...(resolvedSubjectDid === undefined ? {} : { subjectDid: resolvedSubjectDid }),
