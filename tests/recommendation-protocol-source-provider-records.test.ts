@@ -45,7 +45,7 @@ test("maps Mastodon statuses into normalized ActivityPub create events", () => {
   assert.equal(event.containsThirdPartyData, true);
 
   const item = createActivityPubRecommendationSourceItem(event);
-  assert.equal(item?.kind, "event");
+  assert.equal(item?.kind, "post");
   assert.equal(item?.context.protocol, "activitypub");
 });
 
