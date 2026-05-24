@@ -100,7 +100,7 @@ test("maps generic ActivityPub activities and infers visibility from recipients"
   });
 
   assert.equal(event.type, "Create");
-  assert.equal(event.actorUri, "https://pod.example/alice#me");
+  assert.equal(event.actorUri, "https://pod.example/alice");
   assert.equal(event.objectId, "https://pod.example/alice/posts/1");
   assert.equal(event.objectType, "Article");
   assert.equal(event.visibility, "unlisted");
