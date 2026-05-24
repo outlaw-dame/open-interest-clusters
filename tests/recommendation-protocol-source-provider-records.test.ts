@@ -243,13 +243,12 @@ test("ATProto graph and feed records require valid subjects", () => {
   assert.equal(like.subjectAtUri, "at://did:plc:bob456/app.bsky.feed.post/post1");
 });
 
-test("ATProto DID record targets are routed to subjectDid instead of subjectAtUri", () => {
+test("ATProto DID record targets synthesize label AT URIs and route targets to subjectDid", () => {
   const label = mapAtprotoProviderRecordToNormalizedEvent({
     operation: "create",
     repositoryDid: "did:plc:labeler123",
     collection: "com.atproto.label.defs#label",
     rkey: "label1",
-    atUri: "at://did:plc:labeler123/com.atproto.label.defs/label1",
     observedAt: "2026-05-23T22:30:00.000Z",
     record: {
       uri: "did:plc:target456",
