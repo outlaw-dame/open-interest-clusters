@@ -212,11 +212,35 @@ function normalizeProviderRecordReadResultShape<TRecord>(
   return Object.freeze(result);
 }
 
+function conservativeTrue(defaultValue: boolean | undefined, recordValue: boolean | undefined): boolean | undefined {
+  return defaultValue === true || recordValue === true ? true : undefined;
+}
+
+function providerPolicy(defaultValue: boolean | undefined, recordValue: boolean | undefined): boolean | undefined {
+  if (defaultValue === false || recordValue === false) return false;
+  if (defaultValue === true || recordValue === true) return true;
+  return undefined;
+}
+
 function withRecordDefaults<TRecord extends RecommendationProtocolProviderRecordFlags>(
   recordDefaults: RecommendationProtocolProviderRecordFlags,
   record: TRecord
 ): TRecord {
-  return Object.freeze({ ...recordDefaults, ...record }) as TRecord;
+  const next: RecommendationProtocolProviderRecordFlags = {
+    ...recordDefaults,
+    ...record
+  };
+  const containsThirdPartyData = conservativeTrue(recordDefaults.containsThirdPartyData, record.containsThirdPartyData);
+  const serverSideProcessing = conservativeTrue(recordDefaults.serverSideProcessing, record.serverSideProcessing);
+  const providerPolicyAllowsProcessing = providerPolicy(
+    recordDefaults.providerPolicyAllowsProcessing,
+    record.providerPolicyAllowsProcessing
+  );
+
+  if (containsThirdPartyData !== undefined) next.containsThirdPartyData = containsThirdPartyData;
+  if (serverSideProcessing !== undefined) next.serverSideProcessing = serverSideProcessing;
+  if (providerPolicyAllowsProcessing !== undefined) next.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
+  return Object.freeze(next) as TRecord;
 }
 
 function normalizedReadResult<TRecord>(
