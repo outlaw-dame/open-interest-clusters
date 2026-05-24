@@ -161,6 +161,62 @@ test("maps ATProto post records into normalized record events", () => {
   assert.equal(item?.context.protocol, "atproto");
 });
 
+test("ATProto provider records validate repository DIDs and AT URIs at the mapper boundary", () => {
+  assert.throws(
+    () =>
+      mapAtprotoProviderRecordToNormalizedEvent({
+        operation: "create",
+        repositoryDid: "not-a-did",
+        collection: "app.bsky.feed.post",
+        rkey: "post1",
+        observedAt: "2026-05-23T22:00:00.000Z",
+        record: { text: "invalid repo" }
+      }),
+    /repository DID/u
+  );
+
+  assert.throws(
+    () =>
+      mapAtprotoProviderRecordToNormalizedEvent({
+        operation: "create",
+        repositoryDid: "did:plc:alice123",
+        collection: "app.bsky.feed.post",
+        rkey: "post1",
+        atUri: "https://example.com/not-atproto",
+        observedAt: "2026-05-23T22:00:00.000Z",
+        record: { text: "invalid uri" }
+      }),
+    /AT URI/u
+  );
+
+  assert.throws(
+    () =>
+      mapAtprotoProviderRecordToNormalizedEvent({
+        operation: "create",
+        repositoryDid: "did:plc:alice123",
+        collection: "app.bsky.feed.post",
+        rkey: "post1",
+        atUri: "at://did:plc:alice123/app.bsky.feed.post/other-post",
+        observedAt: "2026-05-23T22:00:00.000Z",
+        record: { text: "mismatched uri" }
+      }),
+    /AT URI/u
+  );
+
+  const event = mapAtprotoProviderRecordToNormalizedEvent({
+    operation: "create",
+    repositoryDid: "did:plc:alice123",
+    collection: "app.bsky.feed.post",
+    rkey: "post1",
+    atUri: "at://did:plc:alice123/app.bsky.feed.post/post1",
+    observedAt: "2026-05-23T22:00:00.000Z",
+    record: { text: "valid explicit uri" }
+  });
+
+  assert.equal(event.atUri, "at://did:plc:alice123/app.bsky.feed.post/post1");
+  assert.equal(createAtprotoRecommendationSourceItem(event)?.kind, "post");
+});
+
 test("ATProto graph and feed records require valid subjects", () => {
   assert.throws(
     () =>
@@ -193,6 +249,7 @@ test("ATProto DID record targets are routed to subjectDid instead of subjectAtUr
     repositoryDid: "did:plc:labeler123",
     collection: "com.atproto.label.defs#label",
     rkey: "label1",
+    atUri: "at://did:plc:labeler123/com.atproto.label.defs/label1",
     observedAt: "2026-05-23T22:30:00.000Z",
     record: {
       uri: "did:plc:target456",
@@ -200,6 +257,7 @@ test("ATProto DID record targets are routed to subjectDid instead of subjectAtUr
     }
   });
 
+  assert.equal(label.atUri, "at://did:plc:labeler123/com.atproto.label.defs/label1");
   assert.equal(label.subjectDid, "did:plc:target456");
   assert.equal(label.subjectAtUri, undefined);
 });
