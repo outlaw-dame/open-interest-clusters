@@ -151,22 +151,39 @@ function recordUrl(value: unknown): string | undefined {
   return maybeHttpUrl(value.id) ?? maybeHttpUrl(value.url) ?? maybeHttpUrl(value.uri);
 }
 
+function actorUrl(value: unknown): string | undefined {
+  if (typeof value === "string") return maybeHttpUrl(value);
+  if (!isPlainRecord(value)) return undefined;
+  return maybeHttpUrl(value.id) ?? maybeHttpUrl(value.uri) ?? maybeHttpUrl(value.url);
+}
+
 function cleanText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   let output = "";
   let inTag = false;
+  let tagQuote: string | undefined;
   for (let index = 0; index < value.length && output.length < MAX_TEXT_LENGTH; index += 1) {
     const char = value[index];
+    if (char === undefined) continue;
+    if (inTag) {
+      if (tagQuote !== undefined) {
+        if (char === tagQuote) tagQuote = undefined;
+        continue;
+      }
+      if (char === "\"" || char === "'") {
+        tagQuote = char;
+        continue;
+      }
+      if (char === ">") inTag = false;
+      continue;
+    }
     if (char === "<") {
       inTag = true;
+      tagQuote = undefined;
       output += " ";
       continue;
     }
-    if (char === ">") {
-      inTag = false;
-      continue;
-    }
-    if (!inTag && char !== undefined) output += char;
+    output += char;
   }
   output = output
     .replaceAll("&amp;", "&")
@@ -206,7 +223,8 @@ function language(value: unknown): string | undefined {
 function mastodonHandle(account: Record<string, unknown>): string | undefined {
   const raw = typeof account.acct === "string" ? account.acct : typeof account.username === "string" ? account.username : undefined;
   if (raw === undefined) return undefined;
-  const handle = raw.trim().replaceAll("@", "").toLocaleLowerCase("und");
+  const trimmed = raw.trim();
+  const handle = (trimmed.startsWith("@") ? trimmed.slice(1) : trimmed).toLocaleLowerCase("und");
   if (handle.length === 0 || handle.length > MAX_ID_LENGTH || hasUnsafeControl(handle) || handle.includes("/") || handle.includes(":")) {
     throw new TypeError("Invalid Mastodon provider handle.");
   }
@@ -270,24 +288,25 @@ export function mapActivityPubProviderActivityToNormalizedEvent(input: Recommend
   const objectType = objectRecord !== undefined && typeof objectRecord.type === "string" && AP_OBJECT_TYPES.has(objectRecord.type)
     ? objectRecord.type as RecommendationActivityPubNormalizedObjectType
     : "Unknown";
-  const actorUri = recordUrl(raw.actor) ?? (input.fallbackActorUri === undefined ? undefined : normalizeHttpUrl(input.fallbackActorUri, "ActivityPub fallback actor URI"));
-  if (actorUri === undefined) throw new TypeError("Invalid ActivityPub provider actor URI.");
+  const resolvedActorUrl = actorUrl(raw.actor) ?? (input.fallbackActorUri === undefined ? undefined : normalizeHttpUrl(input.fallbackActorUri, "ActivityPub fallback actor URI"));
+  if (resolvedActorUrl === undefined) throw new TypeError("Invalid ActivityPub provider actor URI.");
   const objectId = recordUrl(raw.object);
   const publishedAt = optionalTimestamp(objectRecord?.published ?? raw.published, "ActivityPub provider published timestamp");
   const updatedAt = optionalTimestamp(objectRecord?.updated ?? raw.updated, "ActivityPub provider updated timestamp");
   const plaintext = objectRecord === undefined ? undefined : cleanText(objectRecord.content) ?? cleanText(objectRecord.summary) ?? cleanText(objectRecord.name);
+  const includePlaintext = type === "Create" || type === "Update";
   const tags = objectRecord === undefined ? undefined : collectTags(objectRecord.tag);
   const event: RecommendationActivityPubNormalizedEvent = {
     type,
     activityId: firstHttpUrl("ActivityPub provider activity id", raw.id, raw.url),
-    actorUri,
+    actorUri: resolvedActorUrl,
     ...(objectId === undefined ? {} : { objectId }),
     objectType,
     visibility: activityPubVisibility(raw, input.fallbackVisibility),
     ...(publishedAt === undefined ? {} : { publishedAt }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
     observedAt: timestamp(input.observedAt, "ActivityPub provider observed timestamp"),
-    ...(plaintext === undefined ? {} : { plaintext }),
+    ...(plaintext === undefined || !includePlaintext ? {} : { plaintext }),
     ...(tags === undefined ? {} : { tags })
   };
   if (type === "Undo") {
@@ -309,7 +328,7 @@ export function mapMastodonProviderStatusToActivityPubNormalizedEvent(input: Rec
   const source = boosted ?? raw;
   const sourceAccount = isPlainRecord(source.account) ? source.account : account;
   const actorHandle = mastodonHandle(account);
-  const targetActorUri = boosted === undefined ? undefined : recordUrl(sourceAccount);
+  const targetActorUri = boosted === undefined ? undefined : actorUrl(sourceAccount);
   const targetHandle = boosted === undefined ? undefined : mastodonHandle(sourceAccount);
   const plaintext = cleanText(source.content) ?? cleanText(source.spoiler_text);
   const tags = collectTags(source.tags);
@@ -341,15 +360,24 @@ function atUri(repositoryDid: string, collection: RecommendationAtprotoNormalize
   return `at://${repositoryDid}/${collection}/${boundedString(rkey, "ATProto provider record key")}`;
 }
 
+function atUriString(value: unknown, label: string): string | undefined {
+  const safe = optionalString(value, label);
+  return safe?.startsWith("at://") === true ? safe : undefined;
+}
+
+function didString(value: unknown, label: string): string | undefined {
+  const safe = optionalString(value, label);
+  return safe?.startsWith("did:") === true ? safe : undefined;
+}
+
 function subjectUri(value: unknown): string | undefined {
-  return isPlainRecord(value) ? optionalString(value.uri, "ATProto provider subject URI") : undefined;
+  return isPlainRecord(value) ? atUriString(value.uri, "ATProto provider subject URI") : undefined;
 }
 
 function subjectDid(value: unknown): string | undefined {
-  if (typeof value === "string") return value.startsWith("did:") ? boundedString(value, "ATProto provider subject DID") : undefined;
+  if (typeof value === "string") return didString(value, "ATProto provider subject DID");
   if (!isPlainRecord(value)) return undefined;
-  const did = optionalString(value.did, "ATProto provider subject DID") ?? optionalString(value.subject, "ATProto provider subject DID");
-  return did?.startsWith("did:") === true ? did : undefined;
+  return didString(value.did, "ATProto provider subject DID") ?? didString(value.subject, "ATProto provider subject DID") ?? didString(value.uri, "ATProto provider subject DID");
 }
 
 function firstLanguage(value: unknown): string | undefined {
@@ -364,14 +392,19 @@ function atprotoContent(collection: RecommendationAtprotoNormalizedCollection, r
     const lang = firstLanguage(record.langs);
     if (plaintext !== undefined) content.plaintext = plaintext;
     if (lang !== undefined) content.language = lang;
-  } else if (collection === "app.bsky.actor.profile") {
+    return content;
+  }
+  if (collection === "app.bsky.actor.profile") {
     const title = cleanText(record.displayName);
     const plaintext = cleanText(record.description);
     if (title !== undefined) content.title = title;
     if (plaintext !== undefined) content.plaintext = plaintext;
-  } else if (collection === "com.atproto.label.defs#label") {
+    return content;
+  }
+  if (collection === "com.atproto.label.defs#label") {
     const plaintext = cleanText(record.val);
     if (plaintext !== undefined) content.plaintext = plaintext;
+    return content;
   }
   return content;
 }
@@ -384,8 +417,8 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
   const record = input.record === undefined || input.record === null ? undefined : input.record;
   if (record !== undefined && !isPlainRecord(record)) throw new TypeError("Invalid ATProto provider record.");
   const subject = record?.subject;
-  const resolvedSubjectAtUri = subjectUri(subject) ?? optionalString(record?.uri, "ATProto provider subject URI");
-  const resolvedSubjectDid = subjectDid(subject) ?? subjectDid(resolvedSubjectAtUri);
+  const resolvedSubjectAtUri = subjectUri(subject) ?? atUriString(record?.uri, "ATProto provider subject URI");
+  const resolvedSubjectDid = subjectDid(subject) ?? didString(record?.uri, "ATProto provider subject DID");
   const createdAt = optionalTimestamp(record?.createdAt ?? record?.cts, "ATProto provider created timestamp");
   const indexedAt = optionalTimestamp(input.indexedAt, "ATProto provider indexed timestamp");
   const repositoryVisibility = input.repositoryVisibility === undefined
