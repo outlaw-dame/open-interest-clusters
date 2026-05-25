@@ -62,6 +62,9 @@ jobs:
             sleep $((attempt * 20))
           done
 
+      - name: Verify package entrypoint metadata
+        run: npm run verify:package-entrypoints:metadata
+
       - name: Typecheck
         run: npm run lint:types
 

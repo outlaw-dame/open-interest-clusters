@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const ROOT = process.cwd();
 const packageJsonPath = path.join(ROOT, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+const metadataOnly = process.argv.includes("--metadata-only");
 
 function assertRelativeFilePath(value, label) {
   if (typeof value !== "string" || value.length === 0 || !value.startsWith("./")) {
@@ -16,13 +17,15 @@ function assertRelativeFilePath(value, label) {
     throw new Error(`Invalid ${label} in package.json: path escapes project root.`);
   }
 
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Missing ${label} target: ${value}`);
-  }
+  if (!metadataOnly) {
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Missing ${label} target: ${value}`);
+    }
 
-  const stat = fs.statSync(resolved);
-  if (!stat.isFile()) {
-    throw new Error(`Invalid ${label} target: ${value} is not a file.`);
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) {
+      throw new Error(`Invalid ${label} target: ${value} is not a file.`);
+    }
   }
 
   return { value, resolved };
@@ -47,8 +50,10 @@ if (typesEntry.resolved !== exportTypesEntry.resolved) {
   throw new Error("package.json types and exports['.'].types must point to the same file.");
 }
 
-await import(pathToFileURL(mainEntry.resolved).href);
+if (!metadataOnly) {
+  await import(pathToFileURL(mainEntry.resolved).href);
+}
 
-console.log("Verified package entrypoints:");
+console.log(metadataOnly ? "Verified package entrypoint metadata:" : "Verified package entrypoints:");
 console.log(`- main: ${mainEntry.value}`);
 console.log(`- types: ${typesEntry.value}`);
