@@ -52,8 +52,13 @@ export interface RecommendationAtprotoProviderRecordMapInput extends Recommendat
 }
 
 const MAX_ID_LENGTH = 2_048;
+const MAX_AT_URI_LENGTH = 8 * 1_024;
 const MAX_TEXT_LENGTH = 20_000;
 const MAX_TAGS = 64;
+const DID_PATTERN = /^did:[a-z]+:[A-Za-z0-9._:%-]*[A-Za-z0-9._-]$/u;
+const HANDLE_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+const NSID_PATTERN = /^[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(\.[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)$/u;
+const RECORD_KEY_PATTERN = /^[A-Za-z0-9._:~%-]{1,512}$/u;
 const AP_EVENT_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES);
 const AP_OBJECT_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES);
 const AP_UNDO_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES);
@@ -72,6 +77,13 @@ const AP_VISIBILITIES = new Set<string>([
   "unknown"
 ]);
 const PUBLIC_RECIPIENTS = new Set<string>(["https://www.w3.org/ns/activitystreams#Public", "as:Public", "Public"]);
+
+interface ParsedAtUri {
+  uri: string;
+  authority: string;
+  collection?: string;
+  rkey?: string;
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -355,19 +367,100 @@ export function mapMastodonProviderStatusToActivityPubNormalizedEvent(input: Rec
   return addActivityPubFlags(event, flags(input));
 }
 
+function atprotoDid(value: unknown, label: string): string {
+  const did = boundedString(value, label, MAX_ID_LENGTH);
+  if (!DID_PATTERN.test(did)) throw new TypeError(`Invalid ${label}.`);
+  return did;
+}
+
+function optionalAtprotoDid(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return atprotoDid(value, label);
+}
+
+function isAtprotoHandle(value: string): boolean {
+  const lower = value.toLocaleLowerCase("und");
+  if (lower.length === 0 || lower.length > 253 || lower.includes("..") || lower.includes(":")) return false;
+  const labels = lower.split(".");
+  if (labels.length < 2) return false;
+  if (/^[0-9]/u.test(labels[labels.length - 1] ?? "")) return false;
+  return labels.every((label) => HANDLE_LABEL_PATTERN.test(label));
+}
+
+function atprotoHandle(value: unknown, label: string): string {
+  const handle = boundedString(value, label, 253).toLocaleLowerCase("und");
+  if (!isAtprotoHandle(handle)) throw new TypeError(`Invalid ${label}.`);
+  return handle;
+}
+
+function optionalAtprotoHandle(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return atprotoHandle(value, label);
+}
+
+function atprotoNsid(value: unknown, label: string): string {
+  const nsid = boundedString(value, label, 317);
+  if (!NSID_PATTERN.test(nsid)) throw new TypeError(`Invalid ${label}.`);
+  return nsid;
+}
+
+function atprotoRecordKey(value: unknown, label: string): string {
+  const rkey = boundedString(value, label, 512);
+  if (rkey === "." || rkey === ".." || !RECORD_KEY_PATTERN.test(rkey)) throw new TypeError(`Invalid ${label}.`);
+  return rkey;
+}
+
+function validateAtUriAuthority(authority: string, label: string): string {
+  if (authority.startsWith("did:")) return atprotoDid(authority, `${label} authority`);
+  if (!isAtprotoHandle(authority)) throw new TypeError(`Invalid ${label}.`);
+  return authority;
+}
+
+function parseAtUri(value: unknown, label: string, options: { requireRecord?: boolean } = {}): ParsedAtUri {
+  const uri = boundedString(value, label, MAX_AT_URI_LENGTH);
+  if (!uri.startsWith("at://") || uri.includes("?") || uri.includes("#") || uri.endsWith("/")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  const remainder = uri.slice("at://".length);
+  const slashIndex = remainder.indexOf("/");
+  const authority = slashIndex === -1 ? remainder : remainder.slice(0, slashIndex);
+  const pathPart = slashIndex === -1 ? "" : remainder.slice(slashIndex + 1);
+  if (authority.length === 0 || authority.includes("@") || authority.includes("/") || authority.includes("?")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+
+  validateAtUriAuthority(authority, label);
+
+  const segments = pathPart.length === 0 ? [] : pathPart.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..") || segments.length > 2) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  if (options.requireRecord === true && segments.length !== 2) throw new TypeError(`Invalid ${label}.`);
+
+  const parsed: ParsedAtUri = { uri, authority };
+  const collection = segments[0];
+  if (collection !== undefined) parsed.collection = atprotoNsid(collection, `${label} collection`);
+  const rkey = segments[1];
+  if (rkey !== undefined) parsed.rkey = atprotoRecordKey(rkey, `${label} record key`);
+  return Object.freeze(parsed);
+}
+
 function atUri(repositoryDid: string, collection: RecommendationAtprotoNormalizedCollection, rkey: string | undefined): string {
   if (rkey === undefined) throw new TypeError("Invalid ATProto provider record key.");
-  return `at://${repositoryDid}/${collection}/${boundedString(rkey, "ATProto provider record key")}`;
+  return `at://${repositoryDid}/${collection}/${atprotoRecordKey(rkey, "ATProto provider record key")}`;
 }
 
 function atUriString(value: unknown, label: string): string | undefined {
-  const safe = optionalString(value, label);
-  return safe?.startsWith("at://") === true ? safe : undefined;
+  if (typeof value !== "string") return undefined;
+  if (!value.trim().startsWith("at://")) return undefined;
+  return parseAtUri(value, label, { requireRecord: true }).uri;
 }
 
 function didString(value: unknown, label: string): string | undefined {
   const safe = optionalString(value, label);
-  return safe?.startsWith("did:") === true ? safe : undefined;
+  if (safe?.startsWith("did:") !== true) return undefined;
+  return atprotoDid(safe, label);
 }
 
 function subjectUri(value: unknown): string | undefined {
@@ -408,7 +501,21 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
   if (!isPlainRecord(input)) throw new TypeError("Invalid ATProto provider record mapping input.");
   const operation = known<RecommendationAtprotoNormalizedOperation>(AT_OPS, input.operation, "ATProto provider operation");
   const collection = known<RecommendationAtprotoNormalizedCollection>(AT_COLLECTIONS, input.collection, "ATProto provider collection");
-  const repositoryDid = boundedString(input.repositoryDid, "ATProto provider repository DID");
+  const repositoryDid = atprotoDid(input.repositoryDid, "ATProto provider repository DID");
+  const repositoryHandle = optionalAtprotoHandle(input.handle, "ATProto provider handle");
+  const inputRkey = input.rkey === undefined ? undefined : atprotoRecordKey(input.rkey, "ATProto provider record key");
+  const explicitAtUri = input.atUri === undefined ? undefined : parseAtUri(input.atUri, "ATProto provider AT URI", { requireRecord: true });
+  const resolvedRkey = inputRkey ?? explicitAtUri?.rkey;
+  if (resolvedRkey === undefined) throw new TypeError("Invalid ATProto provider record key.");
+  if (explicitAtUri !== undefined) {
+    if (explicitAtUri.authority.startsWith("did:")) {
+      if (explicitAtUri.authority !== repositoryDid) throw new TypeError("Invalid ATProto provider AT URI repository mismatch.");
+    } else if (repositoryHandle === undefined || atprotoHandle(explicitAtUri.authority, "ATProto provider AT URI authority handle") !== repositoryHandle) {
+      throw new TypeError("Invalid ATProto provider AT URI repository mismatch.");
+    }
+    if (explicitAtUri.collection !== collection) throw new TypeError("Invalid ATProto provider AT URI collection mismatch.");
+    if (explicitAtUri.rkey !== resolvedRkey) throw new TypeError("Invalid ATProto provider AT URI record key mismatch.");
+  }
   const record = input.record === undefined || input.record === null ? undefined : input.record;
   if (record !== undefined && !isPlainRecord(record)) throw new TypeError("Invalid ATProto provider record.");
   const subject = record?.subject;
@@ -423,12 +530,12 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
     operation,
     repositoryDid,
     collection,
-    ...(input.rkey === undefined ? {} : { rkey: boundedString(input.rkey, "ATProto provider record key") }),
-    atUri: optionalString(input.atUri, "ATProto provider AT URI") ?? atUri(repositoryDid, collection, input.rkey),
+    rkey: resolvedRkey,
+    atUri: explicitAtUri?.uri ?? atUri(repositoryDid, collection, resolvedRkey),
     ...(input.cid === undefined ? {} : { cid: boundedString(input.cid, "ATProto provider CID") }),
     ...(resolvedSubjectAtUri === undefined ? {} : { subjectAtUri: resolvedSubjectAtUri }),
     ...(resolvedSubjectDid === undefined ? {} : { subjectDid: resolvedSubjectDid }),
-    ...(input.handle === undefined ? {} : { handle: boundedString(input.handle, "ATProto provider handle") }),
+    ...(repositoryHandle === undefined ? {} : { handle: repositoryHandle }),
     repositoryVisibility,
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(indexedAt === undefined ? {} : { indexedAt }),
