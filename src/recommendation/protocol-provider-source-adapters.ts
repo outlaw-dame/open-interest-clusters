@@ -88,7 +88,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function optionalBoundedNonEmptyString(value: unknown, maxLength: number, label: string): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || hasUnsafeControlCharacter(value)) {
     throw new TypeError(`Invalid ${label}.`);
   }
@@ -97,13 +97,13 @@ function optionalBoundedNonEmptyString(value: unknown, maxLength: number, label:
 }
 
 function optionalBoolean(value: unknown, label: string): boolean | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") throw new TypeError(`Invalid ${label}.`);
   return value;
 }
 
 function optionalKnownString<T extends string>(value: unknown, allowed: ReadonlySet<string>, label: string): T | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || !allowed.has(value)) throw new TypeError(`Invalid ${label}.`);
   return value as T;
 }
@@ -184,6 +184,10 @@ function normalizeProviderRecordReadResultShape<TRecord>(
   maxRecordsPerRead: number
 ): RecommendationProtocolProviderRecordSourceReadResult<TRecord> {
   if (!isPlainRecord(value) || !Array.isArray(value.records) || value.records.length > maxRecordsPerRead) {
+    throw new TypeError("Invalid protocol provider record source read result.");
+  }
+
+  if (value.records.some((record) => !isPlainRecord(record))) {
     throw new TypeError("Invalid protocol provider record source read result.");
   }
 
