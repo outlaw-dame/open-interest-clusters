@@ -187,19 +187,20 @@ test("ATProto graph and feed records require valid subjects", () => {
   assert.equal(like.subjectAtUri, "at://did:plc:bob456/app.bsky.feed.post/post1");
 });
 
-test("ATProto DID record targets are routed to subjectDid instead of subjectAtUri", () => {
-  const label = mapAtprotoProviderRecordToNormalizedEvent({
-    operation: "create",
-    repositoryDid: "did:plc:labeler123",
-    collection: "com.atproto.label.defs#label",
-    rkey: "label1",
-    observedAt: "2026-05-23T22:30:00.000Z",
-    record: {
-      uri: "did:plc:target456",
-      val: "spam"
-    }
-  });
-
-  assert.equal(label.subjectDid, "did:plc:target456");
-  assert.equal(label.subjectAtUri, undefined);
+test("ATProto labels are rejected as repository records", () => {
+  assert.throws(
+    () =>
+      mapAtprotoProviderRecordToNormalizedEvent({
+        operation: "create",
+        repositoryDid: "did:plc:labeler123",
+        collection: "com.atproto.label.defs#label" as never,
+        rkey: "label1",
+        observedAt: "2026-05-23T22:30:00.000Z",
+        record: {
+          uri: "did:plc:target456",
+          val: "spam"
+        }
+      }),
+    /collection/u
+  );
 });
