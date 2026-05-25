@@ -59,8 +59,7 @@ export const RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS = [
   "app.bsky.feed.like",
   "app.bsky.feed.repost",
   "app.bsky.graph.follow",
-  "app.bsky.graph.block",
-  "com.atproto.label.defs#label"
+  "app.bsky.graph.block"
 ] as const;
 export type RecommendationAtprotoNormalizedCollection = typeof RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS[number];
 
@@ -405,7 +404,6 @@ function contentKindFromAtproto(collection: RecommendationAtprotoNormalizedColle
     case "app.bsky.graph.follow":
       return "follow";
     case "app.bsky.graph.block":
-    case "com.atproto.label.defs#label":
       return "unknown";
   }
 }
@@ -509,9 +507,6 @@ function atprotoKind(
     case "app.bsky.graph.follow":
       if (operation === "update") throw new TypeError("Invalid ATProto recommendation follow operation.");
       return operation === "create" ? "FollowAdd" : "FollowRemove";
-    case "com.atproto.label.defs#label":
-      if (operation !== "create") throw new TypeError("Invalid ATProto recommendation label operation.");
-      return "ReportCreate";
     case "app.bsky.graph.block":
       return null;
   }

@@ -401,11 +401,6 @@ function atprotoContent(collection: RecommendationAtprotoNormalizedCollection, r
     if (plaintext !== undefined) content.plaintext = plaintext;
     return content;
   }
-  if (collection === "com.atproto.label.defs#label") {
-    const plaintext = cleanText(record.val);
-    if (plaintext !== undefined) content.plaintext = plaintext;
-    return content;
-  }
   return content;
 }
 
