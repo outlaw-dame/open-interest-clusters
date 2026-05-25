@@ -27,6 +27,7 @@ export * from "./recommendation/protocol-source-normalizers.js";
 export * from "./recommendation/protocol-source-adapters.js";
 export * from "./recommendation/protocol-source-authorization.js";
 export * from "./recommendation/protocol-source-provider-records.js";
+export * from "./recommendation/protocol-provider-source-adapters.js";
 export * from "./recommendation/consent-gated-source-adapter.js";
 export * from "./recommendation/interest-signal.js";
 export * from "./recommendation/interest-signal-derivation.js";
