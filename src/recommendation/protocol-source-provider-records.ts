@@ -502,12 +502,17 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
   const operation = known<RecommendationAtprotoNormalizedOperation>(AT_OPS, input.operation, "ATProto provider operation");
   const collection = known<RecommendationAtprotoNormalizedCollection>(AT_COLLECTIONS, input.collection, "ATProto provider collection");
   const repositoryDid = atprotoDid(input.repositoryDid, "ATProto provider repository DID");
+  const repositoryHandle = optionalAtprotoHandle(input.handle, "ATProto provider handle");
   const inputRkey = input.rkey === undefined ? undefined : atprotoRecordKey(input.rkey, "ATProto provider record key");
   const explicitAtUri = input.atUri === undefined ? undefined : parseAtUri(input.atUri, "ATProto provider AT URI", { requireRecord: true });
   const resolvedRkey = inputRkey ?? explicitAtUri?.rkey;
   if (resolvedRkey === undefined) throw new TypeError("Invalid ATProto provider record key.");
   if (explicitAtUri !== undefined) {
-    if (explicitAtUri.authority !== repositoryDid) throw new TypeError("Invalid ATProto provider AT URI repository mismatch.");
+    if (explicitAtUri.authority.startsWith("did:")) {
+      if (explicitAtUri.authority !== repositoryDid) throw new TypeError("Invalid ATProto provider AT URI repository mismatch.");
+    } else if (repositoryHandle === undefined || atprotoHandle(explicitAtUri.authority, "ATProto provider AT URI authority handle") !== repositoryHandle) {
+      throw new TypeError("Invalid ATProto provider AT URI repository mismatch.");
+    }
     if (explicitAtUri.collection !== collection) throw new TypeError("Invalid ATProto provider AT URI collection mismatch.");
     if (explicitAtUri.rkey !== resolvedRkey) throw new TypeError("Invalid ATProto provider AT URI record key mismatch.");
   }
@@ -516,7 +521,6 @@ export function mapAtprotoProviderRecordToNormalizedEvent(input: RecommendationA
   const subject = record?.subject;
   const resolvedSubjectAtUri = subjectUri(subject) ?? atUriString(record?.uri, "ATProto provider subject URI");
   const resolvedSubjectDid = subjectDid(subject) ?? didString(record?.uri, "ATProto provider subject DID");
-  const repositoryHandle = optionalAtprotoHandle(input.handle, "ATProto provider handle");
   const createdAt = optionalTimestamp(record?.createdAt ?? record?.cts, "ATProto provider created timestamp");
   const indexedAt = optionalTimestamp(input.indexedAt, "ATProto provider indexed timestamp");
   const repositoryVisibility = input.repositoryVisibility === undefined
