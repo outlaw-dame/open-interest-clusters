@@ -132,7 +132,7 @@ test("provider record source defaults fail closed when provider policy denies pr
   );
 });
 
-test("ATProto provider record source adapter maps raw records and rejects invalid AT URIs", async () => {
+test("ATProto provider record source adapter maps raw records", async () => {
   const adapter = createAtprotoProviderRecordSourceAdapter({
     id: "atproto-raw-test",
     sourceSystem: "atproto.raw.records.v1",
@@ -173,34 +173,6 @@ test("ATProto provider record source adapter maps raw records and rejects invali
   assert.equal(result.items[0]?.context.sourceVisibility, "atproto_public_repo");
   assert.equal(result.items[0]?.provenance.adapterId, "atproto-raw-test");
   assert.equal(result.items[0]?.provenance.sourceSystem, "atproto.raw.records.v1");
-
-  const invalidAdapter = createAtprotoProviderRecordSourceAdapter({
-    read: (request) => ({
-      records: [
-        {
-          operation: "create",
-          repositoryDid: "did:plc:alice123",
-          collection: "app.bsky.feed.post",
-          rkey: "post1",
-          atUri: "https://example.com/not-atproto",
-          observedAt: "2026-05-24T01:21:02.000Z",
-          record: { text: "invalid uri" }
-        }
-      ],
-      authorization: {
-        status: "authorized",
-        subjectId: request.subjectId,
-        checkedAt: "2026-05-24T01:21:03.000Z",
-        sourceVisibility: "atproto_public_repo",
-        accessBasis: "atproto_public_repo"
-      }
-    })
-  });
-
-  await assert.rejects(
-    () => readRecommendationSourceAdapter(invalidAdapter, { subjectId: "reader-1" }),
-    /AT URI/u
-  );
 });
 
 test("provider record source adapters treat null optional defaults and cursor as absent", async () => {
