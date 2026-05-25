@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "description": "Portable schema, dataset, validation, normalization, and runtime helpers for canonical hashtag interest clusters.",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
     },
     "./schema": "./schema/interest-cluster.schema.json",
     "./datasets/global-v1": "./datasets/interests.global.v1.json"
@@ -25,6 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "lint:types": "tsc -p tsconfig.json --noEmit",
+    "verify:package-entrypoints": "node scripts/verify-package-entrypoints.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "validate:dataset": "tsx scripts/validate-dataset.ts datasets/interests.global.v1.json",
     "normalize:dataset": "tsx scripts/normalize-dataset.ts datasets/interests.global.v1.json",

@@ -68,6 +68,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify package entrypoints
+        run: npm run verify:package-entrypoints
+
+      - name: Package smoke check
+        run: npm pack --dry-run
+
       - name: Validate dataset
         run: npm run validate:dataset
 
