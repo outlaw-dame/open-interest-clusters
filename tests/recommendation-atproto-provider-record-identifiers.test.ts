@@ -29,6 +29,28 @@ test("ATProto provider records accept explicit AT URIs that match the DID, colle
   assert.equal(event.atUri, "at://did:plc:alice123/app.bsky.feed.post/post1");
 });
 
+test("ATProto provider records accept explicit AT URIs whose handle authority matches the provider handle", () => {
+  const event = mapPost({
+    handle: "Alice.Example.COM",
+    atUri: "at://Alice.Example.COM/app.bsky.feed.post/post1"
+  });
+
+  assert.equal(event.handle, "alice.example.com");
+  assert.equal(event.atUri, "at://Alice.Example.COM/app.bsky.feed.post/post1");
+});
+
+test("ATProto provider records reject handle-authority AT URIs without a matching provider handle", () => {
+  assert.throws(
+    () => mapPost({ atUri: "at://alice.example.com/app.bsky.feed.post/post1" }),
+    /repository mismatch/u
+  );
+
+  assert.throws(
+    () => mapPost({ handle: "mallory.example.com", atUri: "at://alice.example.com/app.bsky.feed.post/post1" }),
+    /repository mismatch/u
+  );
+});
+
 test("ATProto provider records can derive rkey from a matching explicit AT URI", () => {
   const event = mapAtprotoProviderRecordToNormalizedEvent({
     operation: "create",
@@ -44,6 +66,49 @@ test("ATProto provider records can derive rkey from a matching explicit AT URI",
 
   assert.equal(event.rkey, "post-from-uri");
   assert.equal(event.atUri, "at://did:plc:alice123/app.bsky.feed.post/post-from-uri");
+});
+
+test("ATProto provider records accept spec-valid percent record keys", () => {
+  const event = mapPost({ rkey: "post%3A1" });
+
+  assert.equal(event.rkey, "post%3A1");
+  assert.equal(event.atUri, "at://did:plc:alice123/app.bsky.feed.post/post%3A1");
+});
+
+test("ATProto provider records accept mixed-case handle authorities in subject AT URIs", () => {
+  const like = mapAtprotoProviderRecordToNormalizedEvent({
+    operation: "create",
+    repositoryDid: "did:plc:alice123",
+    collection: "app.bsky.feed.like",
+    rkey: "like1",
+    observedAt,
+    record: {
+      subject: {
+        uri: "at://Alice.Example.COM/app.bsky.feed.post/post1",
+        cid: "bafyreibob"
+      }
+    }
+  });
+
+  assert.equal(like.subjectAtUri, "at://Alice.Example.COM/app.bsky.feed.post/post1");
+});
+
+test("ATProto provider records accept AT URI collections with hyphenated final NSID segments", () => {
+  const event = mapAtprotoProviderRecordToNormalizedEvent({
+    operation: "create",
+    repositoryDid: "did:plc:alice123",
+    collection: "app.bsky.feed.like",
+    rkey: "like-with-hyphenated-collection-subject",
+    observedAt,
+    record: {
+      subject: {
+        uri: "at://did:plc:bob456/com.example.my-cool-record/rkey1",
+        cid: "bafyreibob"
+      }
+    }
+  });
+
+  assert.equal(event.subjectAtUri, "at://did:plc:bob456/com.example.my-cool-record/rkey1");
 });
 
 test("ATProto provider records reject malformed repository DIDs", () => {
