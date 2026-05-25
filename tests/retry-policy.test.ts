@@ -69,3 +69,34 @@ test("executeWithRetry emits retry events with bounded delay", async () => {
   assert.equal(firstDelay <= 15, true);
   assert.equal(secondDelay <= 15, true);
 });
+
+test("executeWithRetry does not schedule retries beyond max elapsed budget", async () => {
+  let attempts = 0;
+  let scheduledRetries = 0;
+  let slept = false;
+
+  await assert.rejects(
+    () =>
+      executeWithRetry(async () => {
+        attempts += 1;
+        throw new Error("temporary");
+      }, {
+        attempts: 3,
+        initialDelayMs: 10,
+        maxDelayMs: 10,
+        maxElapsedMs: 5,
+        jitterRatio: 0,
+        onRetry: () => {
+          scheduledRetries += 1;
+        },
+        retrySleeper: async () => {
+          slept = true;
+        }
+      }),
+    /temporary/u
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(scheduledRetries, 0);
+  assert.equal(slept, false);
+});
