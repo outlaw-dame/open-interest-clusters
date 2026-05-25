@@ -31,6 +31,30 @@ function assertRelativeFilePath(value, label) {
   return { value, resolved };
 }
 
+function collectExportPathTargets(exportValue, exportKey) {
+  const targets = [];
+
+  if (typeof exportValue === "string") {
+    targets.push({ label: `exports['${exportKey}']`, value: exportValue });
+    return targets;
+  }
+
+  if (exportValue !== null && typeof exportValue === "object") {
+    for (const [conditionKey, conditionValue] of Object.entries(exportValue)) {
+      if (typeof conditionValue === "string") {
+        targets.push({
+          label: `exports['${exportKey}'].${conditionKey}`,
+          value: conditionValue
+        });
+      }
+    }
+
+    return targets;
+  }
+
+  throw new Error(`Invalid exports['${exportKey}'] in package.json.`);
+}
+
 const mainEntry = assertRelativeFilePath(packageJson.main, "main");
 const typesEntry = assertRelativeFilePath(packageJson.types, "types");
 
@@ -52,6 +76,22 @@ if (typesEntry.resolved !== exportTypesEntry.resolved) {
 
 if (!metadataOnly) {
   await import(pathToFileURL(mainEntry.resolved).href);
+}
+
+const exportObject = packageJson.exports;
+if (exportObject === undefined || exportObject === null || typeof exportObject !== "object") {
+  throw new Error("Invalid exports field in package.json.");
+}
+
+for (const [exportKey, exportValue] of Object.entries(exportObject)) {
+  if (exportKey === ".") {
+    continue;
+  }
+
+  const targets = collectExportPathTargets(exportValue, exportKey);
+  for (const target of targets) {
+    assertRelativeFilePath(target.value, target.label);
+  }
 }
 
 console.log(metadataOnly ? "Verified package entrypoint metadata:" : "Verified package entrypoints:");

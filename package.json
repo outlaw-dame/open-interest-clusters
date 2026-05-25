@@ -27,7 +27,7 @@
     "lint:types": "tsc -p tsconfig.json --noEmit",
     "verify:package-entrypoints:metadata": "node scripts/verify-package-entrypoints.mjs --metadata-only",
     "verify:package-entrypoints": "node scripts/verify-package-entrypoints.mjs",
-    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test": "npm run build && npm run verify:package-entrypoints && node --test dist/tests/*.test.js",
     "validate:dataset": "tsx scripts/validate-dataset.ts datasets/interests.global.v1.json",
     "normalize:dataset": "tsx scripts/normalize-dataset.ts datasets/interests.global.v1.json",
     "prepare": "npm run build"
