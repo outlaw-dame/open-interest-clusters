@@ -38,7 +38,9 @@ class SafeBrowsingRequestError extends Error {
   constructor(message: string, options: { status?: number; retryable?: boolean } = {}) {
     super(message);
     this.name = "SafeBrowsingRequestError";
-    this.status = options.status;
+    if (options.status !== undefined) {
+      this.status = options.status;
+    }
     this.retryable = options.retryable ?? false;
   }
 }

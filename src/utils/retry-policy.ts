@@ -33,24 +33,18 @@ const DEFAULT_INITIAL_DELAY_MS = 100;
 const DEFAULT_MAX_DELAY_MS = 2_000;
 const DEFAULT_JITTER_RATIO = 0.2;
 
-function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-
-  return Math.max(min, Math.min(max, Math.floor(value ?? fallback)));
+export function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+  const safeValue = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(min, Math.min(max, Math.floor(safeValue)));
 }
 
 function boundedRatio(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-
-  return Math.max(0, Math.min(1, value ?? fallback));
+  const safeValue = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(1, safeValue));
 }
 
 function now(): number {
-  return Date.now();
+  return performance.now();
 }
 
 function createAbortError(): Error {
@@ -130,7 +124,7 @@ export async function executeWithRetry<T>(
     }
   }
 
-  if (lastError instanceof Error) {
+  if (lastError !== undefined) {
     throw lastError;
   }
 

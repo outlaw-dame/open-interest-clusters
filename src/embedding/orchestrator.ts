@@ -1,5 +1,5 @@
 import type { InterestCluster, InterestClusterDataset } from "../types/schema.js";
-import { executeWithRetry } from "../utils/retry-policy.js";
+import { boundedInteger, executeWithRetry } from "../utils/retry-policy.js";
 import type { EmbeddingProvider, EmbeddingResult } from "./types.js";
 import { clusterToEmbeddingText } from "./text.js";
 
@@ -25,11 +25,6 @@ const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_INITIAL_RETRY_DELAY_MS = 200;
 const DEFAULT_MAX_RETRY_DELAY_MS = 2_000;
 
-function boundedPositiveInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(value ?? fallback)));
-}
-
 export class EmbeddingOrchestrator {
   private readonly provider: EmbeddingProvider;
   private readonly batchSize: number;
@@ -41,13 +36,13 @@ export class EmbeddingOrchestrator {
 
   public constructor(provider: EmbeddingProvider, options: EmbeddingOrchestratorOptions = {}) {
     this.provider = provider;
-    this.batchSize = boundedPositiveInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 128);
-    this.maxConcurrentBatches = boundedPositiveInteger(options.maxConcurrentBatches, DEFAULT_MAX_CONCURRENT_BATCHES, 1, 8);
-    this.retryAttempts = boundedPositiveInteger(options.retryAttempts, DEFAULT_RETRY_ATTEMPTS, 1, 8);
-    this.initialRetryDelayMs = boundedPositiveInteger(options.initialRetryDelayMs, DEFAULT_INITIAL_RETRY_DELAY_MS, 10, 30_000);
+    this.batchSize = boundedInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 128);
+    this.maxConcurrentBatches = boundedInteger(options.maxConcurrentBatches, DEFAULT_MAX_CONCURRENT_BATCHES, 1, 8);
+    this.retryAttempts = boundedInteger(options.retryAttempts, DEFAULT_RETRY_ATTEMPTS, 1, 8);
+    this.initialRetryDelayMs = boundedInteger(options.initialRetryDelayMs, DEFAULT_INITIAL_RETRY_DELAY_MS, 10, 30_000);
     this.maxRetryDelayMs = Math.max(
       this.initialRetryDelayMs,
-      boundedPositiveInteger(options.maxRetryDelayMs, DEFAULT_MAX_RETRY_DELAY_MS, 10, 120_000)
+      boundedInteger(options.maxRetryDelayMs, DEFAULT_MAX_RETRY_DELAY_MS, 10, 120_000)
     );
     this.isRetryableError = options.isRetryableError ?? (() => true);
   }

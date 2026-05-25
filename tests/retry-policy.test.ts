@@ -60,6 +60,12 @@ test("executeWithRetry emits retry events with bounded delay", async () => {
 
   assert.equal(attempts, 3);
   assert.equal(scheduledDelays.length, 2);
-  assert.equal(scheduledDelays[0] <= 15, true);
-  assert.equal(scheduledDelays[1] <= 15, true);
+  const firstDelay = scheduledDelays[0];
+  const secondDelay = scheduledDelays[1];
+  if (firstDelay === undefined || secondDelay === undefined) {
+    assert.fail("Expected two scheduled retry delays.");
+  }
+
+  assert.equal(firstDelay <= 15, true);
+  assert.equal(secondDelay <= 15, true);
 });

@@ -204,3 +204,47 @@ test("ATProto labels are rejected as repository records", () => {
     /collection/u
   );
 });
+
+test("provider record mappers deterministically reject malformed payload variants", () => {
+  assert.throws(
+    () =>
+      mapActivityPubProviderActivityToNormalizedEvent({
+        observedAt: "2026-05-23T21:00:00.000Z",
+        rawActivity: {
+          id: "https://pod.example/alice/outbox/1",
+          actor: "https://pod.example/alice#me",
+          object: {
+            id: "https://pod.example/alice/posts/1",
+            type: "Article"
+          }
+        }
+      }),
+    TypeError
+  );
+
+  assert.throws(
+    () =>
+      mapMastodonProviderStatusToActivityPubNormalizedEvent({
+        observedAt: "2026-05-23T20:00:00.000Z",
+        rawStatus: {
+          uri: "https://social.example/users/alice/statuses/1",
+          visibility: "public"
+        }
+      }),
+    TypeError
+  );
+
+  assert.throws(
+    () =>
+      mapAtprotoProviderRecordToNormalizedEvent({
+        operation: "create",
+        repositoryDid: "did:plc:alice123",
+        collection: "app.bsky.feed.post",
+        observedAt: "2026-05-23T22:00:00.000Z",
+        record: {
+          text: "hello"
+        }
+      }),
+    TypeError
+  );
+});

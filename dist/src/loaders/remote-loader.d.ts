@@ -18,6 +18,11 @@ export interface FetchRemoteDatasetResult {
     notModified: boolean;
 }
 export declare class RemoteDatasetFetchError extends Error {
-    constructor(message: string);
+    readonly status?: number;
+    readonly retryable: boolean;
+    constructor(message: string, options?: {
+        status?: number;
+        retryable?: boolean;
+    });
 }
 export declare function fetchRemoteDataset(url: string, options?: FetchRemoteDatasetOptions): Promise<FetchRemoteDatasetResult>;

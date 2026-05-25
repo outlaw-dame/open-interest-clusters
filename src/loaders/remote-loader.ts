@@ -1,5 +1,5 @@
 import { deepFreeze } from "../utils/deep-freeze.js";
-import { executeWithRetry } from "../utils/retry-policy.js";
+import { boundedInteger, executeWithRetry } from "../utils/retry-policy.js";
 import { DatasetValidationError, validateDataset } from "../validation/validator.js";
 import type { InterestClusterDataset } from "../types/schema.js";
 
@@ -21,7 +21,9 @@ export class RemoteDatasetFetchError extends Error {
   constructor(message: string, options: { status?: number; retryable?: boolean } = {}) {
     super(message);
     this.name = "RemoteDatasetFetchError";
-    this.status = options.status;
+    if (options.status !== undefined) {
+      this.status = options.status;
+    }
     this.retryable = options.retryable ?? false;
   }
 }
@@ -30,20 +32,35 @@ function isRetryableHttpStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-function boundedPositiveInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(value ?? fallback)));
-}
-
 function withOptionalEtag(dataset: Readonly<InterestClusterDataset>, etag: string | null | undefined, notModified: boolean): FetchRemoteDatasetResult {
   if (etag) return { dataset, etag, notModified };
   return { dataset, notModified };
 }
 export async function fetchRemoteDataset(url: string, options: FetchRemoteDatasetOptions = {}): Promise<FetchRemoteDatasetResult> {
-  const attempts = boundedPositiveInteger(options.attempts, 4, 1, 8);
-  const initialDelayMs = boundedPositiveInteger(options.initialDelayMs, 300, 10, 30_000);
-  const maxDelayMs = boundedPositiveInteger(options.maxDelayMs, 3_000, initialDelayMs, 120_000);
+  const attempts = boundedInteger(options.attempts, 4, 1, 8);
+  const initialDelayMs = boundedInteger(options.initialDelayMs, 300, 10, 30_000);
+  const maxDelayMs = boundedInteger(options.maxDelayMs, 3_000, initialDelayMs, 120_000);
   const fetchImpl = options.fetchImpl ?? fetch;
+  const retryOptions: Parameters<typeof executeWithRetry<FetchRemoteDatasetResult>>[1] = {
+    attempts,
+    initialDelayMs,
+    maxDelayMs,
+    shouldRetry: ({ error }) => {
+      if (error instanceof DatasetValidationError || error instanceof SyntaxError) {
+        return false;
+      }
+
+      if (error instanceof RemoteDatasetFetchError) {
+        return error.retryable;
+      }
+
+      return true;
+    }
+  };
+
+  if (options.signal !== undefined) {
+    retryOptions.signal = options.signal;
+  }
 
   return executeWithRetry(async () => {
       const headers = new Headers(options.headers ?? {});
@@ -70,21 +87,5 @@ export async function fetchRemoteDataset(url: string, options: FetchRemoteDatase
       const validated = validateDataset(parsed);
       const frozen = deepFreeze(validated);
       return withOptionalEtag(frozen, response.headers.get("etag"), false);
-  }, {
-    attempts,
-    initialDelayMs,
-    maxDelayMs,
-    signal: options.signal,
-    shouldRetry: ({ error }) => {
-      if (error instanceof DatasetValidationError || error instanceof SyntaxError) {
-        return false;
-      }
-
-      if (error instanceof RemoteDatasetFetchError) {
-        return error.retryable;
-      }
-
-      return true;
-    }
-  });
+  }, retryOptions);
 }

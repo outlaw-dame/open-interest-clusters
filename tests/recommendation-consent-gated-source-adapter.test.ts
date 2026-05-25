@@ -9,6 +9,7 @@ import {
   type RecommendationSourceAdapter,
   type RecommendationSourceItem
 } from "../src/index.js";
+import { assertSerializedPayloadRedaction } from "./helpers/privacy-redaction.js";
 
 const publicSourceItem: RecommendationSourceItem = {
   kind: "post",
@@ -92,8 +93,7 @@ test("consent-gated source reads return only consent-allowed items", async () =>
   assert.equal(result.cursor, "next-cursor");
   assert.equal(result.consentEvaluations.every((evaluation) => evaluation.decision === "allow"), true);
   assert.equal(auditEvents.length, 2);
-  assert.equal(JSON.stringify(auditEvents).includes("opaque-public"), false);
-  assert.equal(JSON.stringify(auditEvents).includes("activitypub-test"), false);
+  assertSerializedPayloadRedaction(auditEvents, ["opaque-public", "activitypub-test"]);
 });
 
 test("consent-gated source reads fail closed by default when any item is denied", async () => {
@@ -138,7 +138,7 @@ test("consent-gated source reads can filter denied items without returning them"
   assert.equal(result.consentEvaluations[0]?.decision, "allow");
   assert.equal(auditEvents.length, 2);
   assert.equal(auditEvents.some((event) => event.decision === "deny"), true);
-  assert.equal(JSON.stringify(result).includes("opaque-private"), false);
+  assertSerializedPayloadRedaction(result, ["opaque-private"]);
 });
 
 test("filter-denied source reads prioritize denial errors when denial audit fails", async () => {
