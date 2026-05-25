@@ -30,9 +30,16 @@ test("ATProto provider records accept explicit AT URIs that match the DID, colle
 });
 
 test("ATProto provider records can derive rkey from a matching explicit AT URI", () => {
-  const event = mapPost({
-    rkey: undefined,
-    atUri: "at://did:plc:alice123/app.bsky.feed.post/post-from-uri"
+  const event = mapAtprotoProviderRecordToNormalizedEvent({
+    operation: "create",
+    repositoryDid: "did:plc:alice123",
+    collection: "app.bsky.feed.post",
+    observedAt,
+    atUri: "at://did:plc:alice123/app.bsky.feed.post/post-from-uri",
+    record: {
+      text: "hello",
+      createdAt: "2026-05-25T17:59:00.000Z"
+    }
   });
 
   assert.equal(event.rkey, "post-from-uri");
@@ -141,7 +148,7 @@ test("ATProto provider records validate feed and graph subjects strictly", () =>
         observedAt,
         record: { subject: "DID:plc:bob456" }
       }),
-    /subject DID/u
+    /graph subject/u
   );
 });
 
