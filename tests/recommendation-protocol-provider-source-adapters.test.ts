@@ -202,3 +202,64 @@ test("ATProto provider record source adapter maps raw records and rejects invali
     /AT URI/u
   );
 });
+
+test("provider record source adapters treat null optional defaults and cursor as absent", async () => {
+  const adapter = createMastodonProviderStatusSourceAdapter({
+    recordDefaults: {
+      projectionMode: null,
+      trustBoundary: null,
+      containsThirdPartyData: null,
+      serverSideProcessing: null,
+      providerPolicyAllowsProcessing: null
+    } as unknown as never,
+    read: (request) => ({
+      records: [
+        {
+          observedAt: "2026-05-24T02:00:02.000Z",
+          rawStatus: {
+            uri: "https://social.example/users/alice/statuses/3",
+            created_at: "2026-05-24T02:00:00.000Z",
+            visibility: "public",
+            content: "<p>null optional values should be tolerated</p>",
+            account: {
+              acct: "alice@social.example",
+              uri: "https://social.example/users/alice"
+            }
+          }
+        }
+      ],
+      authorization: {
+        status: "authorized",
+        subjectId: request.subjectId,
+        checkedAt: "2026-05-24T02:00:03.000Z",
+        sourceVisibility: "public",
+        accessBasis: "public_web"
+      },
+      cursor: null as unknown as string
+    })
+  });
+
+  const result = await readRecommendationSourceAdapter(adapter, { subjectId: "reader-1" });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.cursor, undefined);
+});
+
+test("provider record source adapters reject read results containing non-object records", async () => {
+  const adapter = createAtprotoProviderRecordSourceAdapter({
+    read: (request) => ({
+      records: [null, 1] as unknown as never[],
+      authorization: {
+        status: "authorized",
+        subjectId: request.subjectId,
+        checkedAt: "2026-05-24T02:10:03.000Z",
+        sourceVisibility: "atproto_public_repo",
+        accessBasis: "atproto_public_repo"
+      }
+    })
+  });
+
+  await assert.rejects(
+    () => readRecommendationSourceAdapter(adapter, { subjectId: "reader-1" }),
+    /read result/u
+  );
+});
