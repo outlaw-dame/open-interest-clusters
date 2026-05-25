@@ -1,5 +1,4 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
+import { executeWithRetry } from "../utils/retry-policy.js";
 import { sanitizeUrlList } from "./url-sanitizer.js";
 
 export interface SafeBrowsingThreat {
@@ -32,9 +31,22 @@ const DEFAULT_INITIAL_RETRY_DELAY_MS = 250;
 const DEFAULT_MAX_RETRY_DELAY_MS = 2_000;
 const MAX_BATCH_SIZE = 500;
 
-function jitteredBackoff(delayMs: number, maxDelayMs: number): number {
-  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(delayMs * 0.2)));
-  return Math.min(maxDelayMs, delayMs + jitter);
+class SafeBrowsingRequestError extends Error {
+  public readonly status?: number;
+  public readonly retryable: boolean;
+
+  constructor(message: string, options: { status?: number; retryable?: boolean } = {}) {
+    super(message);
+    this.name = "SafeBrowsingRequestError";
+    if (options.status !== undefined) {
+      this.status = options.status;
+    }
+    this.retryable = options.retryable ?? false;
+  }
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
 function normalizeEndpoint(endpoint: string): string {
@@ -151,10 +163,7 @@ export class GoogleSafeBrowsingClient {
   }
 
   private async fetchWithRetry(payload: unknown): Promise<Record<string, unknown>> {
-    let delayMs = this.initialRetryDelayMs;
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= this.retryAttempts; attempt += 1) {
+    return executeWithRetry(async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -172,26 +181,27 @@ export class GoogleSafeBrowsingClient {
         });
 
         if (!response.ok) {
-          throw new Error(`Safe Browsing request failed with status ${response.status}`);
+          throw new SafeBrowsingRequestError(
+            `Safe Browsing request failed with status ${response.status}`,
+            { status: response.status, retryable: isRetryableHttpStatus(response.status) }
+          );
         }
 
         return (await response.json()) as Record<string, unknown>;
-      } catch (error) {
-        lastError = error;
-
-        if (attempt === this.retryAttempts) {
-          break;
-        }
-
-        await sleep(jitteredBackoff(delayMs, this.maxRetryDelayMs));
-        delayMs = Math.min(this.maxRetryDelayMs, delayMs * 2);
       } finally {
         clearTimeout(timeout);
       }
-    }
+    }, {
+      attempts: this.retryAttempts,
+      initialDelayMs: this.initialRetryDelayMs,
+      maxDelayMs: this.maxRetryDelayMs,
+      shouldRetry: ({ error }) => {
+        if (error instanceof SafeBrowsingRequestError) {
+          return error.retryable;
+        }
 
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Safe Browsing request failed for an unknown reason");
+        return true;
+      }
+    });
   }
 }

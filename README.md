@@ -23,6 +23,9 @@ Portable schema, starter dataset, validation, normalization, semantic-interest t
 - `docs/reference-architecture.md`
 - `docs/adapter-strategy.md`
 - `docs/deployment-profiles.md`
+- `docs/subsystem-dependency-map.md`
+- `docs/risk-ranked-hardening-plan.md`
+- `docs/adapter-contributor-guide.md`
 
 ## Design goals
 

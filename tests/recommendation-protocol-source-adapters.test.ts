@@ -272,3 +272,36 @@ test("protocol source adapter shells reject oversized provider batches", async (
     /read result/u
   );
 });
+
+test("protocol source adapters emit sanitized malformed-record rejection events", async () => {
+  const rejectionEvents: Array<{ protocol: string; reason: string }> = [];
+  const adapter = createAtprotoRecommendationSourceAdapter({
+    normalizerOptions: {
+      onNormalizationRejected(event) {
+        rejectionEvents.push(event);
+      }
+    },
+    read: (request) => ({
+      records: [
+        {
+          ...atprotoPost,
+          atUri: "at://did:plc:alice123/app.bsky.feed.post/post1?bad=true"
+        }
+      ],
+      authorization: {
+        status: "authorized",
+        subjectId: request.subjectId,
+        checkedAt: "2026-05-20T13:00:03.000Z",
+        sourceVisibility: "atproto_public_repo",
+        accessBasis: "atproto_public_repo"
+      }
+    })
+  });
+
+  await assert.rejects(
+    () => readRecommendationSourceAdapter(adapter, { subjectId: "reader-1" }),
+    TypeError
+  );
+
+  assert.deepEqual(rejectionEvents, [{ protocol: "atproto", reason: "invalid_atproto_record" }]);
+});

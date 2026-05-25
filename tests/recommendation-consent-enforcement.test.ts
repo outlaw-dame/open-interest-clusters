@@ -15,6 +15,7 @@ import {
   type RecommendationConsentRequest,
   type RecommendationDerivedDataDeletionIntent
 } from "../src/index.js";
+import { assertPrivacySafeAuditEventShape, assertSerializedPayloadRedaction } from "./helpers/privacy-redaction.js";
 
 const subjectId = "did:web:alice.example";
 const policy: RecommendationConsentPolicy = {
@@ -89,8 +90,7 @@ test("requireRecommendationConsent throws privacy-safe denial errors", async () 
   assert.ok(thrown instanceof RecommendationConsentDeniedError);
   assert.equal(thrown.reason, "consent.deny.default");
   assert.equal(thrown.auditEvent.decision, "deny");
-  assert.equal(thrown.message.includes(subjectId), false);
-  assert.equal(JSON.stringify(thrown).includes(subjectId), false);
+  assertSerializedPayloadRedaction(thrown, [subjectId, "alice.example"]);
 });
 
 test("audit sink receives only privacy-safe event fields", async () => {
@@ -99,20 +99,10 @@ test("audit sink receives only privacy-safe event fields", async () => {
   await requireRecommendationConsent(policy, request, { auditSink: memoryAuditSink(events) });
 
   assert.equal(events.length, 1);
-  const serialized = JSON.stringify(events[0]);
-  assert.equal(serialized.includes(subjectId), false);
-  assert.equal(serialized.includes("alice.example"), false);
-  assert.deepEqual(Object.keys(events[0] ?? {}).sort(), [
-    "accessBasis",
-    "containsPrivateData",
-    "containsThirdPartyData",
-    "dataUse",
-    "decision",
-    "protocol",
-    "reason",
-    "serverSideProcessing",
-    "sourceVisibility"
-  ]);
+  const event = events[0];
+  assert.ok(event !== undefined);
+  assertSerializedPayloadRedaction(event, [subjectId, "alice.example"]);
+  assertPrivacySafeAuditEventShape(event);
 });
 
 test("audit sink failure is fail-closed by default and prevents allowed operation", async () => {
@@ -228,9 +218,7 @@ test("executeRecommendationDerivedDataDeletion sanitizes deleter failures", asyn
   }
 
   assert.ok(thrown instanceof RecommendationDerivedDataDeletionError);
-  assert.equal(thrown.message.includes(subjectId), false);
-  assert.equal(thrown.message.includes("pod.example"), false);
-  assert.equal(JSON.stringify(thrown).includes(subjectId), false);
+  assertSerializedPayloadRedaction(thrown, [subjectId, "pod.example"]);
 });
 
 test("executeRecommendationDerivedDataDeletion rejects invalid intents and deleters", async () => {

@@ -1,6 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import type { InterestCluster, InterestClusterDataset } from "../types/schema.js";
+import { boundedInteger, executeWithRetry } from "../utils/retry-policy.js";
 import type { EmbeddingProvider, EmbeddingResult } from "./types.js";
 import { clusterToEmbeddingText } from "./text.js";
 
@@ -17,6 +16,7 @@ export interface EmbeddingOrchestratorOptions {
   retryAttempts?: number;
   initialRetryDelayMs?: number;
   maxRetryDelayMs?: number;
+  isRetryableError?: (error: unknown) => boolean;
 }
 
 const DEFAULT_BATCH_SIZE = 16;
@@ -25,16 +25,6 @@ const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_INITIAL_RETRY_DELAY_MS = 200;
 const DEFAULT_MAX_RETRY_DELAY_MS = 2_000;
 
-function boundedPositiveInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(value ?? fallback)));
-}
-
-function jitteredBackoff(delayMs: number, maxDelayMs: number): number {
-  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(delayMs * 0.2)));
-  return Math.min(maxDelayMs, delayMs + jitter);
-}
-
 export class EmbeddingOrchestrator {
   private readonly provider: EmbeddingProvider;
   private readonly batchSize: number;
@@ -42,17 +32,19 @@ export class EmbeddingOrchestrator {
   private readonly retryAttempts: number;
   private readonly initialRetryDelayMs: number;
   private readonly maxRetryDelayMs: number;
+  private readonly isRetryableError: (error: unknown) => boolean;
 
   public constructor(provider: EmbeddingProvider, options: EmbeddingOrchestratorOptions = {}) {
     this.provider = provider;
-    this.batchSize = boundedPositiveInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 128);
-    this.maxConcurrentBatches = boundedPositiveInteger(options.maxConcurrentBatches, DEFAULT_MAX_CONCURRENT_BATCHES, 1, 8);
-    this.retryAttempts = boundedPositiveInteger(options.retryAttempts, DEFAULT_RETRY_ATTEMPTS, 1, 8);
-    this.initialRetryDelayMs = boundedPositiveInteger(options.initialRetryDelayMs, DEFAULT_INITIAL_RETRY_DELAY_MS, 10, 30_000);
+    this.batchSize = boundedInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 128);
+    this.maxConcurrentBatches = boundedInteger(options.maxConcurrentBatches, DEFAULT_MAX_CONCURRENT_BATCHES, 1, 8);
+    this.retryAttempts = boundedInteger(options.retryAttempts, DEFAULT_RETRY_ATTEMPTS, 1, 8);
+    this.initialRetryDelayMs = boundedInteger(options.initialRetryDelayMs, DEFAULT_INITIAL_RETRY_DELAY_MS, 10, 30_000);
     this.maxRetryDelayMs = Math.max(
       this.initialRetryDelayMs,
-      boundedPositiveInteger(options.maxRetryDelayMs, DEFAULT_MAX_RETRY_DELAY_MS, 10, 120_000)
+      boundedInteger(options.maxRetryDelayMs, DEFAULT_MAX_RETRY_DELAY_MS, 10, 120_000)
     );
+    this.isRetryableError = options.isRetryableError ?? (() => true);
   }
 
   public async generateClusterEmbeddings(
@@ -118,24 +110,14 @@ export class EmbeddingOrchestrator {
   }
 
   private async embedBatchWithRetry(texts: readonly string[]): Promise<EmbeddingResult[]> {
-    let delayMs = this.initialRetryDelayMs;
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= this.retryAttempts; attempt += 1) {
-      try {
-        return await this.provider.embedBatch(texts);
-      } catch (error) {
-        lastError = error;
-
-        if (attempt === this.retryAttempts) {
-          break;
-        }
-
-        await sleep(jitteredBackoff(delayMs, this.maxRetryDelayMs));
-        delayMs = Math.min(this.maxRetryDelayMs, delayMs * 2);
+    return executeWithRetry(
+      async () => this.provider.embedBatch(texts),
+      {
+        attempts: this.retryAttempts,
+        initialDelayMs: this.initialRetryDelayMs,
+        maxDelayMs: this.maxRetryDelayMs,
+        shouldRetry: ({ error }) => this.isRetryableError(error)
       }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error("Embedding provider failed for an unknown reason");
+    );
   }
 }

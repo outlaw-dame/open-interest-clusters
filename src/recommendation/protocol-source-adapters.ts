@@ -9,6 +9,8 @@ import {
   ACTIVITYPUB_RECOMMENDATION_SOURCE_NORMALIZER_ID,
   createActivityPubRecommendationSourceItem,
   createAtprotoRecommendationSourceItem,
+  type RecommendationProtocolNormalizationRejectionEvent,
+  type RecommendationProtocolNormalizationRejectionReason,
   type RecommendationActivityPubNormalizedEvent,
   type RecommendationAtprotoNormalizedRecordEvent,
   type RecommendationProtocolSourceNormalizerOptions
@@ -399,6 +401,23 @@ function normalizeSourceAdapterResult(
   return normalizeRecommendationSourceAdapterReadResult(result);
 }
 
+function recordNormalizationRejection(
+  options: RecommendationProtocolSourceNormalizerOptions,
+  protocol: RecommendationProtocolNormalizationRejectionEvent["protocol"],
+  reason: RecommendationProtocolNormalizationRejectionReason
+): void {
+  const callback = options.onNormalizationRejected;
+  if (callback === undefined) {
+    return;
+  }
+
+  try {
+    callback(Object.freeze({ protocol, reason }));
+  } catch {
+    // Rejection counters must never interfere with fail-closed normalization behavior.
+  }
+}
+
 function normalizeAdapterFactoryInput<TRecord>(
   input: RecommendationProtocolSourceAdapterBaseInput<TRecord>,
   defaults: {
@@ -471,7 +490,16 @@ export function createActivityPubRecommendationSourceAdapter(
       const items: RecommendationSourceItem[] = [];
 
       for (const record of providerResult.records) {
-        const item = createActivityPubRecommendationSourceItem(record, normalizerOptions);
+        let item: RecommendationSourceItem | null;
+        try {
+          item = createActivityPubRecommendationSourceItem(record, normalizerOptions);
+        } catch (error) {
+          if (error instanceof TypeError) {
+            recordNormalizationRejection(normalizerOptions, "activitypub", "invalid_activitypub_record");
+          }
+          throw error;
+        }
+
         if (item !== null) {
           items.push(applyAuthorizationToSourceItem(item, providerResult.authorization, safeInput.capabilities));
         }
@@ -512,7 +540,16 @@ export function createAtprotoRecommendationSourceAdapter(
       const items: RecommendationSourceItem[] = [];
 
       for (const record of providerResult.records) {
-        const item = createAtprotoRecommendationSourceItem(record, normalizerOptions);
+        let item: RecommendationSourceItem | null;
+        try {
+          item = createAtprotoRecommendationSourceItem(record, normalizerOptions);
+        } catch (error) {
+          if (error instanceof TypeError) {
+            recordNormalizationRejection(normalizerOptions, "atproto", "invalid_atproto_record");
+          }
+          throw error;
+        }
+
         if (item !== null) {
           items.push(applyAuthorizationToSourceItem(item, providerResult.authorization, safeInput.capabilities));
         }

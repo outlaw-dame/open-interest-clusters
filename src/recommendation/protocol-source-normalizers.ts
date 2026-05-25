@@ -84,6 +84,19 @@ export interface RecommendationProtocolSourceNormalizerOptions {
   containsThirdPartyData?: boolean;
   serverSideProcessing?: boolean;
   providerPolicyAllowsProcessing?: boolean;
+  onNormalizationRejected?: (event: RecommendationProtocolNormalizationRejectionEvent) => void;
+}
+
+export const RECOMMENDATION_PROTOCOL_NORMALIZATION_REJECTION_REASONS = [
+  "invalid_activitypub_record",
+  "invalid_atproto_record"
+] as const;
+export type RecommendationProtocolNormalizationRejectionReason =
+  typeof RECOMMENDATION_PROTOCOL_NORMALIZATION_REJECTION_REASONS[number];
+
+export interface RecommendationProtocolNormalizationRejectionEvent {
+  protocol: "activitypub" | "atproto";
+  reason: RecommendationProtocolNormalizationRejectionReason;
 }
 
 export interface RecommendationActivityPubNormalizedEvent extends RecommendationProtocolContentInput {
