@@ -93,6 +93,10 @@ export async function executeWithRetry<T>(
     const elapsedMs = now() - startedAt;
     throwIfAborted(options.signal);
 
+    if (attempt > 1 && maxElapsedMs !== undefined && elapsedMs >= maxElapsedMs) {
+      break;
+    }
+
     try {
       return await operation({ attempt, maxAttempts: attempts, elapsedMs });
     } catch (error) {
@@ -113,6 +117,10 @@ export async function executeWithRetry<T>(
       }
 
       const delayMs = retryDelay(nextBaseDelayMs, maxDelayMs, random, jitterRatio);
+      if (maxElapsedMs !== undefined && decisionContext.elapsedMs + delayMs >= maxElapsedMs) {
+        break;
+      }
+
       await options.onRetry?.({
         ...decisionContext,
         delayMs,
