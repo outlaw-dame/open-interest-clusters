@@ -57,8 +57,8 @@ const MAX_TEXT_LENGTH = 20_000;
 const MAX_TAGS = 64;
 const DID_PATTERN = /^did:[a-z]+:[A-Za-z0-9._:%-]*[A-Za-z0-9._-]$/u;
 const HANDLE_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-const NSID_PATTERN = /^[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(\.[a-zA-Z]([a-zA-Z0-9]{0,62})?)$/u;
-const RECORD_KEY_PATTERN = /^[A-Za-z0-9._:~-]{1,512}$/u;
+const NSID_PATTERN = /^[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(\.[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)$/u;
+const RECORD_KEY_PATTERN = /^[A-Za-z0-9._:~%-]{1,512}$/u;
 const AP_EVENT_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES);
 const AP_OBJECT_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES);
 const AP_UNDO_TYPES = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES);
@@ -379,8 +379,9 @@ function optionalAtprotoDid(value: unknown, label: string): string | undefined {
 }
 
 function isAtprotoHandle(value: string): boolean {
-  if (value.length === 0 || value.length > 253 || value.includes("..") || value.includes(":")) return false;
-  const labels = value.split(".");
+  const lower = value.toLocaleLowerCase("und");
+  if (lower.length === 0 || lower.length > 253 || lower.includes("..") || lower.includes(":")) return false;
+  const labels = lower.split(".");
   if (labels.length < 2) return false;
   if (/^[0-9]/u.test(labels[labels.length - 1] ?? "")) return false;
   return labels.every((label) => HANDLE_LABEL_PATTERN.test(label));
