@@ -108,6 +108,33 @@ test("embedding orchestrator retries transient provider failures", async () => {
   assert.equal(attempts, 2);
 });
 
+test("embedding orchestrator honors retry classification for permanent failures", async () => {
+  let attempts = 0;
+
+  const provider: EmbeddingProvider = {
+    async embedOne(text) {
+      return embedding(text);
+    },
+    async embedBatch() {
+      attempts += 1;
+      throw new Error("invalid_input");
+    }
+  };
+
+  const orchestrator = new EmbeddingOrchestrator(provider, {
+    retryAttempts: 5,
+    initialRetryDelayMs: 1,
+    maxRetryDelayMs: 2,
+    isRetryableError: (error) => (error instanceof Error ? error.message !== "invalid_input" : true)
+  });
+
+  await assert.rejects(async () => {
+    await orchestrator.generateClusterEmbeddings(dataset);
+  });
+
+  assert.equal(attempts, 1);
+});
+
 test("embedding orchestrator rejects cardinality mismatches", async () => {
   const provider: EmbeddingProvider = {
     async embedOne(text) {

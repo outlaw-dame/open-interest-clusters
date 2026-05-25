@@ -1,6 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import type { InterestCluster, InterestClusterDataset } from "../types/schema.js";
+import { executeWithRetry } from "../utils/retry-policy.js";
 import type { EmbeddingProvider, EmbeddingResult } from "./types.js";
 import { clusterToEmbeddingText } from "./text.js";
 
@@ -17,6 +16,7 @@ export interface EmbeddingOrchestratorOptions {
   retryAttempts?: number;
   initialRetryDelayMs?: number;
   maxRetryDelayMs?: number;
+  isRetryableError?: (error: unknown) => boolean;
 }
 
 const DEFAULT_BATCH_SIZE = 16;
@@ -30,11 +30,6 @@ function boundedPositiveInteger(value: number | undefined, fallback: number, min
   return Math.max(min, Math.min(max, Math.floor(value ?? fallback)));
 }
 
-function jitteredBackoff(delayMs: number, maxDelayMs: number): number {
-  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(delayMs * 0.2)));
-  return Math.min(maxDelayMs, delayMs + jitter);
-}
-
 export class EmbeddingOrchestrator {
   private readonly provider: EmbeddingProvider;
   private readonly batchSize: number;
@@ -42,6 +37,7 @@ export class EmbeddingOrchestrator {
   private readonly retryAttempts: number;
   private readonly initialRetryDelayMs: number;
   private readonly maxRetryDelayMs: number;
+  private readonly isRetryableError: (error: unknown) => boolean;
 
   public constructor(provider: EmbeddingProvider, options: EmbeddingOrchestratorOptions = {}) {
     this.provider = provider;
@@ -53,6 +49,7 @@ export class EmbeddingOrchestrator {
       this.initialRetryDelayMs,
       boundedPositiveInteger(options.maxRetryDelayMs, DEFAULT_MAX_RETRY_DELAY_MS, 10, 120_000)
     );
+    this.isRetryableError = options.isRetryableError ?? (() => true);
   }
 
   public async generateClusterEmbeddings(
@@ -118,24 +115,14 @@ export class EmbeddingOrchestrator {
   }
 
   private async embedBatchWithRetry(texts: readonly string[]): Promise<EmbeddingResult[]> {
-    let delayMs = this.initialRetryDelayMs;
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= this.retryAttempts; attempt += 1) {
-      try {
-        return await this.provider.embedBatch(texts);
-      } catch (error) {
-        lastError = error;
-
-        if (attempt === this.retryAttempts) {
-          break;
-        }
-
-        await sleep(jitteredBackoff(delayMs, this.maxRetryDelayMs));
-        delayMs = Math.min(this.maxRetryDelayMs, delayMs * 2);
+    return executeWithRetry(
+      async () => this.provider.embedBatch(texts),
+      {
+        attempts: this.retryAttempts,
+        initialDelayMs: this.initialRetryDelayMs,
+        maxDelayMs: this.maxRetryDelayMs,
+        shouldRetry: ({ error }) => this.isRetryableError(error)
       }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error("Embedding provider failed for an unknown reason");
+    );
   }
 }
