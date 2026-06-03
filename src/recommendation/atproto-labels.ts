@@ -48,6 +48,7 @@ const MAX_ATPROTO_LABEL_URI_LENGTH = 2_048;
 const MAX_ATPROTO_LABEL_CID_LENGTH = 256;
 const MAX_ATPROTO_LABEL_VALUE_LENGTH = 128;
 const MAX_ATPROTO_LABEL_SIGNATURE_LENGTH = 2_048;
+const MAX_ATPROTO_LABEL_TIMESTAMP_LENGTH = 64;
 const MIN_ATPROTO_LABEL_VERSION = 1;
 const MAX_ATPROTO_LABEL_VERSION = 1_000_000;
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u;
@@ -134,7 +135,7 @@ function daysInMonth(year: number, month: number): number {
 }
 
 function normalizeTimestamp(value: unknown, label: string): string {
-  const timestamp = requiredString(value, MAX_ATPROTO_LABEL_URI_LENGTH, label);
+  const timestamp = requiredString(value, MAX_ATPROTO_LABEL_TIMESTAMP_LENGTH, label);
   const match = RFC3339_TIMESTAMP_PATTERN.exec(timestamp);
   if (match === null) {
     throw new TypeError(`Invalid ATProto label ${label}.`);
@@ -161,8 +162,7 @@ function normalizeTimestamp(value: unknown, label: string): string {
     minute < 0 ||
     minute > 59 ||
     second < 0 ||
-    second > 60 ||
-    (second === 60 && minute !== 59)
+    second > 59
   ) {
     throw new TypeError(`Invalid ATProto label ${label}.`);
   }
@@ -173,6 +173,10 @@ function normalizeTimestamp(value: unknown, label: string): string {
     if (offsetHour > 23 || offsetMinute > 59) {
       throw new TypeError(`Invalid ATProto label ${label}.`);
     }
+  }
+
+  if (!Number.isFinite(Date.parse(timestamp))) {
+    throw new TypeError(`Invalid ATProto label ${label}.`);
   }
 
   return timestamp;
