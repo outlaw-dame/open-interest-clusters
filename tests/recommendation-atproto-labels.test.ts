@@ -64,15 +64,15 @@ test("isRecommendationAtprotoLabelExpired evaluates expiration boundaries", () =
   assert.equal(isRecommendationAtprotoLabelExpired(label, "2026-02-01T00:00:00Z"), true);
 });
 
-test("mergeRecommendationAtprotoLabelState applies newer negation and newer positive labels", () => {
+test("mergeRecommendationAtprotoLabelState preserves newer negation tombstones and newer positive labels", () => {
   const active = normalizeRecommendationAtprotoLabel(BASE_LABEL);
 
-  assert.equal(
+  assert.deepEqual(
     mergeRecommendationAtprotoLabelState({
       existing: active,
       incoming: { ...BASE_LABEL, neg: true, cts: "2026-01-02T00:00:00Z" }
     }),
-    undefined
+    normalizeRecommendationAtprotoLabel({ ...BASE_LABEL, neg: true, cts: "2026-01-02T00:00:00Z" })
   );
 
   assert.deepEqual(
@@ -93,6 +93,22 @@ test("mergeRecommendationAtprotoLabelState keeps existing label when incoming is
       incoming: { ...BASE_LABEL, neg: true, cts: "2026-01-02T00:00:00Z" }
     }),
     active
+  );
+});
+
+test("mergeRecommendationAtprotoLabelState prevents out-of-order positive resurrection after tombstone", () => {
+  const active = normalizeRecommendationAtprotoLabel(BASE_LABEL);
+  const tombstone = mergeRecommendationAtprotoLabelState({
+    existing: active,
+    incoming: { ...BASE_LABEL, neg: true, cts: "2026-01-03T00:00:00Z" }
+  });
+
+  assert.deepEqual(
+    mergeRecommendationAtprotoLabelState({
+      existing: tombstone,
+      incoming: { ...BASE_LABEL, cts: "2026-01-02T00:00:00Z" }
+    }),
+    normalizeRecommendationAtprotoLabel({ ...BASE_LABEL, neg: true, cts: "2026-01-03T00:00:00Z" })
   );
 });
 
