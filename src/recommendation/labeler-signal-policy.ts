@@ -179,12 +179,6 @@ function accepted(
   return Object.freeze({ decision: "accept", reasonCode: "labeler.accept.subscribed_evidence", auditEvent, evidence });
 }
 
-function collectionFromAtUri(uri: string): string | undefined {
-  if (!uri.startsWith("at://")) return undefined;
-  const parts = uri.slice("at://".length).split("/");
-  return parts.length >= 2 ? parts[1] : undefined;
-}
-
 function recordKindFromCollection(collection: string | undefined): RecommendationLabelRecordKind | undefined {
   switch (collection) {
     case undefined:
@@ -208,7 +202,6 @@ export function inferRecommendationLabelTarget(
   uri: string,
   cid?: string
 ): RecommendationLabelTarget {
-  const collection = collectionFromAtUri(uri);
   const target: RecommendationLabelTarget = {
     kind: "unknown",
     uri
@@ -222,10 +215,27 @@ export function inferRecommendationLabelTarget(
   }
 
   if (uri.startsWith("at://")) {
+    const parts = uri.slice("at://".length).split("/");
+    const authority = parts[0];
+    const collection = parts[1];
+    const rkey = parts[2];
+
+    if (authority === undefined || authority.length === 0) {
+      return Object.freeze(target);
+    }
+
+    if (collection === undefined || collection.length === 0) {
+      target.kind = "repository";
+      return Object.freeze(target);
+    }
+
+    if (rkey === undefined || rkey.length === 0) {
+      return Object.freeze(target);
+    }
+
     target.kind = "record";
-    const recordKind = recordKindFromCollection(collection) ?? "unknown";
-    target.recordKind = recordKind;
-    if (collection !== undefined) target.collection = collection;
+    target.recordKind = recordKindFromCollection(collection) ?? "unknown";
+    target.collection = collection;
     return Object.freeze(target);
   }
 
@@ -286,7 +296,7 @@ export function evaluateRecommendationLabelerSignalPolicy(
   }
 
   const label = mergeRecommendationAtprotoLabelState({ incoming: input.label });
-  if (label === undefined) {
+  if (label === undefined || label.negated) {
     return ignored("labeler.ignore.negated_label", auditEvent);
   }
 
