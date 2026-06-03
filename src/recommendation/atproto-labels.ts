@@ -325,7 +325,7 @@ export function mergeRecommendationAtprotoLabelState(
   }
 
   if (input.existing === undefined) {
-    return incoming.negated ? undefined : incoming;
+    return incoming;
   }
 
   const existing = normalizeLabelStateValue(input.existing);
@@ -340,8 +340,8 @@ export function mergeRecommendationAtprotoLabelState(
   }
 
   if (compareTimestamps(incoming.createdAt, existing.createdAt) < 0) {
-    return existing.negated ? undefined : existing;
+    return existing;
   }
 
-  return incoming.negated ? undefined : incoming;
+  return incoming;
 }
