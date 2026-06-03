@@ -20,7 +20,6 @@ export type RecommendationLabelerSignalDecision = typeof RECOMMENDATION_LABELER_
 
 export type RecommendationLabelerSignalReasonCode =
   | "labeler.accept.subscribed_evidence"
-  | "labeler.ignore.invalid_input"
   | "labeler.ignore.consent_denied"
   | "labeler.ignore.not_subscribed"
   | "labeler.ignore.subscription_revoked"
@@ -205,7 +204,7 @@ export function evaluateRecommendationLabelerSignalPolicy(
     return ignored("labeler.ignore.subscription_revoked", auditEvent);
   }
 
-  const label = mergeRecommendationAtprotoLabelState({ incoming: input.label, now: input.now });
+  const label = mergeRecommendationAtprotoLabelState({ incoming: input.label });
   if (label === undefined) {
     return ignored("labeler.ignore.negated_label", auditEvent);
   }
