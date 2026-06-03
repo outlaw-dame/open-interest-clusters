@@ -35,9 +35,11 @@ export interface RecommendationAtprotoLabelSignal {
   version?: number;
 }
 
+export type RecommendationAtprotoLabelStateValue = RecommendationAtprotoLabelInput | RecommendationAtprotoLabelSignal;
+
 export interface RecommendationAtprotoLabelStateInput {
-  existing?: RecommendationAtprotoLabelSignal;
-  incoming: RecommendationAtprotoLabelSignal;
+  existing?: RecommendationAtprotoLabelStateValue;
+  incoming: RecommendationAtprotoLabelStateValue;
   now?: string;
 }
 
@@ -232,6 +234,43 @@ function compareTimestamps(left: string, right: string): number {
   return leftMs - rightMs;
 }
 
+function isNormalizedLabelSignal(value: unknown): value is RecommendationAtprotoLabelSignal {
+  return isPlainRecord(value) && "labelerDid" in value && "targetUri" in value && "value" in value && "createdAt" in value;
+}
+
+function normalizeRecommendationAtprotoLabelSignal(input: RecommendationAtprotoLabelSignal): RecommendationAtprotoLabelSignal {
+  if (!isPlainRecord(input)) {
+    throw new TypeError("Invalid ATProto label signal input.");
+  }
+
+  const signal: RecommendationAtprotoLabelSignal = {
+    labelerDid: normalizeDid(input.labelerDid, "source DID"),
+    targetUri: normalizeUri(input.targetUri),
+    value: normalizeLabelValue(input.value),
+    createdAt: normalizeTimestamp(input.createdAt, "creation timestamp"),
+    provenance: normalizeProvenance(input.provenance),
+    negated: normalizeOptionalBoolean(input.negated, "negation flag") ?? false
+  };
+
+  const targetCid = normalizeOptionalCid(input.targetCid);
+  const expiresAt = normalizeOptionalTimestamp(input.expiresAt, "expiration timestamp");
+  const signature = normalizeOptionalSignature(input.signature);
+  const version = normalizeOptionalVersion(input.version);
+
+  if (targetCid !== undefined) signal.targetCid = targetCid;
+  if (expiresAt !== undefined) signal.expiresAt = expiresAt;
+  if (signature !== undefined) signal.signature = signature;
+  if (version !== undefined) signal.version = version;
+
+  return Object.freeze(signal);
+}
+
+function normalizeLabelStateValue(input: RecommendationAtprotoLabelStateValue): RecommendationAtprotoLabelSignal {
+  return isNormalizedLabelSignal(input)
+    ? normalizeRecommendationAtprotoLabelSignal(input)
+    : normalizeRecommendationAtprotoLabel(input as RecommendationAtprotoLabelInput);
+}
+
 export function normalizeRecommendationAtprotoLabel(input: RecommendationAtprotoLabelInput): RecommendationAtprotoLabelSignal {
   if (!isPlainRecord(input)) {
     throw new TypeError("Invalid ATProto label input.");
@@ -263,8 +302,9 @@ export function isRecommendationAtprotoLabelExpired(
   label: RecommendationAtprotoLabelSignal,
   now: string = new Date().toISOString()
 ): boolean {
-  if (label.expiresAt === undefined) return false;
-  return compareTimestamps(label.expiresAt, normalizeTimestamp(now, "current timestamp")) <= 0;
+  const safeLabel = normalizeRecommendationAtprotoLabelSignal(label);
+  if (safeLabel.expiresAt === undefined) return false;
+  return compareTimestamps(safeLabel.expiresAt, normalizeTimestamp(now, "current timestamp")) <= 0;
 }
 
 export function mergeRecommendationAtprotoLabelState(
@@ -274,7 +314,7 @@ export function mergeRecommendationAtprotoLabelState(
     throw new TypeError("Invalid ATProto label state input.");
   }
 
-  const incoming = normalizeRecommendationAtprotoLabel(input.incoming as RecommendationAtprotoLabelInput);
+  const incoming = normalizeLabelStateValue(input.incoming);
   const now = input.now === undefined ? undefined : normalizeTimestamp(input.now, "current timestamp");
   if (now !== undefined && isRecommendationAtprotoLabelExpired(incoming, now)) {
     return undefined;
@@ -284,18 +324,7 @@ export function mergeRecommendationAtprotoLabelState(
     return incoming.negated ? undefined : incoming;
   }
 
-  const existing = normalizeRecommendationAtprotoLabel({
-    src: input.existing.labelerDid,
-    uri: input.existing.targetUri,
-    val: input.existing.value,
-    cts: input.existing.createdAt,
-    cid: input.existing.targetCid,
-    neg: input.existing.negated,
-    exp: input.existing.expiresAt,
-    sig: input.existing.signature,
-    ver: input.existing.version,
-    provenance: input.existing.provenance
-  });
+  const existing = normalizeLabelStateValue(input.existing);
 
   if (
     existing.labelerDid !== incoming.labelerDid ||
