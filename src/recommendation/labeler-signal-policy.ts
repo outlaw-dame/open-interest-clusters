@@ -18,6 +18,22 @@ export const RECOMMENDATION_LABELER_SIGNAL_DECISIONS = ["accept", "ignore"] as c
 
 export type RecommendationLabelerSignalDecision = typeof RECOMMENDATION_LABELER_SIGNAL_DECISIONS[number];
 
+export const RECOMMENDATION_LABEL_TARGET_KINDS = ["repository", "record", "blob", "unknown"] as const;
+
+export type RecommendationLabelTargetKind = typeof RECOMMENDATION_LABEL_TARGET_KINDS[number];
+
+export const RECOMMENDATION_LABEL_RECORD_KINDS = [
+  "profile",
+  "post",
+  "feed",
+  "list",
+  "starter_pack",
+  "custom",
+  "unknown"
+] as const;
+
+export type RecommendationLabelRecordKind = typeof RECOMMENDATION_LABEL_RECORD_KINDS[number];
+
 export type RecommendationLabelerSignalReasonCode =
   | "labeler.accept.subscribed_evidence"
   | "labeler.ignore.consent_denied"
@@ -51,16 +67,23 @@ export interface RecommendationLabelerSignalPolicyInput {
   now?: string;
 }
 
+export interface RecommendationLabelTarget {
+  kind: RecommendationLabelTargetKind;
+  uri: string;
+  cid?: string;
+  recordKind?: RecommendationLabelRecordKind;
+  collection?: string;
+}
+
 export interface RecommendationLabelerEvidence {
   subjectId: string;
   labelerDid: string;
-  targetUri: string;
+  target: RecommendationLabelTarget;
   value: string;
   negated: false;
   provenance: RecommendationAtprotoLabelSignal["provenance"];
   createdAt: string;
   subscriptionSource: RecommendationLabelerSubscriptionSource;
-  targetCid?: string;
   expiresAt?: string;
   version?: number;
 }
@@ -156,6 +179,64 @@ function accepted(
   return Object.freeze({ decision: "accept", reasonCode: "labeler.accept.subscribed_evidence", auditEvent, evidence });
 }
 
+function collectionFromAtUri(uri: string): string | undefined {
+  if (!uri.startsWith("at://")) return undefined;
+  const parts = uri.slice("at://".length).split("/");
+  return parts.length >= 2 ? parts[1] : undefined;
+}
+
+function recordKindFromCollection(collection: string | undefined): RecommendationLabelRecordKind | undefined {
+  switch (collection) {
+    case undefined:
+      return undefined;
+    case "app.bsky.actor.profile":
+      return "profile";
+    case "app.bsky.feed.post":
+      return "post";
+    case "app.bsky.feed.generator":
+      return "feed";
+    case "app.bsky.graph.list":
+      return "list";
+    case "app.bsky.graph.starterpack":
+      return "starter_pack";
+    default:
+      return "custom";
+  }
+}
+
+export function inferRecommendationLabelTarget(
+  uri: string,
+  cid?: string
+): RecommendationLabelTarget {
+  const collection = collectionFromAtUri(uri);
+  const target: RecommendationLabelTarget = {
+    kind: "unknown",
+    uri
+  };
+
+  if (cid !== undefined) target.cid = cid;
+
+  if (DID_PATTERN.test(uri)) {
+    target.kind = "repository";
+    return Object.freeze(target);
+  }
+
+  if (uri.startsWith("at://")) {
+    target.kind = "record";
+    const recordKind = recordKindFromCollection(collection) ?? "unknown";
+    target.recordKind = recordKind;
+    if (collection !== undefined) target.collection = collection;
+    return Object.freeze(target);
+  }
+
+  if (cid !== undefined) {
+    target.kind = "blob";
+    return Object.freeze(target);
+  }
+
+  return Object.freeze(target);
+}
+
 export function normalizeRecommendationUserLabelerSubscription(
   input: RecommendationUserLabelerSubscriptionInput | RecommendationUserLabelerSubscription
 ): RecommendationUserLabelerSubscription {
@@ -220,7 +301,7 @@ export function evaluateRecommendationLabelerSignalPolicy(
   const evidence: RecommendationLabelerEvidence = {
     subjectId: normalizedSubjectId,
     labelerDid: label.labelerDid,
-    targetUri: label.targetUri,
+    target: inferRecommendationLabelTarget(label.targetUri, label.targetCid),
     value: label.value,
     negated: false,
     provenance: label.provenance,
@@ -228,7 +309,6 @@ export function evaluateRecommendationLabelerSignalPolicy(
     subscriptionSource: subscription.source
   };
 
-  if (label.targetCid !== undefined) evidence.targetCid = label.targetCid;
   if (label.expiresAt !== undefined) evidence.expiresAt = label.expiresAt;
   if (label.version !== undefined) evidence.version = label.version;
 
