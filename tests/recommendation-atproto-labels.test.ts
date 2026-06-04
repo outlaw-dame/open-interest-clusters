@@ -40,7 +40,7 @@ test("normalizeRecommendationAtprotoLabel preserves label provenance and optiona
 
 test("normalizeRecommendationAtprotoLabel rejects labels with unsafe control characters", () => {
   assert.throws(
-    () => normalizeRecommendationAtprotoLabel({ ...BASE_LABEL, val: "spam\u0000" }),
+    () => normalizeRecommendationAtprotoLabel({ ...BASE_LABEL, val: `spam${String.fromCharCode(0)}` }),
     /Invalid ATProto label value/u
   );
 });
@@ -103,6 +103,7 @@ test("mergeRecommendationAtprotoLabelState prevents out-of-order positive resurr
     incoming: { ...BASE_LABEL, neg: true, cts: "2026-01-03T00:00:00Z" }
   });
 
+  assert.notEqual(tombstone, undefined);
   assert.deepEqual(
     mergeRecommendationAtprotoLabelState({
       existing: tombstone,
