@@ -103,7 +103,10 @@ test("mergeRecommendationAtprotoLabelState prevents out-of-order positive resurr
     incoming: { ...BASE_LABEL, neg: true, cts: "2026-01-03T00:00:00Z" }
   });
 
-  assert.notEqual(tombstone, undefined);
+  if (tombstone === undefined) {
+    throw new TypeError("Expected mergeRecommendationAtprotoLabelState to preserve the negation tombstone.");
+  }
+
   assert.deepEqual(
     mergeRecommendationAtprotoLabelState({
       existing: tombstone,
