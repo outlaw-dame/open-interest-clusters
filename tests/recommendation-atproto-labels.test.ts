@@ -116,6 +116,23 @@ test("mergeRecommendationAtprotoLabelState prevents out-of-order positive resurr
   );
 });
 
+test("mergeRecommendationAtprotoLabelState does not let stale expired incoming labels erase newer state", () => {
+  const existing = normalizeRecommendationAtprotoLabel({
+    ...BASE_LABEL,
+    cts: "2026-01-10T00:00:00Z",
+    exp: "2026-02-01T00:00:00Z"
+  });
+
+  assert.deepEqual(
+    mergeRecommendationAtprotoLabelState({
+      existing,
+      incoming: { ...BASE_LABEL, cts: "2026-01-01T00:00:00Z", exp: "2026-01-02T00:00:00Z" },
+      now: "2026-01-15T00:00:00Z"
+    }),
+    existing
+  );
+});
+
 test("mergeRecommendationAtprotoLabelState rejects mismatched targets", () => {
   const active = normalizeRecommendationAtprotoLabel(BASE_LABEL);
 
