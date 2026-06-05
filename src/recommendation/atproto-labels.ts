@@ -319,29 +319,23 @@ export function mergeRecommendationAtprotoLabelState(
   }
 
   const incoming = normalizeLabelStateValue(input.incoming);
-  const now = input.now === undefined ? undefined : normalizeTimestamp(input.now, "current timestamp");
-  if (now !== undefined && isRecommendationAtprotoLabelExpired(incoming, now)) {
-    return undefined;
-  }
-
-  if (input.existing === undefined) {
-    return incoming;
-  }
-
-  const existing = normalizeLabelStateValue(input.existing);
+  const existing = input.existing === undefined ? undefined : normalizeLabelStateValue(input.existing);
 
   if (
-    existing.labelerDid !== incoming.labelerDid ||
-    existing.targetUri !== incoming.targetUri ||
-    existing.value !== incoming.value ||
-    existing.targetCid !== incoming.targetCid
+    existing !== undefined &&
+    (existing.labelerDid !== incoming.labelerDid ||
+      existing.targetUri !== incoming.targetUri ||
+      existing.value !== incoming.value ||
+      existing.targetCid !== incoming.targetCid)
   ) {
     throw new TypeError("ATProto label state entries do not refer to the same label target.");
   }
 
-  if (compareTimestamps(incoming.createdAt, existing.createdAt) < 0) {
-    return existing;
+  const winner = existing === undefined || compareTimestamps(incoming.createdAt, existing.createdAt) >= 0 ? incoming : existing;
+  const now = input.now === undefined ? undefined : normalizeTimestamp(input.now, "current timestamp");
+  if (now !== undefined && isRecommendationAtprotoLabelExpired(winner, now)) {
+    return undefined;
   }
 
-  return incoming;
+  return winner;
 }
