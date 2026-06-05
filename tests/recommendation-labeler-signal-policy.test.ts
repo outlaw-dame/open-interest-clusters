@@ -57,6 +57,34 @@ test("inferRecommendationLabelTarget distinguishes repository targets", () => {
     kind: "repository",
     uri: "did:plc:alice"
   });
+
+  assert.deepEqual(inferRecommendationLabelTarget("at://did:plc:alice"), {
+    kind: "repository",
+    uri: "at://did:plc:alice"
+  });
+});
+
+test("inferRecommendationLabelTarget does not misclassify malformed or collection-only AT URIs as records", async (t) => {
+  await t.test("missing authority", () => {
+    assert.deepEqual(inferRecommendationLabelTarget("at://"), {
+      kind: "unknown",
+      uri: "at://"
+    });
+  });
+
+  await t.test("empty collection", () => {
+    assert.deepEqual(inferRecommendationLabelTarget("at://did:plc:alice/"), {
+      kind: "repository",
+      uri: "at://did:plc:alice/"
+    });
+  });
+
+  await t.test("collection without record key", () => {
+    assert.deepEqual(inferRecommendationLabelTarget("at://did:plc:alice/app.bsky.feed.post"), {
+      kind: "unknown",
+      uri: "at://did:plc:alice/app.bsky.feed.post"
+    });
+  });
 });
 
 test("inferRecommendationLabelTarget distinguishes known ATProto record targets", async (t) => {
@@ -231,7 +259,7 @@ test("normalizeRecommendationUserLabelerSubscription rejects malformed and unsaf
 
   await t.test("unsafe control character", () => {
     assert.throws(
-      () => normalizeRecommendationUserLabelerSubscription({ ...SUBSCRIPTION, subjectId: "user\u0000id" }),
+      () => normalizeRecommendationUserLabelerSubscription({ ...SUBSCRIPTION, subjectId: `user${String.fromCharCode(0)}id` }),
       /Invalid recommendation labeler subject ID/u
     );
   });
