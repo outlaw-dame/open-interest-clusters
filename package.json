@@ -1,6 +1,7 @@
 {
   "name": "@memory/open-interest-clusters",
   "version": "0.1.0",
+  "packageManager": "pnpm@10.32.1",
   "description": "Portable schema, dataset, validation, normalization, and runtime helpers for canonical hashtag interest clusters.",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -27,10 +28,10 @@
     "lint:types": "tsc -p tsconfig.json --noEmit",
     "verify:package-entrypoints:metadata": "node scripts/verify-package-entrypoints.mjs --metadata-only",
     "verify:package-entrypoints": "node scripts/verify-package-entrypoints.mjs",
-    "test": "npm run build && npm run verify:package-entrypoints && node --test dist/tests/*.test.js",
+    "test": "pnpm build && pnpm verify:package-entrypoints && node --test dist/tests/*.test.js",
     "validate:dataset": "tsx scripts/validate-dataset.ts datasets/interests.global.v1.json",
     "normalize:dataset": "tsx scripts/normalize-dataset.ts datasets/interests.global.v1.json",
-    "prepare": "npm run build"
+    "prepare": "pnpm build"
   },
   "keywords": [
     "fediverse",
@@ -53,5 +54,10 @@
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
