@@ -33,6 +33,7 @@ export * from "./recommendation/labeler-signal-policy.js";
 export * from "./recommendation/consent-gated-source-adapter.js";
 export * from "./recommendation/interest-signal.js";
 export * from "./recommendation/interest-signal-derivation.js";
+export * from "./recommendation/labeler-interest-signal-derivation.js";
 export * from "./recommendation/profile-store.js";
 export * from "./recommendation/profile-store-persistence.js";
 export * from "./recommendation/embedding-lifecycle.js";
