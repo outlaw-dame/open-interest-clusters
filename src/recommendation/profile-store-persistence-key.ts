@@ -1,4 +1,5 @@
 import { sha256Hex } from "../runtime/hash.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import { DEFAULT_RECOMMENDATION_PROFILE_SUBJECT_KEY_NAMESPACE, type RecommendationProfileSubjectKeyInput } from "./profile-store-persistence.js";
 
 export const RECOMMENDATION_PROFILE_SUBJECT_KEY_PREFIX = "profile:" as const;
@@ -7,23 +8,12 @@ const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_KEY_PART_LENGTH = 512;
 const PROFILE_SUBJECT_KEY_HEX_LENGTH = 64;
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
 function isSafeKeyPart(value: unknown): value is string {
-  return isNonEmptyString(value) && value.length <= MAX_KEY_PART_LENGTH && !hasControlCharacter(value);
+  return isNonEmptyString(value) && value.length <= MAX_KEY_PART_LENGTH && !hasUnsafeControlCharacter(value);
 }
 
 function assertSafeKeyPart(value: unknown, message: string): string {
@@ -39,7 +29,7 @@ export function assertValidRecommendationProfileSubjectId(subjectId: unknown): a
     !isNonEmptyString(subjectId) ||
     subjectId.trim() !== subjectId ||
     subjectId.length > MAX_SUBJECT_ID_LENGTH ||
-    hasControlCharacter(subjectId)
+    hasUnsafeControlCharacter(subjectId)
   ) {
     throw new TypeError("Invalid recommendation profile subject id.");
   }

@@ -71,6 +71,7 @@ test("profile persistence subject keys are deterministic and do not expose raw s
   assert.match(first, /^profile:[a-f0-9]{64}$/u);
   assert.equal(first.includes("alice"), false);
   assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: `bad${String.fromCharCode(0)}subject` }), TypeError);
+  assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: `bad${String.fromCharCode(0x80)}subject` }), TypeError);
   assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: " subject-1" }), TypeError);
   assert.throws(() => createRecommendationProfileSubjectKey({ subjectId: "subject-1 " }), TypeError);
 });
@@ -107,6 +108,10 @@ test("profile snapshot normalization rejects raw source identifiers and corrupt 
 
   assert.throws(() => normalizeRecommendationProfileSnapshot(rawIdentifierProfile), TypeError);
   assert.throws(() => normalizeRecommendationProfileSnapshot(corruptCountProfile), TypeError);
+  assert.throws(
+    () => normalizeRecommendationProfileSnapshot(profileSnapshot([profileEntry(`books${String.fromCharCode(0x80)}fiction`)])),
+    TypeError
+  );
 });
 
 test("profile record and snapshot normalization tolerate unknown outer metadata", () => {

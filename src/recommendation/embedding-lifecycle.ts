@@ -1,4 +1,5 @@
 import type { RecommendationDerivedDataDeletionIntent } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES,
   type RecommendationInterestPrivacyBoundary
@@ -123,17 +124,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -143,7 +133,7 @@ function assertSafeString(value: unknown, message: string, maxLength = MAX_SAFE_
     !isNonEmptyString(value) ||
     value.trim() !== value ||
     value.length > maxLength ||
-    hasControlCharacter(value)
+    hasUnsafeControlCharacter(value)
   ) {
     throw new TypeError(message);
   }

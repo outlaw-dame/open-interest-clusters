@@ -77,6 +77,7 @@ test("catalog index supports direct topic and canonical tag lookup with safe id 
   assert.equal(findRecommendationCanonicalTagInIndex(index, "gaming.playstation")?.displayLabel, "PlayStation");
   assert.equal(findRecommendationCatalogTopicInIndex(index, "not-present"), null);
   assert.throws(() => findRecommendationCatalogTopicInIndex(index, "Bad Topic"), TypeError);
+  assert.throws(() => resolveRecommendationCanonicalTagFromIndex(index, `bad${String.fromCharCode(0x80)}token`), TypeError);
   assert.throws(() => resolveRecommendationCanonicalTagFromIndex(index, "https://example.invalid/tag"), TypeError);
 });
 

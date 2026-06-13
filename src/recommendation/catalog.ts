@@ -1,4 +1,5 @@
 import { normalizeHashtag, normalizeString } from "../normalization/hashtags.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 
 export const RECOMMENDATION_CATALOG_SCHEMA_VERSION = "recommendation-catalog.v1" as const;
 export const RECOMMENDATION_ONBOARDING_SELECTION_SCHEMA_VERSION = "recommendation-onboarding-selection.v1" as const;
@@ -117,17 +118,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -137,7 +127,7 @@ function assertSafeLabel(value: unknown, message: string, maxLength = MAX_LABEL_
     !isNonEmptyString(value) ||
     value.trim() !== value ||
     value.length > maxLength ||
-    hasControlCharacter(value)
+    hasUnsafeControlCharacter(value)
   ) {
     throw new TypeError(message);
   }

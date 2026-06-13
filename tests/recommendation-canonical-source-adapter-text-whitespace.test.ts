@@ -43,4 +43,16 @@ test("canonical source item rejects unsafe control characters in text content fi
       }),
     TypeError
   );
+  assert.throws(
+    () =>
+      createCanonicalRecommendationSourceItem({
+        ...baseEvent,
+        canonicalIntentId: "canonical-unsafe-c1-control",
+        sourceEventId: "https://remote.example/activities/unsafe-c1-control",
+        content: {
+          summary: `safe${String.fromCharCode(0x80)}unsafe`
+        }
+      }),
+    TypeError
+  );
 });
