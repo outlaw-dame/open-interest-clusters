@@ -137,22 +137,15 @@ test("deriveRecommendationInterestSignalsFromLabelerEvaluations counts accepted 
   assert.equal(result.signals.length, 1);
 });
 
-test("createRecommendationInterestSignalFromLabelerEvidence rejects unsafe derived interest keys", () => {
-  const unsafe = evaluateRecommendationLabelerSignalPolicy({
-    subjectId: SUBJECT_ID,
-    label: { ...BASE_LABEL, val: `bad${String.fromCharCode(0)}label` },
-    subscription: SUBSCRIPTION,
-    consentEvaluation: ALLOW_CONSENT,
-    now: NOW
-  });
-
+test("createRecommendationInterestSignalFromLabelerEvidence rejects invalid bridge weights", () => {
   assert.throws(
     () =>
       createRecommendationInterestSignalFromLabelerEvidence({
-        evaluation: unsafe,
-        dataUse: "local_personalization"
+        evaluation: acceptedEvaluation(),
+        dataUse: "local_personalization",
+        strength: 1.1
       }),
-    /Invalid ATProto label value/u
+    /Invalid recommendation labeler interest strength/u
   );
 });
 
