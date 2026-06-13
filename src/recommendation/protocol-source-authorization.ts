@@ -6,6 +6,7 @@ import {
   type RecommendationProtocol,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import type {
   RecommendationProtocolSourceAdapterRecordReadResult,
   RecommendationProtocolSourceReadAuthorization
@@ -74,8 +75,6 @@ interface AuthorizationEvidenceKindProfile {
 const MAX_EVIDENCE_IDENTIFIER_LENGTH = 1_024;
 const MAX_EVIDENCE_CURSOR_LENGTH = 1_024;
 const MAX_EVIDENCE_RECORDS_PER_RESULT = 1_000;
-const CONTROL_CODE_BLOCK_SIZE = 32;
-const C1_CONTROL_CODE_BLOCK = 4;
 const EVIDENCE_KIND_SET = new Set<string>(RECOMMENDATION_PROTOCOL_SOURCE_AUTHORIZATION_EVIDENCE_KINDS);
 const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const SOURCE_VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
@@ -216,19 +215,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasControlCharacter(value);
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasUnsafeControlCharacter(value);
 }
 
 function requiredBoundedNonEmptyString(value: unknown, maxLength: number, label: string): string {

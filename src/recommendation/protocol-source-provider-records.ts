@@ -1,4 +1,5 @@
 import type { CanonicalRecommendationProjectionMode } from "./canonical-source-adapter.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import type { RecommendationActivityPubVisibility, RecommendationAtprotoRepositoryVisibility } from "./protocol-source-contexts.js";
 import {
   RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES,
@@ -89,16 +90,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasUnsafeControl(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127 || (code >= 128 && code <= 159)) return true;
-  }
-  return false;
-}
-
 function boundedString(value: unknown, label: string, maxLength = MAX_ID_LENGTH): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || hasUnsafeControl(value)) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength || hasUnsafeControlCharacter(value)) {
     throw new TypeError(`Invalid ${label}.`);
   }
   return value.trim();
@@ -212,7 +205,7 @@ function cleanText(value: unknown): string | undefined {
 function safeTag(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const tag = value.startsWith("#") ? value.slice(1).trim() : value.trim();
-  if (tag.length === 0 || tag.length > 80 || hasUnsafeControl(tag)) return undefined;
+  if (tag.length === 0 || tag.length > 80 || hasUnsafeControlCharacter(tag)) return undefined;
   return tag;
 }
 
@@ -237,7 +230,13 @@ function mastodonHandle(account: Record<string, unknown>): string | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
   const handle = (trimmed.startsWith("@") ? trimmed.slice(1) : trimmed).toLocaleLowerCase("und");
-  if (handle.length === 0 || handle.length > MAX_ID_LENGTH || hasUnsafeControl(handle) || handle.includes("/") || handle.includes(":")) {
+  if (
+    handle.length === 0 ||
+    handle.length > MAX_ID_LENGTH ||
+    hasUnsafeControlCharacter(handle) ||
+    handle.includes("/") ||
+    handle.includes(":")
+  ) {
     throw new TypeError("Invalid Mastodon provider handle.");
   }
   return handle;

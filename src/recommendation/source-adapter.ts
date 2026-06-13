@@ -9,6 +9,7 @@ import {
   type RecommendationProtocol,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 
 export const RECOMMENDATION_SOURCE_ITEM_KINDS = [
   "post",
@@ -115,24 +116,11 @@ const MAX_SOURCE_ADAPTER_ID_LENGTH = 256;
 const MAX_SOURCE_SYSTEM_LENGTH = 256;
 const MAX_SOURCE_IDENTIFIER_LENGTH = 2_048;
 const MAX_SOURCE_CURSOR_LENGTH = 1_024;
-const CONTROL_CODE_BLOCK_SIZE = 32;
-const C1_CONTROL_CODE_BLOCK = 4;
 const STRICT_RFC3339_TIMESTAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/u;
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasControlCharacter(value);
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasUnsafeControlCharacter(value);
 }
 
 function isOptionalBoundedNonEmptyString(value: unknown, maxLength: number): value is string | undefined {
