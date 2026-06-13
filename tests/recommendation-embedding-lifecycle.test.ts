@@ -71,6 +71,16 @@ test("recommendation embedding lifecycle creates redacted embedding records", ()
   assert.equal(record.embeddingId.startsWith("embedding:"), true);
   assert.equal(record.subjectKey.startsWith("profile:"), true);
   assert.equal(JSON.stringify(record).includes("subject-1"), false);
+  assert.throws(
+    () => createRecommendationEmbeddingRecord({
+      subjectId: "subject-1",
+      model: { ...model(), providerId: `local${String.fromCharCode(0x80)}` },
+      profile: profile(),
+      vector: [0.1, 0.2, 0.3],
+      createdAt: "2026-05-16T01:00:00.000Z"
+    }),
+    TypeError
+  );
 });
 
 test("recommendation embedding source fingerprint is deterministic across object key order", () => {

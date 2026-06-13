@@ -22,63 +22,31 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
-          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
-      - name: Configure npm registry
-        run: |
-          npm config set registry https://registry.npmjs.org/
-          npm config delete replace-registry-host || true
-          npm config set fetch-retries 5
-          npm config set fetch-retry-factor 2
-          npm config set fetch-retry-mintimeout 20000
-          npm config set fetch-retry-maxtimeout 120000
-          npm config set prefer-online true
-
-      - name: Normalize lockfile registry URLs
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = 'package-lock.json';
-          const lockfile = fs.readFileSync(path, 'utf8');
-          const normalized = lockfile.replaceAll(
-            'https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/',
-            'https://registry.npmjs.org/'
-          );
-          fs.writeFileSync(path, normalized);
-          NODE
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install
-        run: |
-          for attempt in 1 2 3; do
-            if npm ci --ignore-scripts; then
-              exit 0
-            fi
-
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-
-            sleep $((attempt * 20))
-          done
+        run: pnpm install --frozen-lockfile
 
       - name: Verify package entrypoint metadata
-        run: npm run verify:package-entrypoints:metadata
+        run: pnpm verify:package-entrypoints:metadata
 
       - name: Typecheck
-        run: npm run lint:types
+        run: pnpm lint:types
 
       - name: Build
-        run: npm run build
+        run: pnpm build
 
       - name: Verify package entrypoints
-        run: npm run verify:package-entrypoints
+        run: pnpm verify:package-entrypoints
 
       - name: Package smoke check
-        run: npm pack --dry-run
+        run: pnpm pack --dry-run
 
       - name: Validate dataset
-        run: npm run validate:dataset
+        run: pnpm validate:dataset
 
       - name: Run tests
-        run: npm test
+        run: pnpm test

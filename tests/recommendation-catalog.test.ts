@@ -175,6 +175,16 @@ test("recommendation catalog rejects unsafe identifiers and broken links", () =>
   assert.throws(
     () => normalizeRecommendationCatalog({
       ...catalog(),
+      topics: catalog().topics.map((topic, index) =>
+        index === 0 ? { ...topic, label: `Gaming${String.fromCharCode(0x80)}` } : topic
+      )
+    }),
+    TypeError
+  );
+
+  assert.throws(
+    () => normalizeRecommendationCatalog({
+      ...catalog(),
       topics: [
         ...catalog().topics,
         {

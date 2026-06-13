@@ -1,4 +1,5 @@
 import { normalizeHashtag, normalizeString } from "../normalization/hashtags.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   normalizeRecommendationCatalog,
   type RecommendationCanonicalTag,
@@ -43,19 +44,8 @@ const MAX_ID_LENGTH = 160;
 const MAX_TOKEN_LENGTH = 160;
 const SAFE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,158}[a-z0-9])?$/u;
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function normalizeCatalogIndexId(value: string, message: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.trim() !== value || hasControlCharacter(value)) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.trim() !== value || hasUnsafeControlCharacter(value)) {
     throw new TypeError(message);
   }
 
@@ -68,7 +58,7 @@ function normalizeCatalogIndexId(value: string, message: string): string {
 }
 
 function normalizeLookupToken(value: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.trim() !== value || hasControlCharacter(value)) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.trim() !== value || hasUnsafeControlCharacter(value)) {
     throw new TypeError("Invalid recommendation catalog lookup token.");
   }
 

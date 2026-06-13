@@ -4,6 +4,7 @@ import {
   type RecommendationProtocol,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   createActivityPodsSourceContext,
   type RecommendationActivityPodsResourceScope,
@@ -165,19 +166,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if ((code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && !hasControlCharacter(value);
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !hasUnsafeControlCharacter(value.replace(/[\t\n\r]/g, ""))
+  );
 }
 
 function isOptionalNonEmptyString(value: unknown): value is string | undefined {

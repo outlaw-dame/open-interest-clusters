@@ -4,6 +4,7 @@ import {
   type RecommendationProtocol,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES,
   RECOMMENDATION_INTEREST_TARGET_KINDS,
@@ -58,17 +59,6 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: ReadonlySet<st
   return Object.keys(value).every((key) => allowedKeys.has(key));
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -102,7 +92,7 @@ function isPrivacySafeTargetKey(value: unknown): value is string {
     value.length <= MAX_TARGET_KEY_LENGTH &&
     !value.includes("://") &&
     !value.includes("@") &&
-    !hasControlCharacter(value)
+    !hasUnsafeControlCharacter(value)
   );
 }
 
