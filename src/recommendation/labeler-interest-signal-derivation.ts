@@ -10,6 +10,7 @@ import {
   normalizeRecommendationInterestSignal,
   type RecommendationInterestPrivacyBoundary,
   type RecommendationInterestSignal,
+  type RecommendationInterestSignalInput,
   type RecommendationInterestTarget,
   type RecommendationInterestTargetKind
 } from "./interest-signal.js";
@@ -129,7 +130,7 @@ function signalInputFromEvidence(
     key: normalizeLabelInterestKey(evidence.value)
   };
   const expiresAt = optionalNonEmptyString(input.expiresAt ?? evidence.expiresAt, "expiration timestamp");
-  const signal = normalizeRecommendationInterestSignal({
+  const signalInput: RecommendationInterestSignalInput = {
     target,
     action: "label",
     polarity: "neutral",
@@ -145,11 +146,14 @@ function signalInputFromEvidence(
       trustBoundary: "third_party",
       observedAt: evidence.createdAt
     },
-    consent: input.evaluation.auditEvent,
-    ...(expiresAt === undefined ? {} : { expiresAt })
-  });
+    consent: input.evaluation.auditEvent
+  };
 
-  return signal;
+  if (expiresAt !== undefined) {
+    signalInput.expiresAt = expiresAt;
+  }
+
+  return normalizeRecommendationInterestSignal(signalInput);
 }
 
 export function createRecommendationInterestSignalFromLabelerEvidence(
@@ -179,15 +183,18 @@ export function deriveRecommendationInterestSignalsFromLabelerEvaluations(
   let ignoredEvaluationCount = 0;
 
   for (const evaluation of input.evaluations) {
-    const signal = createRecommendationInterestSignalFromLabelerEvidence({
+    const signalInput: RecommendationLabelerInterestSignalInput = {
       evaluation,
-      dataUse: input.dataUse,
-      targetKind: input.targetKind,
-      strength: input.strength,
-      confidence: input.confidence,
-      privacyBoundary: input.privacyBoundary,
-      expiresAt: input.expiresAt
-    });
+      dataUse: input.dataUse
+    };
+
+    if (input.targetKind !== undefined) signalInput.targetKind = input.targetKind;
+    if (input.strength !== undefined) signalInput.strength = input.strength;
+    if (input.confidence !== undefined) signalInput.confidence = input.confidence;
+    if (input.privacyBoundary !== undefined) signalInput.privacyBoundary = input.privacyBoundary;
+    if (input.expiresAt !== undefined) signalInput.expiresAt = input.expiresAt;
+
+    const signal = createRecommendationInterestSignalFromLabelerEvidence(signalInput);
 
     if (signal === undefined) {
       ignoredEvaluationCount += 1;
