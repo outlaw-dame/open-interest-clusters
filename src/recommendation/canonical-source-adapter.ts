@@ -170,7 +170,7 @@ function isNonEmptyString(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
-    !hasUnsafeControlCharacter(value.replaceAll("\t", "").replaceAll("\n", "").replaceAll("\r", ""))
+    !hasUnsafeControlCharacter(value.replace(/[\t\n\r]/g, ""))
   );
 }
 
