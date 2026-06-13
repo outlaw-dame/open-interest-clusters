@@ -4,6 +4,7 @@ import {
   type RecommendationAccessBasis,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   ATPROTO_RECOMMENDATION_SOURCE_NORMALIZER_ID,
   ACTIVITYPUB_RECOMMENDATION_SOURCE_NORMALIZER_ID,
@@ -81,8 +82,6 @@ const MAX_RECORDS_PER_READ = 1_000;
 const MAX_ADAPTER_IDENTIFIER_LENGTH = 256;
 const MAX_SOURCE_SYSTEM_LENGTH = 256;
 const MAX_CURSOR_LENGTH = 1_024;
-const CONTROL_CODE_BLOCK_SIZE = 32;
-const C1_CONTROL_CODE_BLOCK = 4;
 const SOURCE_VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 const CAPABILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_ADAPTER_CAPABILITIES);
@@ -104,19 +103,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasControlCharacter(value);
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength && !hasUnsafeControlCharacter(value);
 }
 
 function requiredBoundedNonEmptyString(value: unknown, maxLength: number, label: string): string {

@@ -8,6 +8,7 @@ import {
   type CanonicalRecommendationSourceOptions,
   type CanonicalRecommendationVisibility
 } from "./canonical-source-adapter.js";
+import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   createAtprotoSourceContext,
   type RecommendationActivityPubVisibility,
@@ -148,8 +149,6 @@ const MAX_PROTOCOL_LINK_COUNT = 64;
 const DEFAULT_ACTIVITYPUB_SOURCE_SYSTEM = "activitypub.normalized.v1";
 const DEFAULT_ATPROTO_SOURCE_SYSTEM = "atproto.normalized.v1";
 const DEFAULT_PROTOCOL_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "remote_provider";
-const CONTROL_CODE_BLOCK_SIZE = 32;
-const C1_CONTROL_CODE_BLOCK = 4;
 const ACTIVITYPUB_EVENT_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES);
 const ACTIVITYPUB_UNDO_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES);
 const ACTIVITYPUB_OBJECT_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES);
@@ -172,19 +171,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f || Math.floor(code / CONTROL_CODE_BLOCK_SIZE) === C1_CONTROL_CODE_BLOCK) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isBoundedIdentifier(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_PROTOCOL_ID_LENGTH && !hasControlCharacter(value);
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_PROTOCOL_ID_LENGTH && !hasUnsafeControlCharacter(value);
 }
 
 function requiredBoundedIdentifier(value: unknown, label: string): string {
