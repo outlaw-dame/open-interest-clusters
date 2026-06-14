@@ -102,6 +102,17 @@ test("createRecommendationInterestSignalFromLabelerEvidence supports explicit ta
   assert.equal(signal?.expiresAt, "2026-01-20T00:00:00Z");
 });
 
+test("createRecommendationInterestSignalFromLabelerEvidence preserves dots for domain target kind", () => {
+  const signal = createRecommendationInterestSignalFromLabelerEvidence({
+    evaluation: acceptedEvaluation(),
+    dataUse: "local_personalization",
+    targetKind: "domain"
+  });
+
+  assert.equal(signal?.target.kind, "domain");
+  assert.equal(signal?.target.key, "sports.nba");
+});
+
 test("createRecommendationInterestSignalFromLabelerEvidence returns undefined for ignored policy evaluations", () => {
   const ignored = evaluateRecommendationLabelerSignalPolicy({
     subjectId: SUBJECT_ID,
