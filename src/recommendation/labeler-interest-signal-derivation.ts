@@ -201,13 +201,18 @@ export function deriveRecommendationInterestSignalsFromLabelerEvaluations(
     if (input.privacyBoundary !== undefined) signalInput.privacyBoundary = input.privacyBoundary;
     if (input.expiresAt !== undefined) signalInput.expiresAt = input.expiresAt;
 
-    const signal = createRecommendationInterestSignalFromLabelerEvidence(signalInput);
+    try {
+      const signal = createRecommendationInterestSignalFromLabelerEvidence(signalInput);
 
-    if (signal === undefined) {
+      if (signal === undefined) {
+        ignoredEvaluationCount += 1;
+      } else {
+        acceptedEvaluationCount += 1;
+        signals.push(signal);
+      }
+    } catch (error) {
+      void error;
       ignoredEvaluationCount += 1;
-    } else {
-      acceptedEvaluationCount += 1;
-      signals.push(signal);
     }
   }
 
