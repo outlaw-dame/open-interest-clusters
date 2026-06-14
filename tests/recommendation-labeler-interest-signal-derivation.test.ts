@@ -148,6 +148,17 @@ test("deriveRecommendationInterestSignalsFromLabelerEvaluations counts accepted 
   assert.equal(result.signals.length, 1);
 });
 
+test("deriveRecommendationInterestSignalsFromLabelerEvaluations skips malformed individual evaluations", () => {
+  const result = deriveRecommendationInterestSignalsFromLabelerEvaluations({
+    evaluations: [acceptedEvaluation(), { decision: "accept" } as never],
+    dataUse: "local_personalization"
+  });
+
+  assert.equal(result.acceptedEvaluationCount, 1);
+  assert.equal(result.ignoredEvaluationCount, 1);
+  assert.equal(result.signals.length, 1);
+});
+
 test("createRecommendationInterestSignalFromLabelerEvidence rejects invalid bridge weights", () => {
   assert.throws(
     () =>
