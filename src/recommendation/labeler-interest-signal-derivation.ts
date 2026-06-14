@@ -90,8 +90,9 @@ function optionalNonEmptyString(value: unknown, label: string): string | undefin
   return value;
 }
 
-function normalizeLabelInterestKey(value: string): string {
-  const key = value.trim().toLocaleLowerCase("en-US").replace(/[._]+/gu, "-");
+function normalizeLabelInterestKey(value: string, targetKind: RecommendationInterestTargetKind): string {
+  const rawKey = value.trim().toLocaleLowerCase("en-US");
+  const key = targetKind === "domain" ? rawKey.replace(/_+/gu, "-") : rawKey.replace(/[._]+/gu, "-");
   if (
     key.length === 0 ||
     key.length > MAX_LABEL_INTEREST_KEY_LENGTH ||
@@ -112,7 +113,12 @@ function assertAllowedConsent(consent: PrivacySafeRecommendationConsentEvent, da
 }
 
 function acceptedEvidence(evaluation: RecommendationLabelerSignalEvaluation): RecommendationLabelerEvidence | undefined {
-  return evaluation.decision === "accept" ? evaluation.evidence : undefined;
+  if (evaluation.decision !== "accept") return undefined;
+  if (!isPlainRecord(evaluation.evidence)) {
+    throw new TypeError("Invalid recommendation labeler interest signal input.");
+  }
+
+  return evaluation.evidence;
 }
 
 function signalInputFromEvidence(
@@ -125,9 +131,10 @@ function signalInputFromEvidence(
 
   assertAllowedConsent(input.evaluation.auditEvent, input.dataUse);
 
+  const targetKind = input.targetKind ?? "canonical_interest";
   const target: RecommendationInterestTarget = {
-    kind: input.targetKind ?? "canonical_interest",
-    key: normalizeLabelInterestKey(evidence.value)
+    kind: targetKind,
+    key: normalizeLabelInterestKey(evidence.value, targetKind)
   };
   const expiresAt = optionalNonEmptyString(input.expiresAt ?? evidence.expiresAt, "expiration timestamp");
   const signalInput: RecommendationInterestSignalInput = {
@@ -159,7 +166,7 @@ function signalInputFromEvidence(
 export function createRecommendationInterestSignalFromLabelerEvidence(
   input: RecommendationLabelerInterestSignalInput
 ): RecommendationInterestSignal | undefined {
-  if (!isPlainRecord(input)) {
+  if (!isPlainRecord(input) || !isPlainRecord(input.evaluation) || !isPlainRecord(input.evaluation.auditEvent)) {
     throw new TypeError("Invalid recommendation labeler interest signal input.");
   }
 
