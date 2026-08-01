@@ -82,14 +82,14 @@ const MAX_POLICY_DEFINITIONS = 128;
 const MAX_DEFINITION_ID_LENGTH = 256;
 
 const ALLOWED_EFFECTS_BY_SEMANTIC_KIND: Readonly<Record<Exclude<RecommendationLabelSemanticKind, "unknown">, ReadonlySet<RecommendationLabelEffectKind>>> = Object.freeze({
-  topic_interest: new Set(["positive_interest", "negative_interest", "evidence_only"]),
-  moderation: new Set(["moderation_constraint", "evidence_only"]),
-  safety: new Set(["safety_constraint", "evidence_only"]),
-  identity: new Set(["contextual_affinity", "evidence_only"]),
-  community: new Set(["contextual_affinity", "evidence_only"]),
-  content_format: new Set(["presentation_preference", "evidence_only"]),
-  game: new Set(["contextual_affinity", "evidence_only"]),
-  eligibility: new Set(["eligibility_constraint", "evidence_only"])
+  topic_interest: new Set<RecommendationLabelEffectKind>(["positive_interest", "negative_interest", "evidence_only"]),
+  moderation: new Set<RecommendationLabelEffectKind>(["moderation_constraint", "evidence_only"]),
+  safety: new Set<RecommendationLabelEffectKind>(["safety_constraint", "evidence_only"]),
+  identity: new Set<RecommendationLabelEffectKind>(["contextual_affinity", "evidence_only"]),
+  community: new Set<RecommendationLabelEffectKind>(["contextual_affinity", "evidence_only"]),
+  content_format: new Set<RecommendationLabelEffectKind>(["presentation_preference", "evidence_only"]),
+  game: new Set<RecommendationLabelEffectKind>(["contextual_affinity", "evidence_only"]),
+  eligibility: new Set<RecommendationLabelEffectKind>(["eligibility_constraint", "evidence_only"])
 });
 
 const DEFAULT_EFFECT_BY_SEMANTIC_KIND: Readonly<Record<Exclude<RecommendationLabelSemanticKind, "unknown">, RecommendationLabelEffectKind>> = Object.freeze({
