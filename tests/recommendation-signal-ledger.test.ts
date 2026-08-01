@@ -140,7 +140,7 @@ test("signal ledger makes retraction retries idempotent", () => {
   assert.equal(duplicate.tombstoneCount, 1);
 });
 
-test("signal ledger replaces an older tombstone only with an equal or newer retraction", () => {
+test("signal ledger replaces an older tombstone only with a newer retraction", () => {
   const ledger = createInMemoryRecommendationSignalLedger();
   ledger.ingest({ ...retract("newer", "source-1"), occurredAt: "2026-08-01T22:00:00Z", reason: "source_deleted" });
   ledger.ingest({ ...retract("older", "source-1"), occurredAt: "2026-08-01T21:00:00Z", reason: "corrected" });
@@ -149,6 +149,21 @@ test("signal ledger replaces an older tombstone only with an equal or newer retr
   assert.equal(snapshot.tombstones.length, 1);
   assert.equal(snapshot.tombstones[0]?.occurredAt, "2026-08-01T22:00:00Z");
   assert.equal(snapshot.tombstones[0]?.reason, "source_deleted");
+});
+
+test("signal ledger breaks equal-timestamp retraction ties deterministically", () => {
+  const first = { ...retract("tie-a", "source-1"), reason: "source_deleted" as const };
+  const second = { ...retract("tie-b", "source-1"), reason: "corrected" as const };
+
+  const forward = createInMemoryRecommendationSignalLedger({ salt: "tie-test" });
+  forward.ingest(first);
+  forward.ingest(second);
+
+  const reverse = createInMemoryRecommendationSignalLedger({ salt: "tie-test" });
+  reverse.ingest(second);
+  reverse.ingest(first);
+
+  assert.deepEqual(forward.snapshot().tombstones, reverse.snapshot().tombstones);
 });
 
 test("signal ledger filters expired active signals without deleting replay state", () => {
@@ -162,6 +177,21 @@ test("signal ledger filters expired active signals without deleting replay state
   assert.equal(ledger.listActiveSignals({ now: "2026-08-01T23:59:59Z" }).length, 1);
   assert.equal(ledger.listActiveSignals({ now: "2026-08-02T00:00:00Z" }).length, 0);
   assert.equal(ledger.snapshot({ now: "2026-08-02T00:00:00Z" }).operationCount, 1);
+});
+
+test("signal ledger rejects invalid signal expiration timestamps before storage", () => {
+  const invalidSignal = normalizeRecommendationInterestSignal({
+    ...SIGNAL,
+    expiresAt: "not-a-time"
+  });
+  const ledger = createInMemoryRecommendationSignalLedger();
+
+  assert.throws(
+    () => ledger.ingest({ ...apply(), signal: invalidSignal }),
+    /Invalid recommendation signal ledger signal expiration timestamp/u
+  );
+  assert.equal(ledger.snapshot().operationCount, 0);
+  assert.equal(ledger.snapshot().activeSignals.length, 0);
 });
 
 test("signal ledger batch reports applied, retracted, duplicate, and suppressed counts", () => {
