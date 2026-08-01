@@ -1,224 +1,353 @@
 # Risk-Ranked Hardening Plan
 
-This document defines a practical, risk-ranked hardening roadmap for Open Interest Clusters. It is tied to the current architecture and implementation style in the repository.
+This document is the status-aware hardening roadmap for Open Interest Clusters. It distinguishes completed controls from remaining production risks. See [`canonical-status.md`](canonical-status.md) for the overall project roadmap.
 
-## Scope and principles
+## Principles
 
-- Accuracy over speed: reject invalid states at boundaries.
-- Fail closed by default for consent, privacy, and trust-boundary checks.
-- No duplicate logic: centralize guards and retry policies where possible.
-- Deterministic behavior and reproducibility for all ranking-critical paths.
-- Privacy-safe observability: no subject identifiers or sensitive payloads in logs/metrics.
+- Accuracy and privacy take priority over convenience.
+- Ambiguous consent, authorization, semantic meaning, or trust state fails closed.
+- Replayable or retryable input must be idempotent before it mutates durable state.
+- Provider-specific logic stays behind adapters.
+- Private personalization remains local-first by default.
+- Errors, metrics, audit events, and explanations must not expose raw subject identifiers or sensitive payloads.
+- Common validation and retry behavior should be centralized without erasing domain-specific error messages.
 
-## Risk ranking model
+## Risk ranking
 
-- P0: security, privacy, or correctness defect that can cause policy bypass, unsafe output, or data corruption.
-- P1: reliability and availability risk that can break production behavior under normal failures.
-- P2: maintainability or performance risk that can become correctness or velocity debt.
+- **P0:** security, privacy, or correctness defect that can bypass policy, misclassify sensitive evidence, corrupt subject state, or recreate deleted data.
+- **P1:** reliability or operational defect that can produce stale, degraded, unavailable, or unauditable recommendations.
+- **P2:** maintainability, performance, documentation, or release risk that can grow into correctness or operational debt.
 
-## P0 hardening items
+## Completed or substantially completed controls
 
-### 1. Unified retry and backoff policy surface
+### Shared bounded retry policy — substantially complete
 
-Risk:
-- Retry behavior currently exists in multiple modules (remote loading, embedding, safe browsing, ANN orchestration) with similar but not identical semantics.
+Implemented through the shared retry utility and migrations in remote dataset loading, embedding orchestration, and Safe Browsing integration.
 
-Impact:
-- Inconsistent retryability decisions and backoff settings can cause request storms, stale state, or uneven recovery behavior.
+Existing controls include:
 
-Controls:
-- Introduce one shared internal retry policy contract (attempt limits, jitter strategy, retryable classification, cancellation semantics).
-- Keep module-specific defaults, but map through one policy engine.
-- Include hard ceilings for max delay, total elapsed time, and attempts.
+- bounded attempts;
+- exponential backoff with jitter;
+- cancellation support;
+- retry classification;
+- elapsed-time budgets;
+- preservation of original thrown values;
+- retry hooks.
 
-Tests:
-- Deterministic retry tests with seeded random source.
-- Cancellation and timeout propagation tests.
-- Retry classification tests for transient and permanent failures.
+Remaining work:
 
-Definition of done:
-- All retrying modules use the shared retry policy helper.
-- No unbounded retry loops.
-- Existing behavior remains backward compatible where intended.
+- verify every future network adapter uses the shared policy;
+- add integration-level retry/replay tests when live provider clients are introduced;
+- expose privacy-safe retry/fallback health counters.
 
-### 2. Consent and privacy redaction invariants as reusable assertions
+### Control-character validation consolidation — substantially complete
 
-Risk:
-- Consent safety is strong, but redaction invariants are mostly validated through specific test paths rather than a reusable invariant helper.
+The shared `hasUnsafeControlCharacter` helper is covered for C0, DEL, and C1 controls, and duplicate recommendation-layer implementations were removed.
 
-Impact:
-- Future features can accidentally leak subject identifiers into errors, audit payloads, or telemetry.
+Remaining work:
 
-Controls:
-- Add reusable privacy-safe error/audit assertion utilities.
-- Require all consent and deletion errors to pass redaction checks in tests.
-- Add static lint rule or test helper for forbidden fields in audit payloads.
+- consolidate other repeated bounded-string/identifier guards only where semantics truly match;
+- add cross-module canonicalization conformance tests.
 
-Tests:
-- Redaction property tests across error and audit object serializers.
-- Snapshot tests for privacy-safe event envelopes.
+### Protocol identifier and provider-record hardening — strong baseline complete
 
-Definition of done:
-- New and existing consent enforcement tests use shared redaction assertions.
-- No plaintext subject identifiers in audit event serialization.
+Implemented controls include:
 
-### 3. Protocol ingestion trust-boundary hardening
+- strict source IDs, subjects, cursors, and timestamps;
+- ActivityPub and ATProto visibility/access-basis validation;
+- strict ATProto DID, handle, NSID, record-key, and AT URI validation;
+- tuple-consistency checks;
+- conservative provider-policy merging;
+- malformed record rejection;
+- bounded provider batches;
+- separation of ATProto labels from repository records.
 
-Risk:
-- Protocol source mapper behavior is strict, but evolving provider formats can introduce edge-case bypasses.
+Remaining work:
 
-Impact:
-- Invalid provider records can enter normalization and degrade recommendation quality or policy safety.
+- property/fuzz testing of malformed provider payloads;
+- live adapter integration tests;
+- privacy-safe rejection counters;
+- replay and duplicate-delivery tests.
 
-Controls:
-- Add strict allowlist parsing for provider record fields used in canonical projection.
-- Explicitly reject unknown or mixed trust-boundary states when policy cannot be determined.
-- Record normalization rejection reason counters (privacy-safe only).
+### Consent, profile, persistence, and embedding lifecycle — strong baseline complete
 
-Tests:
-- Fuzz-inspired tests for malformed ActivityPub and ATProto payloads.
-- Regression tests for known invalid combinations (visibility vs access basis mismatches).
+Implemented controls include:
 
-Definition of done:
-- Protocol normalizers reject malformed inputs deterministically.
-- Rejection reasons are observable through sanitized counters.
+- deny-by-default consent;
+- privacy-safe audit reasons;
+- local-only profile defaults;
+- server-processing consent gates;
+- aggregate-only subject-profile rejection;
+- pseudonymous persistence keys;
+- write verification and corrupted-write cleanup;
+- profile deletion intents;
+- embedding fingerprinting, staleness, expiration, invalidation, and consent-revocation reasons.
 
-## P1 hardening items
+Remaining work:
 
-### 4. Self-healing freshness and staleness controls
+- reusable redaction/property assertions across all serializers and errors;
+- end-to-end deletion propagation tests;
+- replay prevention after deletion/revocation;
+- concrete encrypted local and durable persistence adapters.
 
-Risk:
-- Fetch and indexing paths are resilient, but stale data windows are not centrally governed.
+## P0 remaining work
 
-Impact:
-- Recommendation quality can drift with stale embeddings, stale ANN snapshots, or stale remote datasets.
-
-Controls:
-- Add freshness metadata contract for key artifacts (dataset, embeddings, ANN index snapshot).
-- Add stale-read policy modes: allow, degrade, deny.
-- Add automatic recovery workflows (background refresh with capped retries and backoff).
-
-Tests:
-- Freshness threshold tests.
-- Stale-mode behavior tests for allow/degrade/deny.
-- Recovery retry cadence tests.
-
-Definition of done:
-- Every artifact used in ranking has explicit freshness metadata.
-- Behavior under stale inputs is deterministic and test-covered.
-
-### 5. Circuit-breaker and fallback observability
+### P0.1 Label semantic classification before ranking effects
 
 Risk:
-- ANN orchestration has robust circuit behavior, but operational diagnosis can still be expensive under cascading failure.
+
+Accepted labeler evidence currently lacks a complete semantic model. Labels may describe topics, moderation decisions, safety constraints, identity, communities, content formats, games, eligibility, or unknown provider-specific concepts.
 
 Impact:
-- Slow incident response and possible silent quality degradation.
 
-Controls:
-- Add structured, privacy-safe event counters and health snapshots.
-- Define SLO-aligned alerts around repeated fallback activation.
-- Ensure fallback mode marks response metadata clearly for downstream analytics.
+A moderation or safety label could be misinterpreted as a user interest, causing unsafe recommendations, sensitive inference, or incorrect labeler suggestions.
 
-Tests:
-- Simulated provider outage tests with event expectations.
-- Recovery tests confirming circuit closure and return to preferred provider.
+Required controls:
+
+- introduce explicit semantic kinds;
+- consume labeler-declared metadata, host-provided metadata, explicit mappings, local catalog matches, target type, and namespace where available;
+- preserve unknown labels as audit-only evidence;
+- prohibit automatic positive-interest effects for moderation, safety, eligibility, or unknown labels;
+- keep classification contracts protocol-neutral and pluggable.
+
+Required tests:
+
+- topical label becomes eligible interest evidence;
+- moderation/safety labels never become positive interest;
+- unknown label stays audit-only;
+- conflicting metadata fails closed or yields unknown;
+- sensitive semantic categories require explicit policy;
+- malformed label metadata cannot escape validation.
 
 Definition of done:
-- Fallback and recovery are visible in one operational view.
-- No hidden fail-open transitions.
 
-### 6. Input sanitation and canonical normalization alignment
+No label-derived evidence can affect ranking or profile score without an explicit semantic classification and effect policy.
+
+### P0.2 Idempotent signal identity, replay safety, and retractions
 
 Risk:
-- Hashtag, URL, and protocol field sanitation are strong but distributed.
+
+The profile store is additive. Duplicate ActivityPub delivery, ATProto relay replay, retries, backfills, or repeated label batches can count the same evidence multiple times. Label negation/tombstones currently protect label state but do not retract a prior profile contribution.
 
 Impact:
-- Inconsistent canonicalization can cause duplicate entities, lookup misses, or skewed scores.
 
-Controls:
-- Define one canonical string/identifier normalization policy by input class.
-- Add normalization conformance tests across modules.
+Profile corruption, score inflation, stale moderation/interest effects, non-deterministic recovery, and recreation of deleted state.
 
-Tests:
-- Cross-module normalization equivalence tests for hashtags, URLs, and identifiers.
-- Unicode edge-case tests.
+Required controls:
+
+- stable signal IDs and source-event IDs;
+- deduplication ledger;
+- deterministic ordering/version rules;
+- idempotent batch application;
+- tombstone/retraction records;
+- label-negation reversal;
+- expiration cleanup;
+- replay barriers after deletion or consent revocation;
+- crash-safe commit semantics for persistence adapters.
+
+Required tests:
+
+- repeated identical event changes state once;
+- reordered delivery converges deterministically;
+- negation retracts the exact prior contribution;
+- expired evidence no longer contributes;
+- retry after partial failure does not double count;
+- deletion followed by stale replay does not recreate state;
+- concurrent ingest remains consistent.
 
 Definition of done:
-- Canonicalization behavior is consistent across ingestion and ranking paths.
 
-## P2 hardening items
+Replayable provider streams can be connected without caller-side deduplication and without corrupting subject state.
 
-### 7. Shared guard and validator utilities
+### P0.3 End-to-end authorization and deletion invariants
 
 Risk:
-- Similar bounded-string and control-character guards appear across modules.
+
+Strong module-level controls exist, but there is no single engine workflow enforcing the complete order from provider authorization through deletion propagation.
 
 Impact:
-- Duplication increases drift risk and maintenance cost.
 
-Controls:
-- Consolidate common guards in an internal utility module.
-- Keep module-local wrappers for domain-specific error messages.
+Integrators may compose valid primitives in an unsafe order, process restricted data before consent, or fail to invalidate downstream artifacts.
 
-Tests:
-- Utility-level guard tests.
-- Existing module tests updated to preserve semantics.
+Required controls:
+
+- orchestration contracts that require authorization and consent before derivation;
+- typed stages that prevent bypassing semantic/effect policy;
+- deletion propagation from profile to embeddings, feedback, and ledger state;
+- privacy-safe stage outcomes;
+- explicit rollback behavior for partial persistence failure.
+
+Required tests:
+
+- private source cannot reach derivation without matching authorization and consent;
+- server processing cannot occur under local-only consent;
+- profile deletion invalidates related embeddings and ledger state;
+- partial failure does not leave mixed-generation state;
+- errors never expose subject IDs or private payloads.
 
 Definition of done:
-- No duplicated generic guard logic in core recommendation modules.
 
-### 8. Performance and memory baselines
+The recommended orchestration API is fail-closed by construction rather than relying on integrators to reproduce the correct sequence manually.
+
+## P1 remaining work
+
+### P1.1 Unified freshness and stale-read policy
 
 Risk:
-- Current implementation is clean, but no formal regression budget is defined.
 
-Impact:
-- Future changes can add latent cost and degrade throughput.
+Embedding lifecycle has staleness evaluation, and loaders/ANN modules have freshness-related behavior, but ranking does not use one central stale-artifact policy.
 
-Controls:
-- Add lightweight benchmark suite for normalization, scoring, ANN orchestration overhead, and candidate serving.
-- Set budget thresholds and fail CI for material regressions.
+Required controls:
 
-Tests:
-- Benchmark smoke tests in CI profile.
+- common freshness metadata for dataset, graph, embedding, ANN snapshot, and profile generation;
+- stale modes: deny, degrade, or allow with explicit metadata;
+- bounded self-healing refresh;
+- generation consistency checks across retrieval and scoring;
+- stale/fallback state in privacy-safe response metadata.
 
 Definition of done:
-- Baseline and budget checks are versioned and enforced.
 
-## CI and branch protections
+Every artifact used by an end-to-end recommendation request has explicit freshness evaluation and deterministic stale behavior.
 
-Minimum recommended branch rules:
-- Require passing checks on build, lint:types, and tests.
-- Require review approval for changes touching recommendation, consent, security, or protocol normalization modules.
-- Disallow force-push on protected branches.
-- Require linear history for release branches.
+### P1.2 Circuit-breaker, fallback, and recovery observability
 
-Recommended required checks:
-- npm run lint:types
-- npm run build
-- npm test
-- Security scan (dependency and static analysis)
+Risk:
 
-## Secure coding guardrails for contributors
+ANN orchestration includes fallback/circuit behavior, but operators lack a unified privacy-safe view of degraded mode and recovery.
 
-- Reject unknown input shapes at boundaries.
-- Sanitize all external identifiers and URLs.
-- Use bounded retries with jitter and cancellation support.
-- Avoid logging raw external payloads or subject-level identifiers.
-- Keep policy evaluation explicit and fail closed when ambiguous.
+Required controls:
+
+- structured health snapshots;
+- fallback activation/recovery counters;
+- preferred-provider restoration events;
+- no hidden fail-open transitions;
+- SLO-oriented thresholds and alert guidance;
+- downstream response metadata indicating degraded retrieval where appropriate.
+
+Definition of done:
+
+Operators can identify provider failure, fallback activation, stale mode, and recovery without inspecting user-private data.
+
+### P1.3 Live provider adapter resilience
+
+Risk:
+
+The core currently has no live ActivityPub, ActivityPods/Solid, Bluesky/PDS, relay, `queryLabels`, or `subscribeLabels` clients.
+
+Required controls for each adapter:
+
+- SSRF-safe URL handling where applicable;
+- OAuth/scope/ACL enforcement;
+- bounded response bodies and batches;
+- shared retry/backoff and cancellation;
+- cursor/checkpoint persistence;
+- replay/idempotency integration;
+- rate-limit handling;
+- stale cache policy;
+- sanitized errors and telemetry;
+- block, mute, label, and provider-policy enforcement.
+
+Definition of done:
+
+Each live adapter has adversarial, timeout, retry, cursor, replay, authorization, and partial-failure tests before being considered production-ready.
+
+### P1.4 Privacy-safe labeler discovery
+
+Risk:
+
+Labeler recommendation can expose user moderation choices, sensitive interests, or centralized co-subscription graphs.
+
+Required controls:
+
+- local-first discovery mode;
+- explicit opt-in before aggregate co-subscription use;
+- minimum cohort/privacy thresholds for aggregates;
+- no raw subscription lists in telemetry;
+- diversity and anti-feedback-loop controls;
+- blocks, mutes, availability, and trust-boundary filters;
+- user-facing explanations that do not expose third-party private behavior.
+
+Definition of done:
+
+Labeler suggestions work without mandatory centralized tracking and can explain their basis safely.
+
+## P2 remaining work
+
+### P2.1 Cross-module normalization policy
+
+- define canonical policies by input class rather than one universal normalizer;
+- add equivalence tests for hashtags, URLs, domains, DIDs, AT URIs, timestamps, subject keys, and cluster IDs;
+- preserve domain-specific error messages;
+- prevent Unicode/control-character drift.
+
+### P2.2 Performance and memory budgets
+
+Add versioned benchmarks for:
+
+- dataset validation and indexing;
+- provider record normalization;
+- label-state merge;
+- signal ledger application;
+- profile ingestion and pruning;
+- embedding fingerprinting;
+- ANN orchestration overhead;
+- graph replay;
+- hybrid scoring;
+- candidate serving.
+
+CI should fail only for meaningful, stable regressions and should keep benchmark noise separate from correctness checks.
+
+### P2.3 Documentation, compatibility, and release discipline
+
+Required controls:
+
+- canonical status kept current;
+- public API documentation and examples;
+- pre-1.0 compatibility policy;
+- migration notes for schema/record versions;
+- changelog and release automation;
+- package smoke tests on supported Node versions;
+- dependency and static security scanning;
+- branch cleanup and stale-document review.
+
+## Required CI checks
+
+Current baseline:
+
+- `pnpm install --frozen-lockfile`;
+- `pnpm lint:types`;
+- `pnpm build`;
+- `pnpm verify:package-entrypoints:metadata`;
+- `pnpm verify:package-entrypoints`;
+- `pnpm validate:dataset`;
+- `pnpm test`;
+- package dry-run/smoke verification where configured.
+
+Recommended additions:
+
+- dependency and static security scan;
+- property/fuzz test job;
+- replay/concurrency/recovery integration job;
+- benchmark smoke job;
+- supported-Node-version matrix;
+- adapter-specific integration jobs when live clients are added.
 
 ## Execution order
 
-1. P0 unified retry policy.
-2. P0 privacy-redaction invariant helpers.
-3. P0 protocol ingestion hardening and malformed-payload tests.
-4. P1 freshness and staleness policy rollout.
-5. P1 ANN observability and fallback transparency.
-6. P2 consolidation and performance budgeting.
+1. Label semantic classification.
+2. Signal-effect policy.
+3. Idempotent signal ledger, replay handling, and retractions.
+4. Profile application orchestration.
+5. End-to-end authorization/deletion orchestration.
+6. Freshness and fallback health model.
+7. Privacy-safe labeler discovery.
+8. Live protocol adapters.
+9. Reference local and durable persistence adapters.
+10. Performance, compatibility, and release hardening.
 
 ## Review cadence
 
-- Weekly hardening review for open P0/P1 items.
-- Monthly verification of staleness and retry metrics.
-- Quarterly threat-model refresh for protocol adapters and consent boundaries.
+- Review P0 items for every change touching labels, consent, source ingestion, profile state, persistence, or deletion.
+- Review P1 operational risks before adding each live adapter or durable deployment profile.
+- Reconcile this plan and `canonical-status.md` after every major phase.
+- Refresh protocol and privacy threat models at least quarterly or when upstream protocol semantics change.
