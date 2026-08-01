@@ -70,14 +70,15 @@ export function createRecommendationProfileApplicationOrchestrator(
   async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
     const prior = tails.get(subjectId) ?? Promise.resolve();
     let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    tails.set(subjectId, prior.then(() => current));
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = prior.then(() => gate);
+    tails.set(subjectId, tail);
     await prior;
     try {
       return await work();
     } finally {
       release();
-      if (tails.get(subjectId) === current) tails.delete(subjectId);
+      if (tails.get(subjectId) === tail) tails.delete(subjectId);
     }
   }
 
