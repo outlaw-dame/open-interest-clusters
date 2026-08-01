@@ -76,8 +76,10 @@ const SEMANTIC_KIND_SET = new Set<string>(RECOMMENDATION_LABEL_SEMANTIC_KINDS);
 const EFFECT_KIND_SET = new Set<string>(RECOMMENDATION_LABEL_EFFECT_KINDS);
 const POLICY_SOURCE_SET = new Set<string>(RECOMMENDATION_LABEL_EFFECT_POLICY_SOURCES);
 const CLASSIFICATION_DECISION_SET = new Set<string>(["classified", "unclassified", "not_applicable"]);
+const DEFINITION_SOURCE_SET = new Set<string>(["labeler_declared", "host_app", "imported"]);
 const MAX_POLICY_ID_LENGTH = 256;
 const MAX_POLICY_DEFINITIONS = 128;
+const MAX_DEFINITION_ID_LENGTH = 256;
 
 const ALLOWED_EFFECTS_BY_SEMANTIC_KIND: Readonly<Record<Exclude<RecommendationLabelSemanticKind, "unknown">, ReadonlySet<RecommendationLabelEffectKind>>> = Object.freeze({
   topic_interest: new Set(["positive_interest", "negative_interest", "evidence_only"]),
@@ -186,6 +188,10 @@ function normalizeDefinitions(
   return Object.freeze(definitions);
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowedKeys.has(key));
+}
+
 function validateClassification(value: unknown): RecommendationLabelSemanticClassification {
   if (!isPlainRecord(value)) {
     throw new TypeError("Invalid recommendation label effect classification.");
@@ -196,10 +202,38 @@ function validateClassification(value: unknown): RecommendationLabelSemanticClas
   if (typeof value.semanticKind !== "string" || !SEMANTIC_KIND_SET.has(value.semanticKind)) {
     throw new TypeError("Invalid recommendation label effect classification semantic kind.");
   }
-  if ((value.decision === "unclassified" || value.decision === "not_applicable") && value.semanticKind !== "unknown") {
-    throw new TypeError("Invalid recommendation label effect classification state.");
-  }
-  if (value.decision === "classified" && value.semanticKind === "unknown") {
+
+  if (value.decision === "classified") {
+    if (
+      value.semanticKind === "unknown" ||
+      value.reasonCode !== "label_semantics.classified.explicit_definition" ||
+      value.confidence !== 1 ||
+      typeof value.definitionSource !== "string" ||
+      !DEFINITION_SOURCE_SET.has(value.definitionSource) ||
+      !hasOnlyKeys(value, new Set(["decision", "semanticKind", "reasonCode", "confidence", "definitionId", "definitionSource"]))
+    ) {
+      throw new TypeError("Invalid recommendation label effect classification state.");
+    }
+    boundedString(
+      value.definitionId,
+      MAX_DEFINITION_ID_LENGTH,
+      "Invalid recommendation label effect classification state."
+    );
+  } else if (value.decision === "unclassified") {
+    if (
+      value.semanticKind !== "unknown" ||
+      value.reasonCode !== "label_semantics.unclassified.no_definition" ||
+      value.confidence !== 0 ||
+      !hasOnlyKeys(value, new Set(["decision", "semanticKind", "reasonCode", "confidence"]))
+    ) {
+      throw new TypeError("Invalid recommendation label effect classification state.");
+    }
+  } else if (
+    value.semanticKind !== "unknown" ||
+    value.reasonCode !== "label_semantics.not_applicable.policy_ignored" ||
+    value.confidence !== 0 ||
+    !hasOnlyKeys(value, new Set(["decision", "semanticKind", "reasonCode", "confidence"]))
+  ) {
     throw new TypeError("Invalid recommendation label effect classification state.");
   }
 
