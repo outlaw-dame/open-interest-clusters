@@ -278,12 +278,12 @@ import {
 
 The package root exports the schema, normalization, recommendation, profile, embedding, ANN, graph, scoring, local-preference, and serving contracts.
 
-Additional package exports:
+Additional package exports are available at:
 
-```ts
-import schema from "@memory/open-interest-clusters/schema";
-import globalDataset from "@memory/open-interest-clusters/datasets/global-v1";
-```
+- `@memory/open-interest-clusters/schema`
+- `@memory/open-interest-clusters/datasets/global-v1`
+
+The exact JSON import syntax depends on the consuming runtime or bundler.
 
 ### Minimal local profile example
 
@@ -307,19 +307,19 @@ const signal = normalizeRecommendationInterestSignal({
   privacyBoundary: "local_only",
   evidence: {
     sourceItemKind: "profile",
-    protocol: "local",
-    sourceVisibility: "private",
-    accessBasis: "user_provided",
-    trustBoundary: "local_device",
+    protocol: "app_local",
+    sourceVisibility: "local_only",
+    accessBasis: "owner",
+    trustBoundary: "user_owned",
     observedAt: new Date().toISOString()
   },
   consent: {
     decision: "allow",
     reason: "consent.allow.explicit",
     dataUse: "local_personalization",
-    protocol: "local",
-    sourceVisibility: "private",
-    accessBasis: "user_provided",
+    protocol: "app_local",
+    sourceVisibility: "local_only",
+    accessBasis: "owner",
     containsPrivateData: true,
     containsThirdPartyData: false,
     serverSideProcessing: false
@@ -351,7 +351,7 @@ The following areas are not yet complete:
 - centralized freshness, observability, and operational health reporting;
 - stable pre-1.0 API compatibility guarantees.
 
-See the repository roadmap and hardening documents before treating the package as a complete hosted recommendation platform.
+See the repository architecture and hardening documents before treating the package as a complete hosted recommendation platform.
 
 ## Near-term roadmap
 
@@ -375,7 +375,7 @@ Changes to source ingestion, consent, profile state, persistence, embeddings, ra
 - raw subject identifiers do not appear in profile snapshots, audit payloads, errors, or telemetry;
 - external identifiers, URLs, timestamps, and provider records are validated before use;
 - retries are bounded, cancellable where applicable, and restricted to retryable failures;
-- duplicate or replayed source events cannot silently corrupt state;
+- duplicate or replayed source events must not silently corrupt state;
 - provider-specific details do not leak into generic scoring contracts;
 - deletion and consent revocation propagate to derived profile and embedding state;
 - local-first operation remains possible without centralized behavioral tracking.
