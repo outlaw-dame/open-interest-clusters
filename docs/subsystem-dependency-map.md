@@ -1,14 +1,14 @@
 # Subsystem Dependency Map
 
-This document maps the current recommendation subsystems, their responsibilities, and allowed dependency directions. See [`canonical-status.md`](canonical-status.md) for maturity and roadmap status.
+This document maps current recommendation subsystems, their responsibilities, and allowed dependency directions. See [`canonical-status.md`](canonical-status.md) for maturity and roadmap status.
 
 ## Dependency rules
 
 - Contracts and pure normalization precede provider implementations.
 - Protocol/provider details must not leak into generic profile, scoring, or serving contracts.
-- Authorization, consent, eligibility, and privacy checks occur before private-data processing.
+- Authorization, eligibility, consent, and privacy checks occur before private-data processing.
 - User-private personalization remains local-first by default.
-- Replayable inputs must not be connected to additive profile state without idempotency and retraction semantics.
+- Replayable inputs must not reach additive profile state without idempotency and retraction semantics.
 - Infrastructure dependencies remain behind adapters.
 
 ## Current high-level graph
@@ -19,15 +19,17 @@ flowchart LR
   B --> C[Protocol and Provider Record Normalization]
   C --> D[Authorization and Source Eligibility]
   D --> E[Consent and Privacy Enforcement]
-  E --> F[Source Interest and Entity Derivation]
+  E --> F[Generic Source Interest and Entity Derivation]
 
   C --> L1[ATProto Label Ingestion]
   L1 --> L2[Labeler Subscription Policy]
-  L2 --> L3[Label Semantic Classification - next]
-  L3 --> L4[Signal Effect Policy - next]
+  L2 --> LB[Existing Direct Label Bridge]
+  LB -. neutral canonical_interest; semantic risk .-> F
+  L2 --> L3[Label Semantic Classification - required next]
+  L3 --> L4[Signal Effect Policy - required next]
   L4 --> F
 
-  F --> S[Idempotent Signal Ledger - next]
+  F --> S[Idempotent Signal Ledger - required next]
   S --> P[Profile Store and Persistence]
   P --> M[Embedding Lifecycle]
   M --> R[ANN Retrieval]
@@ -42,7 +44,9 @@ flowchart LR
   Q --> X
 ```
 
-Dashed or “next” concepts represent required orchestration/semantic layers that are not yet complete. The underlying profile, embedding, retrieval, scoring, and serving primitives already exist.
+The dotted direct-label edge is implemented today by `createRecommendationInterestSignalFromLabelerEvidence`. It converts accepted label values to neutral `canonical_interest` signals by default. That path is useful for preserving auditable evidence, but it does not classify label purpose and must not be treated as the future ranking-safe path.
+
+Nodes marked “required next” are missing orchestration or semantic boundaries. Profile, embedding, retrieval, scoring, explanation, and serving primitives already exist.
 
 ## 1. Dataset, schema, and catalog
 
@@ -59,10 +63,10 @@ Primary modules:
 
 Responsibilities:
 
-- define strict portable interest data;
+- define portable canonical interest data;
 - normalize hashtags and identifiers;
 - load immutable local or remote datasets;
-- resolve topics, tags, tokens, and local entity metadata;
+- resolve topics, aliases, tokens, and local entity metadata;
 - preserve discovery and sensitive-topic boundaries.
 
 Must not depend on protocol clients, user profiles, ANN providers, or scoring.
@@ -82,8 +86,8 @@ Primary modules:
 
 Responsibilities:
 
-- map already-fetched provider data into canonical recommendation source items;
-- preserve protocol operation, visibility, access basis, provenance, and block/exclusion semantics;
+- map already-fetched provider data to canonical source items;
+- preserve operation, visibility, access basis, provenance, and exclusion semantics;
 - reject malformed ActivityPub, Mastodon-shaped, and ATProto records.
 
 Must not fetch remote data or depend on profile, ANN, or scoring internals.
@@ -119,19 +123,21 @@ Primary modules:
 
 Implemented responsibilities:
 
-- normalize free-standing ATProto label objects outside repository-record mapping;
+- normalize free-standing ATProto labels outside repository-record mapping;
 - preserve labeler provenance, target, value, timestamps, expiration, signature metadata, and negation;
 - merge label state with tombstone and out-of-order safety;
 - require active user-scoped labeler subscription evidence and matching consent;
-- retain accepted label evidence as conservative neutral signals.
+- expose a direct bridge from accepted evidence to neutral interest signals.
+
+Current limitation:
+
+The direct bridge defaults accepted label values to `canonical_interest`. It does not distinguish topical labels from moderation, safety, identity, community, content-format, game, eligibility, or unknown labels. It must not be connected automatically to positive ranking effects.
 
 Required next boundaries:
 
-1. semantic classification of topical, moderation, safety, identity, community, format, game, eligibility, and unknown labels;
-2. signal-effect policy that determines whether classified evidence affects interest, exclusion, downranking, presentation, or audit only;
-3. idempotent/retractable application to subject profile state.
-
-Label evidence must not bypass these boundaries.
+1. semantic classification;
+2. signal-effect policy;
+3. idempotent and retractable application to subject state.
 
 ## 5. Interest signals and idempotent application
 
@@ -139,17 +145,17 @@ Primary implemented modules:
 
 - `src/recommendation/interest-signal.ts`
 - `src/recommendation/interest-signal-derivation.ts`
+- `src/recommendation/labeler-interest-signal-derivation.ts`
 
 Responsibilities:
 
 - normalize target, action, polarity, strength, confidence, data use, privacy boundary, provenance, consent, and expiration;
-- derive generic signals from normalized source items.
+- derive signals from normalized source items and accepted label evidence.
 
-Missing orchestration layer:
+Missing application layer:
 
 - stable signal/source-event identity;
-- deduplication;
-- replay ordering;
+- deduplication and replay ordering;
 - retractions and tombstones;
 - expiration cleanup;
 - crash-safe retry behavior.
@@ -172,10 +178,12 @@ Responsibilities:
 - enforce configured privacy boundaries;
 - prune expiration and cap retained entries;
 - derive pseudonymous persistence keys;
-- validate, verify, persist, read, and delete profile records;
-- bootstrap local profile state from explicit onboarding selections.
+- validate, verify, persist, read, and delete records;
+- bootstrap local profiles from explicit onboarding selections.
 
-Depends on normalized, consent-backed signals. Must not depend directly on provider SDKs.
+Known gap:
+
+The low-level in-memory store can be explicitly configured to accept `aggregate_only`, even though subject-level onboarding and durable persistence reject that boundary. Integrations must not enable that configuration until the store or profile orchestrator enforces the invariant directly.
 
 ## 7. Embedding lifecycle and ANN retrieval
 
@@ -193,8 +201,7 @@ Responsibilities:
 - fingerprint source profiles;
 - validate vectors and artifact integrity;
 - evaluate expiration, invalidation, model/profile drift, and dimension mismatch;
-- route retrieval through replaceable ANN providers;
-- support in-memory and durable-oriented reference adapters.
+- route retrieval through replaceable ANN providers.
 
 Must not parse protocol records or independently authorize source data.
 
@@ -212,9 +219,9 @@ Responsibilities:
 - build co-occurrence graphs and communities;
 - prune, serialize, and replay graph state.
 
-Depends on canonical public/indexable source data and catalog definitions. Must not consume private source data without the same consent/privacy boundaries used elsewhere.
+Private source data requires the same consent and privacy boundaries used elsewhere.
 
-## 9. Scoring, local personalization, explanation, and serving
+## 9. Scoring, personalization, explanation, and serving
 
 Primary modules:
 
@@ -225,11 +232,11 @@ Primary modules:
 Responsibilities:
 
 - combine deterministic, entity, graph, embedding, global bandit, contextual bandit, and session signals;
-- apply local preference and semantic reranking behavior;
-- project explanation metadata;
+- apply local preference and semantic reranking;
+- project explanations;
 - bound, filter, exclude, deduplicate, and rank candidates.
 
-Depends on canonical cluster IDs and prepared score components. Must not depend directly on provider transports or leak private profile/source data in explanations.
+Must not depend directly on provider transports or leak private state in explanations.
 
 ## 10. Security and optional safety adapters
 
@@ -244,13 +251,11 @@ Responsibilities:
 - sanitize external URLs and identifiers;
 - classify bounded retry behavior;
 - optionally enrich URL/domain safety;
-- provide privacy-safe failure categories.
-
-Must not make independent recommendation decisions or expose raw provider payloads.
+- expose privacy-safe failure categories.
 
 ## Required orchestration paths
 
-### Current contract-level provider path
+### Current provider path
 
 ```text
 provider client outside core
@@ -261,16 +266,26 @@ provider client outside core
 → generic signal derivation
 ```
 
-### Required label path
+### Current label path
 
 ```text
 queryLabels / subscribeLabels adapter outside core
-→ ATProto label normalization and authoritative state merge
+→ label normalization and authoritative state merge
+→ user labeler subscription policy
+→ existing direct neutral-interest bridge
+```
+
+The last step preserves evidence but is not semantic classification.
+
+### Required future label path
+
+```text
+label normalization and authoritative state merge
 → user labeler subscription policy
 → semantic classification
 → signal-effect policy
 → idempotent/retractable signal application
-→ profile update
+→ profile or policy-state update
 ```
 
 ### Required end-to-end recommendation path
@@ -292,24 +307,26 @@ No single public orchestrator currently implements this full path.
 
 ## Boundary guardrails
 
-- Unknown protocol/provider input fails closed.
-- Restricted source reads require explicit authorization evidence.
-- Consent is evaluated before private or server-side processing.
-- Unknown label semantics remain audit-only.
+- Unknown provider input fails closed.
+- Restricted reads require authorization evidence.
+- Consent precedes private or server-side processing.
+- The direct label bridge is evidence-preserving, not semantic approval.
+- Unknown label semantics remain audit-only in the future automatic path.
 - Replayable streams require idempotency before profile application.
-- Label negation/tombstones must retract prior effects rather than merely stop future ingestion.
-- Profile and embedding deletion follow derived-data deletion intents.
-- ANN failures must not corrupt ranking/profile state.
+- Label negation must retract prior effects.
+- Aggregate-only evidence must not enter per-subject profiles.
+- Profile and embedding deletion follow deletion intents.
+- ANN failures must not corrupt ranking or profile state.
 - Candidate serving remains deterministic for equivalent inputs.
-- Logs, metrics, errors, and explanations remain privacy-safe.
+- Logs, errors, metrics, and explanations remain privacy-safe.
 
 ## Operational focus
 
-- semantic label classification;
+- semantic label classification and effect policy;
 - signal identity, deduplication, replay, and retraction;
 - end-to-end orchestration;
-- freshness policies for dataset, profile embeddings, and ANN artifacts;
-- privacy-safe fallback/circuit observability;
+- freshness policies for datasets, profile embeddings, and ANN artifacts;
+- privacy-safe fallback and circuit observability;
 - live protocol adapters;
 - reference local and durable persistence adapters;
 - performance, concurrency, replay, and recovery testing.
