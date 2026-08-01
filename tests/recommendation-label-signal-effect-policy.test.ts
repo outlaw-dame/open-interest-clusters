@@ -213,3 +213,52 @@ test("evaluateRecommendationLabelEffectPolicy rejects inconsistent classificatio
     /Invalid recommendation label effect classification state/u
   );
 });
+
+test("evaluateRecommendationLabelEffectPolicy rejects forged classified provenance", () => {
+  for (const classification of [
+    {
+      decision: "classified",
+      semanticKind: "topic_interest",
+      reasonCode: "label_semantics.unclassified.no_definition",
+      confidence: 0,
+      definitionId: "forged-definition",
+      definitionSource: "host_app"
+    },
+    {
+      decision: "classified",
+      semanticKind: "topic_interest",
+      reasonCode: "label_semantics.classified.explicit_definition",
+      confidence: 1,
+      definitionSource: "host_app"
+    },
+    {
+      decision: "classified",
+      semanticKind: "topic_interest",
+      reasonCode: "label_semantics.classified.explicit_definition",
+      confidence: 1,
+      definitionId: "forged-definition",
+      definitionSource: "guessed"
+    }
+  ]) {
+    assert.throws(
+      () =>
+        evaluateRecommendationLabelEffectPolicy({
+          classification: classification as RecommendationLabelSemanticClassification
+        }),
+      /Invalid recommendation label effect classification state/u
+    );
+  }
+});
+
+test("evaluateRecommendationLabelEffectPolicy rejects extra fields in non-classified states", () => {
+  assert.throws(
+    () =>
+      evaluateRecommendationLabelEffectPolicy({
+        classification: {
+          ...UNCLASSIFIED,
+          definitionId: "unexpected-definition"
+        } as RecommendationLabelSemanticClassification
+      }),
+    /Invalid recommendation label effect classification state/u
+  );
+});
