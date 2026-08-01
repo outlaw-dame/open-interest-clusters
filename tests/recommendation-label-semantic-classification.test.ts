@@ -67,10 +67,11 @@ test("classifyRecommendationLabelSemantics leaves labels unclassified without an
 
 test("classifyRecommendationLabelSemantics classifies an exact labeler-scoped definition", () => {
   const classification = classifyRecommendationLabelSemantics({
-    evaluation: acceptedEvaluation("Spam"),
+    evaluation: acceptedEvaluation("spam"),
     definitions: [
       {
         definitionId: "labeler123-spam",
+        source: "labeler_declared",
         labelerDid: LABELER_DID,
         value: "spam",
         semanticKind: "moderation"
@@ -83,8 +84,26 @@ test("classifyRecommendationLabelSemantics classifies an exact labeler-scoped de
     semanticKind: "moderation",
     reasonCode: "label_semantics.classified.explicit_definition",
     confidence: 1,
-    definitionId: "labeler123-spam"
+    definitionId: "labeler123-spam",
+    definitionSource: "labeler_declared"
   });
+});
+
+test("classifyRecommendationLabelSemantics preserves case-sensitive label meaning", () => {
+  const classification = classifyRecommendationLabelSemantics({
+    evaluation: acceptedEvaluation("Spam"),
+    definitions: [
+      {
+        definitionId: "lowercase-spam",
+        source: "host_app",
+        labelerDid: LABELER_DID,
+        value: "spam",
+        semanticKind: "moderation"
+      }
+    ]
+  });
+
+  assert.equal(classification.decision, "unclassified");
 });
 
 test("classifyRecommendationLabelSemantics does not apply another labeler's definition", () => {
@@ -93,6 +112,7 @@ test("classifyRecommendationLabelSemantics does not apply another labeler's defi
     definitions: [
       {
         definitionId: "other-sports",
+        source: "imported",
         labelerDid: OTHER_LABELER_DID,
         value: "sports.nba",
         semanticKind: "topic_interest"
@@ -110,12 +130,14 @@ test("classifyRecommendationLabelSemantics prefers the most target-specific defi
     definitions: [
       {
         definitionId: "news-general",
+        source: "host_app",
         labelerDid: LABELER_DID,
         value: "news",
         semanticKind: "topic_interest"
       },
       {
         definitionId: "news-post-format",
+        source: "labeler_declared",
         labelerDid: LABELER_DID,
         value: "news",
         semanticKind: "content_format",
@@ -127,6 +149,7 @@ test("classifyRecommendationLabelSemantics prefers the most target-specific defi
 
   assert.equal(classification.semanticKind, "content_format");
   assert.equal(classification.definitionId, "news-post-format");
+  assert.equal(classification.definitionSource, "labeler_declared");
 });
 
 test("classifyRecommendationLabelSemantics rejects equally specific conflicting definitions", () => {
@@ -137,6 +160,7 @@ test("classifyRecommendationLabelSemantics rejects equally specific conflicting 
         definitions: [
           {
             definitionId: "community-identity",
+            source: "host_app",
             labelerDid: LABELER_DID,
             value: "community",
             semanticKind: "identity",
@@ -144,6 +168,7 @@ test("classifyRecommendationLabelSemantics rejects equally specific conflicting 
           },
           {
             definitionId: "community-membership",
+            source: "imported",
             labelerDid: LABELER_DID,
             value: "community",
             semanticKind: "community",
@@ -196,6 +221,7 @@ test("classifyRecommendationLabelSemanticsBatch reports deterministic decision c
     definitions: [
       {
         definitionId: "spam-moderation",
+        source: "labeler_declared",
         labelerDid: LABELER_DID,
         value: "spam",
         semanticKind: "moderation"
@@ -216,6 +242,7 @@ test("normalizeRecommendationLabelSemanticDefinition rejects unknown as an expli
     () =>
       normalizeRecommendationLabelSemanticDefinition({
         definitionId: "invalid-unknown",
+        source: "host_app",
         labelerDid: LABELER_DID,
         value: "unknown-label",
         semanticKind: "unknown" as never
@@ -224,11 +251,26 @@ test("normalizeRecommendationLabelSemanticDefinition rejects unknown as an expli
   );
 });
 
+test("normalizeRecommendationLabelSemanticDefinition rejects invalid provenance", () => {
+  assert.throws(
+    () =>
+      normalizeRecommendationLabelSemanticDefinition({
+        definitionId: "invalid-source",
+        source: "guessed" as never,
+        labelerDid: LABELER_DID,
+        value: "sports",
+        semanticKind: "topic_interest"
+      }),
+    /Invalid recommendation label semantic definition source/u
+  );
+});
+
 test("normalizeRecommendationLabelSemanticDefinition rejects duplicate target constraints", () => {
   assert.throws(
     () =>
       normalizeRecommendationLabelSemanticDefinition({
         definitionId: "duplicate-targets",
+        source: "host_app",
         labelerDid: LABELER_DID,
         value: "sports",
         semanticKind: "topic_interest",
