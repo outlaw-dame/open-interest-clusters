@@ -202,13 +202,18 @@ function normalizeEvent(input: RecommendationSignalLedgerEventInput): Normalized
   const occurredAt = timestamp(input.occurredAt, "Invalid recommendation signal ledger timestamp.");
 
   if (input.operation === "apply") {
+    const signal = normalizeRecommendationInterestSignal(input.signal);
+    if (signal.expiresAt !== undefined) {
+      timestamp(signal.expiresAt, "Invalid recommendation signal ledger signal expiration timestamp.");
+    }
+
     return Object.freeze({
       operation: "apply",
       operationId,
       sourceEventId,
       occurredAt: occurredAt.value,
       occurredAtMillis: occurredAt.millis,
-      signal: normalizeRecommendationInterestSignal(input.signal)
+      signal
     });
   }
 
@@ -252,6 +257,18 @@ function cloneTombstone(entry: StoredTombstone): RecommendationSignalLedgerTombs
     occurredAt: entry.occurredAt,
     reason: entry.reason
   });
+}
+
+function shouldReplaceTombstone(
+  existing: StoredTombstone | undefined,
+  occurredAtMillis: number,
+  operationKey: string
+): boolean {
+  if (existing === undefined) return true;
+  if (occurredAtMillis !== existing.occurredAtMillis) {
+    return occurredAtMillis > existing.occurredAtMillis;
+  }
+  return operationKey.localeCompare(existing.operationKey) > 0;
 }
 
 export function createInMemoryRecommendationSignalLedger(
@@ -324,7 +341,7 @@ export function createInMemoryRecommendationSignalLedger(
     } else {
       const targetKey = keyForSourceEvent(event.retractsSourceEventId);
       const existingTombstone = tombstones.get(targetKey);
-      if (existingTombstone === undefined || event.occurredAtMillis >= existingTombstone.occurredAtMillis) {
+      if (shouldReplaceTombstone(existingTombstone, event.occurredAtMillis, operationKey)) {
         tombstones.set(targetKey, Object.freeze({
           sourceEventKey: targetKey,
           operationKey,
