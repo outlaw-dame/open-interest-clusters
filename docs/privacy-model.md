@@ -1,25 +1,23 @@
 # Privacy Model
 
-Open Interest Clusters is designed for privacy-preserving discovery and recommendation. Privacy is not limited to dataset exclusion flags: consent, authorization, data-use boundaries, local-first profile state, persistence, deletion, source eligibility, and derived embedding lifecycle are all part of the model.
+Open Interest Clusters is designed for privacy-preserving discovery and recommendation. Privacy is enforced through consent, authorization, explicit data-use and storage boundaries, local-first defaults, source eligibility, deletion, and derived-data lifecycle controls.
 
-## Core privacy principles
+## Core principles
 
 - Deny by default when consent, authorization, or a privacy boundary is ambiguous.
-- Process only the data needed for an explicitly allowed recommendation use.
-- Keep user-private personalization local-first unless the user explicitly permits another boundary.
-- Separate public/shared semantic intelligence from private subject-level profile state.
-- Preserve source provenance without copying raw subject identifiers into signals, profile snapshots, audit events, errors, or telemetry.
-- Treat deletion and consent revocation as lifecycle events that must propagate to derived data.
+- Process only data required for an explicitly allowed recommendation use.
+- Keep user-private personalization local-first unless another boundary is explicitly permitted.
+- Separate public/shared semantic intelligence from subject-level profile state.
+- Do not copy raw subject identifiers into signals, profile snapshots, audit events, errors, or telemetry.
+- Treat consent revocation and deletion as lifecycle events that propagate to derived data.
 - Do not infer consent from public availability alone.
-- Keep provider-specific authorization and visibility semantics intact at protocol boundaries.
+- Preserve provider-specific visibility and authorization semantics at protocol boundaries.
 
-## Data-use consent
+## Consent and data use
 
-Recommendation processing is governed by explicit data-use categories. Callers provide a consent policy and a request describing the subject, requested use, protocol, source visibility, access basis, and whether private, third-party, or server-side processing is involved.
+Callers provide a consent policy and a request describing the subject, requested data use, protocol, source visibility, access basis, and whether private, third-party, or server-side processing is involved.
 
-The consent evaluator returns a privacy-safe allow or deny event. Missing, revoked, expired, mismatched, or insufficient consent fails closed.
-
-Consent events intentionally avoid raw subject identifiers. They preserve only the information required to explain and audit the decision safely.
+The consent evaluator returns a privacy-safe allow or deny event. Missing, revoked, expired, mismatched, or insufficient consent fails closed. Consent events intentionally omit raw subject identifiers.
 
 ## Privacy boundaries
 
@@ -27,203 +25,96 @@ Interest signals and profile state carry an explicit privacy boundary.
 
 ### `local_only`
 
-The default for user-private personalization. Processing and storage are expected to remain on the user’s device or in user-controlled local storage.
+The default for user-private personalization. Processing and storage are expected to remain on the user's device or in user-controlled local storage.
 
 ### `server_allowed`
 
-Server-side profile processing or persistence is permitted only when the caller supplies consent that explicitly allows the requested server-side use.
+Server-side profile processing or persistence is permitted only when consent explicitly allows the requested server-side use.
 
 ### `aggregate_only`
 
-Data may contribute only to non-subject-level aggregate intelligence. It must not be used to create or persist an identifiable or pseudonymous per-user profile.
+The intended meaning is that data contributes only to non-subject-level aggregate intelligence and must not create an identifiable or pseudonymous per-user profile.
 
-The profile store defaults to accepting only `local_only` signals unless configured otherwise. Aggregate-only data is rejected for subject-level onboarding/profile seeding.
+Current enforcement is incomplete at one low-level boundary: `createInMemoryRecommendationProfileStore` defaults to `local_only`, but a caller can explicitly configure `allowedPrivacyBoundaries: ["aggregate_only"]`. In that configuration, the store currently accepts aggregate-only signals into state keyed by a subject ID. Onboarding/profile seeding and durable profile persistence reject aggregate-only subject profiles, but the generic in-memory store does not yet enforce that invariant itself.
+
+Until that implementation gap is closed, integrations must not configure a subject-level profile store to accept `aggregate_only`. The future profile-application orchestrator must fail closed before aggregate-only evidence reaches per-subject state.
 
 ## Public and private intelligence
 
-### Public/shared intelligence
+Public or explicitly indexable intelligence may include canonical interest clusters, normalized public hashtags, public entity mappings, public co-occurrence graphs, public cluster embeddings, ANN snapshots, and non-personal candidate metadata.
 
-The following may be shared when derived from public or explicitly indexable data:
+The following remain local-first by default:
 
-- canonical interest clusters;
-- normalized public hashtags and aliases;
-- public entity mappings;
-- public graph/co-occurrence structures;
-- public cluster embeddings and ANN snapshots;
-- candidate-generation metadata that does not contain user-private state.
-
-### Private/local intelligence
-
-The following should remain local-first by default:
-
-- selected interests;
-- browsing or interaction-derived interest signals;
-- followed, dismissed, seen, muted, or blocked state;
-- subject-level profile entries;
-- local semantic profile vectors;
+- selected interests and interaction-derived signals;
+- followed, dismissed, seen, muted, and blocked state;
+- subject-level profile entries and semantic profile vectors;
 - local bandit and feedback state;
-- personalized reranking decisions;
-- user-facing recommendation explanations;
-- labeler subscription evidence when it reveals user preferences or moderation choices.
+- personalized reranking decisions and explanations;
+- labeler subscriptions when they reveal preferences or moderation choices.
 
-## Protocol visibility and authorization
+## Protocol authorization and eligibility
 
-Public, follower-only, direct, local-only, Solid ACL-controlled, and ATProto repository data are not interchangeable.
+Public, follower-only, direct, local-only, Solid ACL-controlled, and ATProto repository data are not interchangeable. Source adapters preserve visibility, access basis, private/third-party flags, server-processing state, provider policy, subject match, and authorization evidence.
 
-Protocol source adapters preserve:
+Provider clients must perform OAuth, ACL, capability, block, mute, label, and provider-policy checks before passing records to core normalizers. ATProto public repositories are broadly public sources, but applications must still respect OAuth scopes, labels, blocks, mutes, AppView/PDS boundaries, and consent for derived personalization.
 
-- source visibility;
-- access basis;
-- private-data and third-party-data flags;
-- server-side processing state;
-- provider policy;
-- subject match;
-- authorization evidence.
-
-Private or restricted source reads require explicit authorization evidence and matching consent. Provider clients must perform OAuth, ACL, capability, block, mute, label, and provider-policy checks before passing records into the core normalizers.
-
-ATProto public repositories are treated as broadly public data sources, but applications must still respect OAuth scopes, labels, blocks, mutes, AppView/PDS boundaries, and user consent for derived personalization.
-
-## Source eligibility and exclusion controls
-
-Interest-cluster data and source records support exclusion controls such as:
-
-- `discoverable = false`;
-- `indexable = false`;
-- account, profile, post, or instance policy denials;
-- viewer blocks and mutes;
-- provider policy restrictions;
-- opt-out markers including:
-  - NoAI;
-  - NoBot / NoBots;
-  - NoCrawl / NoCrawling;
-  - NoIndex / NoIndexing;
-  - NoSearch;
-  - NoScrape / NoScraping;
-  - NoLLM / NoLLMs;
-  - Robotxt.
-
-Eligibility checks occur before source data is used for recommendation derivation or ranking. Unknown or conflicting policy evidence fails closed where a safe decision cannot be made.
+Eligibility controls include dataset discovery/indexing flags, account or instance policy denials, viewer blocks and mutes, provider restrictions, and opt-out markers such as NoAI, NoBot, NoCrawl, NoIndex, NoSearch, NoScrape, NoLLM, and Robotxt.
 
 ## Labelers and labels
 
-A user’s subscription to a labeler is treated as evidence that the application may consume that labeler’s output for an allowed use. It is not a global trust score and does not mean every label should become a positive interest.
+A user's labeler subscription is evidence that an application may consume that labeler's output for an allowed use. It is not a global trust score and does not mean every label is an interest.
 
-The label pipeline preserves labeler DID, target, value, timestamps, expiration, provenance, signature metadata, and negation tombstones. Expired, negated, unsubscribed, mismatched, or consent-denied labels do not become recommendation evidence.
+The label pipeline preserves labeler DID, target, value, timestamps, expiration, provenance, signature metadata, and negation tombstones. Expired, negated, unsubscribed, mismatched, or consent-denied labels do not become accepted evidence.
 
-Accepted labels still require semantic classification before they can safely influence ranking. A label may represent:
+The currently exported direct label bridge converts accepted labels into neutral `canonical_interest` signals unless the caller overrides the target kind. This preserves auditable evidence but is not a complete semantic gate. Integrations must not interpret that bridge as proof that a label is a positive interest.
 
-- topic interest;
-- moderation;
-- safety;
-- identity or community;
-- content format;
-- game or playful classification;
-- eligibility/filtering;
-- unknown provider-specific meaning.
+A required semantic layer must distinguish topical interests from moderation, safety, identity, community, content-format, game, eligibility, and unknown labels. Unknown labels remain audit-only; moderation and safety labels are not positive interests; identity/community/game labels require explicit policy before affecting affinity.
 
-Conservative defaults apply:
+## Profile and persistence privacy
 
-- unknown labels remain audit-only evidence;
-- moderation and safety labels are not positive-interest signals;
-- only labels classified as topical interests are automatically eligible for positive-interest effects;
-- identity, community, and game labels require explicit low-weight policy before affecting affinity.
+Profile snapshots omit raw subject IDs and retain only canonical targets, scores, confidence, counts, privacy boundaries, protocols, source visibility, timestamps, and expiration. The profile store prunes expired entries and caps retained state.
 
-## Profile privacy
+The in-memory store is additive and does not provide general event identity, deduplication, or retraction. Replayable integrations must add idempotent signal application before duplicate delivery is safe.
 
-Recommendation profile snapshots are deliberately redacted:
+Durable persistence uses adapter contracts and pseudonymous subject keys. Persistence validates records, enforces storage-target and consent requirements, rejects aggregate-only subject profiles, verifies writes, cleans up corrupted writes, exposes privacy-safe errors, and supports deletion intents.
 
-- raw subject IDs are not included;
-- profile entries contain canonical targets, scores, confidence, counts, privacy boundaries, protocols, source visibilities, timestamps, and expiration only;
-- subject keys used for durable persistence are derived pseudonymous keys rather than raw identifiers;
-- expired entries are pruned;
-- configured entry limits bound retained profile state;
-- disallowed privacy boundaries are rejected.
+## Embedding lifecycle
 
-The current in-memory profile store is additive. Live/replayable integrations must add idempotent signal identity and retraction semantics before duplicate delivery can be considered safe.
+Profile embeddings are derived data. Records preserve a pseudonymous subject key, privacy boundary, model and artifact metadata, profile fingerprint, vector dimensions, timestamps, and invalidation state.
 
-## Persistence privacy
-
-Profile persistence is adapter-based and supports local or server storage targets.
-
-Persistence operations:
-
-- validate and normalize profile records;
-- enforce storage-target and consent requirements;
-- reject aggregate-only subject profiles;
-- use pseudonymous subject keys;
-- verify writes by reading them back;
-- clean up corrupted or mismatched writes;
-- expose privacy-safe error reasons rather than raw adapter failures;
-- support deletion through derived-data deletion intents.
-
-Adapters must encrypt sensitive local/server storage as appropriate for their environment and must not log profile payloads or raw subject IDs.
-
-## Embedding privacy and lifecycle
-
-Subject profile embeddings are derived data. Embedding records preserve:
-
-- pseudonymous subject key;
-- allowed privacy boundary;
-- model/provider/version metadata;
-- source profile fingerprint and digest;
-- vector dimensions and distance metric;
-- creation and expiration times;
-- invalidation status and reason.
-
-Embeddings become stale or invalid when:
-
-- consent is revoked;
-- deletion is requested;
-- the profile is replaced or changes;
-- the model changes or is retired;
-- dimensions or privacy boundaries no longer match;
-- the record expires.
-
-Embeddings must not outlive the profile/consent state that authorized their creation.
+Embeddings become stale or invalid when consent is revoked, deletion is requested, the profile changes, the model changes or is retired, dimensions or privacy boundaries mismatch, or the record expires. They must not outlive the profile and consent state that authorized them.
 
 ## Deletion and revocation
 
-Derived-data deletion intents identify the subject, request time, scope, and targets such as profiles or embeddings.
-
 A compliant integration must:
 
-1. stop new processing for revoked consent;
-2. delete the requested profile record;
+1. stop new processing after consent revocation;
+2. delete requested profile records;
 3. invalidate or delete related embeddings;
-4. clear associated local feedback/bandit state when included in scope;
-5. prevent replayed events from silently recreating deleted state without new valid consent;
+4. clear feedback or bandit state when included in scope;
+5. prevent replayed events from recreating deleted state without new valid consent;
 6. return privacy-safe results and errors.
 
-## Logging, telemetry, and explanations
+## Logging and explanations
 
-Logs, metrics, audit events, and errors must not include:
+Logs, metrics, audit events, errors, and explanations must not expose raw subject identifiers, credentials, private source payloads, full profiles, raw vectors, private labeler subscription lists, or unrelated third-party data.
 
-- raw subject identifiers;
-- access tokens or credentials;
-- private source payloads;
-- full profile snapshots;
-- raw embedding vectors;
-- private labeler subscription lists;
-- provider responses containing unrelated third-party data.
+Use bounded privacy-safe counters and reason codes. User-facing explanations must not reveal private third-party data, hidden moderation state, or sensitive inferred attributes.
 
-Operational reporting should use bounded, privacy-safe counters and reason codes.
+## Integration invariants
 
-User-facing explanations may describe why a recommendation was produced, but they must not expose private third-party data, hidden moderation state, or sensitive inferred attributes.
+Every adapter and orchestration layer must preserve:
 
-## Integration requirements
-
-Every adapter or orchestration layer must preserve these invariants:
-
-- authorization before restricted source reads;
+- authorization before restricted reads;
 - consent before private or server-side processing;
-- strict input normalization before profile/ranking use;
+- strict normalization before profile or ranking use;
 - local-only defaults for private personalization;
+- no aggregate-only evidence in per-subject state;
 - explicit semantic policy before labels affect ranking;
-- idempotency before consuming replayable streams;
-- retraction/expiration support for mutable source state;
+- idempotency before replayable streams reach additive state;
+- retraction and expiration for mutable source state;
 - deletion propagation to profiles and embeddings;
 - privacy-safe observability;
 - no forced centralized behavioral tracking.
 
-See [`canonical-status.md`](canonical-status.md) for current implementation status and the required execution order.
+See [`canonical-status.md`](canonical-status.md) for current implementation status and execution order.
