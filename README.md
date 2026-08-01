@@ -298,7 +298,7 @@ const store = createInMemoryRecommendationProfileStore({
 });
 
 const signal = normalizeRecommendationInterestSignal({
-  target: { kind: "canonical_interest", key: "technology.open-source" },
+  target: { kind: "canonical_interest", key: "technology.apple" },
   action: "select",
   polarity: "positive",
   strength: 1,
