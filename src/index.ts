@@ -38,6 +38,8 @@ export * from "./recommendation/interest-signal-derivation.js";
 export * from "./recommendation/labeler-interest-signal-derivation.js";
 export * from "./recommendation/signal-ledger.js";
 export * from "./recommendation/profile-store.js";
+export * from "./recommendation/profile-replacement-store.js";
+export * from "./recommendation/profile-application-orchestrator.js";
 export * from "./recommendation/profile-store-persistence.js";
 export * from "./recommendation/embedding-lifecycle.js";
 export * from "./recommendation/canonical-source-adapter.js";
