@@ -20,6 +20,15 @@ export const RECOMMENDATION_LABEL_SEMANTIC_KINDS = [
 
 export type RecommendationLabelSemanticKind = typeof RECOMMENDATION_LABEL_SEMANTIC_KINDS[number];
 
+export const RECOMMENDATION_LABEL_SEMANTIC_DEFINITION_SOURCES = [
+  "labeler_declared",
+  "host_app",
+  "imported"
+] as const;
+
+export type RecommendationLabelSemanticDefinitionSource =
+  typeof RECOMMENDATION_LABEL_SEMANTIC_DEFINITION_SOURCES[number];
+
 export const RECOMMENDATION_LABEL_SEMANTIC_CLASSIFICATION_DECISIONS = [
   "classified",
   "unclassified",
@@ -36,6 +45,7 @@ export type RecommendationLabelSemanticClassificationReasonCode =
 
 export interface RecommendationLabelSemanticDefinitionInput {
   definitionId: string;
+  source: RecommendationLabelSemanticDefinitionSource;
   labelerDid: string;
   value: string;
   semanticKind: Exclude<RecommendationLabelSemanticKind, "unknown">;
@@ -45,6 +55,7 @@ export interface RecommendationLabelSemanticDefinitionInput {
 
 export interface RecommendationLabelSemanticDefinition {
   definitionId: string;
+  source: RecommendationLabelSemanticDefinitionSource;
   labelerDid: string;
   value: string;
   semanticKind: Exclude<RecommendationLabelSemanticKind, "unknown">;
@@ -63,6 +74,7 @@ export interface RecommendationLabelSemanticClassification {
   reasonCode: RecommendationLabelSemanticClassificationReasonCode;
   confidence: 0 | 1;
   definitionId?: string;
+  definitionSource?: RecommendationLabelSemanticDefinitionSource;
 }
 
 export interface RecommendationLabelSemanticClassificationBatchInput {
@@ -78,6 +90,7 @@ export interface RecommendationLabelSemanticClassificationBatchResult {
 }
 
 const SEMANTIC_KIND_SET = new Set<string>(RECOMMENDATION_LABEL_SEMANTIC_KINDS);
+const DEFINITION_SOURCE_SET = new Set<string>(RECOMMENDATION_LABEL_SEMANTIC_DEFINITION_SOURCES);
 const TARGET_KIND_SET = new Set<string>(["repository", "record", "blob", "unknown"]);
 const RECORD_KIND_SET = new Set<string>(["profile", "post", "feed", "list", "starter_pack", "custom", "unknown"]);
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u;
@@ -109,6 +122,14 @@ function normalizeDefinitionId(value: unknown): string {
   return boundedString(value, MAX_DEFINITION_ID_LENGTH, "Invalid recommendation label semantic definition ID.");
 }
 
+function normalizeDefinitionSource(value: unknown): RecommendationLabelSemanticDefinitionSource {
+  if (typeof value !== "string" || !DEFINITION_SOURCE_SET.has(value)) {
+    throw new TypeError("Invalid recommendation label semantic definition source.");
+  }
+
+  return value as RecommendationLabelSemanticDefinitionSource;
+}
+
 function normalizeLabelerDid(value: unknown): string {
   const did = boundedString(value, MAX_DID_LENGTH, "Invalid recommendation label semantic definition labeler DID.");
   if (!DID_PATTERN.test(did) || /\s/u.test(did)) {
@@ -124,7 +145,7 @@ function normalizeLabelValue(value: unknown): string {
     throw new TypeError("Invalid recommendation label semantic definition value.");
   }
 
-  return label.toLocaleLowerCase("en-US");
+  return label;
 }
 
 function normalizeSemanticKind(value: unknown): Exclude<RecommendationLabelSemanticKind, "unknown"> {
@@ -165,6 +186,7 @@ export function normalizeRecommendationLabelSemanticDefinition(
 
   return Object.freeze({
     definitionId: normalizeDefinitionId(input.definitionId),
+    source: normalizeDefinitionSource(input.source),
     labelerDid: normalizeLabelerDid(input.labelerDid),
     value: normalizeLabelValue(input.value),
     semanticKind: normalizeSemanticKind(input.semanticKind),
@@ -190,7 +212,7 @@ function definitionMatches(
   evidence: RecommendationLabelerEvidence
 ): boolean {
   if (definition.labelerDid !== evidence.labelerDid) return false;
-  if (definition.value !== evidence.value.toLocaleLowerCase("en-US")) return false;
+  if (definition.value !== evidence.value) return false;
   if (definition.targetKinds.length > 0 && !definition.targetKinds.includes(evidence.target.kind)) return false;
 
   if (definition.recordKinds.length > 0) {
@@ -285,7 +307,8 @@ export function classifyRecommendationLabelSemantics(
     semanticKind: definition.semanticKind,
     reasonCode: "label_semantics.classified.explicit_definition",
     confidence: 1,
-    definitionId: definition.definitionId
+    definitionId: definition.definitionId,
+    definitionSource: definition.source
   });
 }
 
