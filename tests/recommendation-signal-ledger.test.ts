@@ -17,7 +17,7 @@ const SIGNAL = normalizeRecommendationInterestSignal({
     protocol: "atproto",
     sourceVisibility: "atproto_public_repo",
     accessBasis: "atproto_public_repo",
-    trustBoundary: "external_provider",
+    trustBoundary: "remote_provider",
     observedAt: "2026-08-01T20:00:00Z"
   },
   consent: {
