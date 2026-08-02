@@ -29,7 +29,7 @@ export interface RecommendationAtprotoQueryLabelsInput {
   subjectId: string;
   labeler: RecommendationDiscoveredLabeler;
   subscription: RecommendationUserLabelerSubscriptionInput | RecommendationUserLabelerSubscription;
-  uriPatterns?: readonly string[];
+  uriPatterns: readonly string[];
   sources?: readonly string[];
   cursor?: string;
   limit?: number;
@@ -92,13 +92,21 @@ function normalizeStringList(
   value: readonly string[] | undefined,
   maximum: number,
   label: string,
-  normalizer: (item: unknown) => string
+  normalizer: (item: unknown) => string,
+  required = false
 ): readonly string[] {
-  if (value === undefined) return Object.freeze([]);
+  if (value === undefined) {
+    if (required) throw new TypeError(`Invalid ATProto queryLabels ${label}.`);
+    return Object.freeze([]);
+  }
   if (!Array.isArray(value) || value.length > maximum) {
     throw new TypeError(`Invalid ATProto queryLabels ${label}.`);
   }
-  return Object.freeze([...new Set(value.map((item) => normalizer(item)))].sort());
+  const normalized = [...new Set(value.map((item) => normalizer(item)))].sort();
+  if (required && normalized.length === 0) {
+    throw new TypeError(`Invalid ATProto queryLabels ${label}.`);
+  }
+  return Object.freeze(normalized);
 }
 
 function positiveInteger(value: unknown, fallback: number, maximum: number, label: string): number {
@@ -107,6 +115,14 @@ function positiveInteger(value: unknown, fallback: number, maximum: number, labe
     throw new TypeError(`Invalid ATProto queryLabels ${label}.`);
   }
   return value;
+}
+
+function isUnsafeHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host)) return true;
+  if (host.includes(":")) return true;
+  return host === "0.0.0.0" || host === "[::]" || host === "[::1]";
 }
 
 function validateTrustBoundary(input: RecommendationAtprotoQueryLabelsInput): {
@@ -120,8 +136,22 @@ function validateTrustBoundary(input: RecommendationAtprotoQueryLabelsInput): {
   }
   const labelerDid = normalizeDid(input.labeler.labelerDid, "labeler DID");
   const endpoint = boundedString(input.labeler.serviceEndpoint, 2_048, "service endpoint");
-  const parsed = new URL(endpoint);
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new TypeError("Invalid ATProto queryLabels service endpoint.");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    (parsed.pathname !== "" && parsed.pathname !== "/") ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.hostname.length === 0 ||
+    isUnsafeHost(parsed.hostname)
+  ) {
     throw new TypeError("Invalid ATProto queryLabels service endpoint.");
   }
   const subscription = normalizeRecommendationUserLabelerSubscription(input.subscription);
@@ -131,7 +161,7 @@ function validateTrustBoundary(input: RecommendationAtprotoQueryLabelsInput): {
   if (subscription.revokedAt !== undefined) {
     throw new TypeError("ATProto queryLabels subscription has been revoked.");
   }
-  return { labelerDid, endpoint };
+  return { labelerDid, endpoint: parsed.toString() };
 }
 
 function buildUrl(input: RecommendationAtprotoQueryLabelsInput, endpoint: string): string {
@@ -139,7 +169,8 @@ function buildUrl(input: RecommendationAtprotoQueryLabelsInput, endpoint: string
     input.uriPatterns,
     MAX_URI_PATTERNS,
     "URI patterns",
-    (item) => boundedString(item, MAX_URI_PATTERN_LENGTH, "URI pattern")
+    (item) => boundedString(item, MAX_URI_PATTERN_LENGTH, "URI pattern"),
+    true
   );
   const sources = normalizeStringList(
     input.sources,
@@ -202,32 +233,28 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
   async function queryAll(input: RecommendationAtprotoQueryLabelsAllInput): Promise<RecommendationAtprotoQueryLabelsResult> {
     const maxPages = positiveInteger(input.maxPages, 20, MAX_PAGES, "maximum pages");
     const maxLabels = positiveInteger(input.maxLabels, 2_000, MAX_LABELS, "maximum labels");
+    const requestedPageLimit = positiveInteger(input.limit, 100, MAX_PAGE_LIMIT, "limit");
     const labels: RecommendationAtprotoLabelSignal[] = [];
     const seenCursors = new Set<string>();
     let cursor = input.cursor;
     let pages = 0;
-    let truncated = false;
 
     while (pages < maxPages && labels.length < maxLabels) {
+      const remaining = maxLabels - labels.length;
       const pageInput: RecommendationAtprotoQueryLabelsInput = {
         subjectId: input.subjectId,
         labeler: input.labeler,
-        subscription: input.subscription
+        subscription: input.subscription,
+        uriPatterns: input.uriPatterns,
+        limit: Math.min(requestedPageLimit, remaining)
       };
-      if (input.uriPatterns !== undefined) pageInput.uriPatterns = input.uriPatterns;
       if (input.sources !== undefined) pageInput.sources = input.sources;
-      if (input.limit !== undefined) pageInput.limit = input.limit;
       if (input.signal !== undefined) pageInput.signal = input.signal;
       if (cursor !== undefined) pageInput.cursor = cursor;
       const page = await queryPage(pageInput);
       pages += 1;
-      const remaining = maxLabels - labels.length;
-      labels.push(...page.labels.slice(0, remaining));
-      if (page.labels.length > remaining) {
-        truncated = true;
-        cursor = page.cursor;
-        break;
-      }
+      labels.push(...page.labels);
+
       if (page.cursor === undefined) {
         cursor = undefined;
         break;
@@ -239,7 +266,7 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
       cursor = page.cursor;
     }
 
-    if (cursor !== undefined && (pages >= maxPages || labels.length >= maxLabels)) truncated = true;
+    const truncated = cursor !== undefined && (pages >= maxPages || labels.length >= maxLabels);
     const result: RecommendationAtprotoQueryLabelsResult = {
       labels: Object.freeze(labels),
       pages,
