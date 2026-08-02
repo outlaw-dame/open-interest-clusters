@@ -30,6 +30,7 @@ export * from "./recommendation/protocol-source-provider-records.js";
 export * from "./recommendation/protocol-provider-source-adapters.js";
 export * from "./recommendation/atproto-labels.js";
 export * from "./recommendation/atproto-query-labels-client.js";
+export * from "./recommendation/atproto-subscribe-labels-client.js";
 export * from "./recommendation/labeler-discovery.js";
 export * from "./recommendation/labeler-signal-policy.js";
 export * from "./recommendation/label-semantic-classification.js";
