@@ -74,6 +74,12 @@ interface ParsedRfc3339Timestamp {
   zone: string;
 }
 
+interface TimestampOrderKey {
+  boundaryMillis: number;
+  phase: 0 | 1;
+  fractionalSeconds: string;
+}
+
 const SOURCE_SET = new Set<string>(RECOMMENDATION_LABELER_DISCOVERY_SOURCES);
 const MAX_DID_LENGTH = 256;
 const MAX_ENDPOINT_LENGTH = 2_048;
@@ -115,17 +121,53 @@ function daysInMonth(year: number, month: number): number {
   return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
-function fractionalMillis(fractionalSeconds: string | undefined): number {
-  if (fractionalSeconds === undefined) return 0;
-  return Number.parseInt(fractionalSeconds.slice(0, 3).padEnd(3, "0"), 10);
-}
-
 function timezoneOffsetMillis(zone: string): number {
   if (zone === "Z") return 0;
   const sign = zone[0] === "+" ? 1 : -1;
   const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
   const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
   return sign * ((offsetHour * 60 + offsetMinute) * 60_000);
+}
+
+function utcSecondStart(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number
+): number {
+  if (year >= 0 && year < 100) {
+    const date = new Date(0);
+    date.setUTCFullYear(year, month - 1, day);
+    date.setUTCHours(hour, minute, second, 0);
+    return date.getTime();
+  }
+  return Date.UTC(year, month - 1, day, hour, minute, second, 0);
+}
+
+function isValidLeapSecondPosition(parsed: ParsedRfc3339Timestamp): boolean {
+  if (parsed.second !== 60) return true;
+
+  const precedingUtcMillis = utcSecondStart(
+    parsed.year,
+    parsed.month,
+    parsed.day,
+    parsed.hour,
+    parsed.minute,
+    59
+  ) - timezoneOffsetMillis(parsed.zone);
+  if (!Number.isFinite(precedingUtcMillis)) return false;
+
+  const precedingUtc = new Date(precedingUtcMillis);
+  const utcYear = precedingUtc.getUTCFullYear();
+  const utcMonth = precedingUtc.getUTCMonth() + 1;
+  return (
+    precedingUtc.getUTCHours() === 23 &&
+    precedingUtc.getUTCMinutes() === 59 &&
+    precedingUtc.getUTCSeconds() === 59 &&
+    precedingUtc.getUTCDate() === daysInMonth(utcYear, utcMonth)
+  );
 }
 
 function parseTimestamp(value: unknown): { normalized: string; parsed: ParsedRfc3339Timestamp } {
@@ -176,34 +218,50 @@ function parseTimestamp(value: unknown): { normalized: string; parsed: ParsedRfc
 
   const parsed: ParsedRfc3339Timestamp = { year, month, day, hour, minute, second, zone };
   if (fractionalSeconds !== undefined) parsed.fractionalSeconds = fractionalSeconds;
+  if (!isValidLeapSecondPosition(parsed)) {
+    throw new TypeError("Invalid recommendation labeler discovery timestamp.");
+  }
   return { normalized, parsed };
 }
 
-function utcMillisFromParsedTimestamp(parsed: ParsedRfc3339Timestamp): number {
-  const second = Math.min(parsed.second, 59);
-  const millis = fractionalMillis(parsed.fractionalSeconds);
-  if (parsed.year >= 0 && parsed.year < 100) {
-    const date = new Date(0);
-    date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-    date.setUTCHours(parsed.hour, parsed.minute, second, millis);
-    return date.getTime();
-  }
-  return Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, second, millis);
-}
-
-function timestampMillis(value: unknown): number {
+function timestampOrderKey(value: unknown): TimestampOrderKey {
   const { parsed } = parseTimestamp(value);
-  const utcMillis = utcMillisFromParsedTimestamp(parsed);
-  if (!Number.isFinite(utcMillis)) {
+  const secondStartMillis = utcSecondStart(
+    parsed.year,
+    parsed.month,
+    parsed.day,
+    parsed.hour,
+    parsed.minute,
+    Math.min(parsed.second, 59)
+  ) - timezoneOffsetMillis(parsed.zone);
+  if (!Number.isFinite(secondStartMillis)) {
     throw new TypeError("Invalid recommendation labeler discovery timestamp.");
   }
-  return utcMillis + (parsed.second === 60 ? 1_000 : 0) - timezoneOffsetMillis(parsed.zone);
+
+  return {
+    boundaryMillis: parsed.second === 60 ? secondStartMillis + 1_000 : secondStartMillis,
+    phase: parsed.second === 60 ? 0 : 1,
+    fractionalSeconds: parsed.fractionalSeconds ?? ""
+  };
+}
+
+function compareFractionalSeconds(left: string, right: string): number {
+  const length = Math.max(left.length, right.length);
+  return left.padEnd(length, "0").localeCompare(right.padEnd(length, "0"));
+}
+
+function compareTimestampOrder(left: unknown, right: unknown): number {
+  const leftKey = timestampOrderKey(left);
+  const rightKey = timestampOrderKey(right);
+  return (
+    leftKey.boundaryMillis - rightKey.boundaryMillis ||
+    leftKey.phase - rightKey.phase ||
+    compareFractionalSeconds(leftKey.fractionalSeconds, rightKey.fractionalSeconds)
+  );
 }
 
 function normalizeTimestamp(value: unknown): string {
-  const { normalized } = parseTimestamp(value);
-  timestampMillis(normalized);
-  return normalized;
+  return parseTimestamp(value).normalized;
 }
 
 function isUnsafeHost(hostname: string): boolean {
@@ -357,10 +415,9 @@ export function createInMemoryRecommendationLabelerDiscoveryRegistry(): Recommen
       const incoming = normalizeRecommendationLabelerDiscoveryObservation(input);
       const existing = candidates.get(incoming.labelerDid);
       if (existing !== undefined) {
-        const existingTime = timestampMillis(existing.discoveredAt);
-        const incomingTime = timestampMillis(incoming.discoveredAt);
-        const replace = incomingTime > existingTime || (
-          incomingTime === existingTime &&
+        const timestampOrder = compareTimestampOrder(incoming.discoveredAt, existing.discoveredAt);
+        const replace = timestampOrder > 0 || (
+          timestampOrder === 0 &&
           candidatePrecedenceKey(incoming).localeCompare(candidatePrecedenceKey(existing)) > 0
         );
         if (!replace) return clone(existing);
