@@ -1,3 +1,4 @@
+import { RECOMMENDATION_ACCESS_BASES, RECOMMENDATION_SOURCE_VISIBILITIES } from "./consent.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import type { RecommendationProtocolSourceReadAuthorization } from "./protocol-source-adapters.js";
 import { normalizeRecommendationSourceAdapterReadRequest } from "./source-adapter.js";
@@ -80,7 +81,10 @@ const MAX_ID = 512;
 const MAX_NAME = 256;
 const MAX_DESCRIPTION = 4_096;
 const MAX_MEMBERS = 150;
+const MAX_PROVIDER_ITEMS = 150;
 const MEMBER_STATES = new Set<string>(["accepted", "pending", "rejected", "revoked", "unknown"]);
+const SOURCE_VISIBILITIES = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
+const ACCESS_BASES = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -95,7 +99,12 @@ function optionalText(value: unknown, maximum: number, label: string): string | 
   return value === undefined || value === null || value === "" ? undefined : text(value, maximum, label);
 }
 function httpsUrl(value: unknown, label: string): URL {
-  const parsed = new URL(text(value, MAX_URL, label));
+  let parsed: URL;
+  try {
+    parsed = new URL(text(value, MAX_URL, label));
+  } catch {
+    throw new TypeError(`Invalid curated account set ${label}.`);
+  }
   const host = parsed.hostname.toLowerCase().replace(/\.+$/u, "");
   if (
     parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || host.length === 0 ||
@@ -124,7 +133,10 @@ function authorize(value: unknown, subjectId: string, authenticated: boolean): v
     throw new TypeError("Invalid curated account set authorization.");
   }
   date(value.checkedAt, "authorization timestamp");
-  if (typeof value.sourceVisibility !== "string" || typeof value.accessBasis !== "string") {
+  if (
+    typeof value.sourceVisibility !== "string" || !SOURCE_VISIBILITIES.has(value.sourceVisibility) ||
+    typeof value.accessBasis !== "string" || !ACCESS_BASES.has(value.accessBasis)
+  ) {
     throw new TypeError("Invalid curated account set authorization.");
   }
   if (authenticated && value.accessBasis !== "oauth_scope" && value.accessBasis !== "authenticated_api") {
@@ -173,24 +185,30 @@ function commonOptional(input: RecommendationCuratedAccountSet, description: str
 function parseMastodon(body: unknown, observedAt: string, origin: URL): RecommendationCuratedAccountSet {
   if (!record(body)) throw new TypeError("Invalid Mastodon collection response.");
   const collection = record(body.collection) ? body.collection : body;
-  const accounts = Array.isArray(body.accounts) ? body.accounts : [];
+  const accountsProvided = Array.isArray(body.accounts);
+  const accounts = accountsProvided ? body.accounts : [];
   if (!record(collection) || accounts.length > MAX_MEMBERS || accounts.some((item) => !record(item))) {
     throw new TypeError("Invalid Mastodon collection response.");
   }
+  if (collection.items !== undefined && !Array.isArray(collection.items)) {
+    throw new TypeError("Invalid Mastodon collection response.");
+  }
+  const items = Array.isArray(collection.items) ? collection.items : [];
+  if (items.length > MAX_PROVIDER_ITEMS) throw new TypeError("Invalid Mastodon collection response.");
   const states = new Map<string, unknown>();
-  if (Array.isArray(collection.items)) for (const item of collection.items) {
+  for (const item of items) {
     if (record(item) && typeof item.account_id === "string") states.set(item.account_id, item.state);
   }
   const curatorId = text(collection.account_id, MAX_ID, "curator ID");
   const resource = httpsUrl(collection.url ?? collection.uri, "resource URL");
   const members = accounts
     .filter((item) => item.id !== curatorId)
-    .map((item) => account(item.id, item.url ?? item.uri, item.acct ?? item.username, states.get(String(item.id)) ?? "accepted"));
+    .map((item) => account(item.id, item.url ?? item.uri, item.acct ?? item.username, states.get(String(item.id)) ?? "unknown"));
   return freeze(commonOptional({
     provider: "mastodon_collection", id: text(collection.id, MAX_ID, "ID"), url: resource.toString(), curatorId,
     name: text(collection.name, MAX_NAME, "name"), discoverable: collection.discoverable === true,
     sensitive: collection.sensitive === true, observedAt, hashtags: tags(collection.tag), members,
-    trustBoundary: resource.origin === origin.origin ? "same_provider" : "remote_provider", membershipComplete: true
+    trustBoundary: resource.origin === origin.origin ? "same_provider" : "remote_provider", membershipComplete: accountsProvided
   }, optionalText(collection.description, MAX_DESCRIPTION, "description"),
   collection.updated_at === undefined ? undefined : date(collection.updated_at, "updated timestamp")));
 }
