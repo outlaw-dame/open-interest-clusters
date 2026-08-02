@@ -1,14 +1,22 @@
+import {
+  RECOMMENDATION_ACCESS_BASES,
+  RECOMMENDATION_SOURCE_VISIBILITIES,
+  type RecommendationAccessBasis,
+  type RecommendationSourceVisibility
+} from "./consent.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   createMastodonProviderStatusSourceAdapter,
   type RecommendationMastodonProviderStatusSourceAdapterInput
 } from "./protocol-provider-source-adapters.js";
 import type { RecommendationProtocolSourceReadAuthorization } from "./protocol-source-adapters.js";
-import type {
-  RecommendationSourceAdapter,
-  RecommendationSourceAdapterReadRequest,
-  RecommendationSourceAdapterReadResult,
-  RecommendationSourceTrustBoundary
+import {
+  normalizeRecommendationSourceAdapterReadRequest,
+  type RecommendationSourceAdapter,
+  type RecommendationSourceAdapterCapability,
+  type RecommendationSourceAdapterReadRequest,
+  type RecommendationSourceAdapterReadResult,
+  type RecommendationSourceTrustBoundary
 } from "./source-adapter.js";
 
 export const RECOMMENDATION_MASTODON_TIMELINE_KINDS = ["public", "home", "list"] as const;
@@ -47,7 +55,10 @@ export interface RecommendationMastodonTimelineSourceAdapterInput {
   signal?: AbortSignal;
   transport: RecommendationMastodonTimelineTransport;
   authorize: RecommendationMastodonTimelineAuthorizer;
-  adapter?: Omit<RecommendationMastodonProviderStatusSourceAdapterInput, "read" | "maxRecordsPerRead">;
+  adapter?: Omit<
+    RecommendationMastodonProviderStatusSourceAdapterInput,
+    "read" | "maxRecordsPerRead" | "capabilities"
+  >;
 }
 
 export type RecommendationMastodonTimelineSourceAdapter = Omit<RecommendationSourceAdapter, "read"> & {
@@ -60,8 +71,15 @@ const MAX_LIST_ID_LENGTH = 256;
 const DEFAULT_MAX_STATUSES = 40;
 const MAX_STATUSES = 40;
 const TIMELINE_SET = new Set<string>(RECOMMENDATION_MASTODON_TIMELINE_KINDS);
-const PUBLIC_ACCESS_BASES = new Set<string>(["public_web", "provider_policy", "authenticated_api", "oauth_scope"]);
-const PRIVATE_ACCESS_BASES = new Set<string>(["authenticated_api", "oauth_scope"]);
+const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
+const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
+const PUBLIC_ACCESS_BASES = new Set<RecommendationAccessBasis>([
+  "public_web",
+  "provider_policy",
+  "authenticated_api",
+  "oauth_scope"
+]);
+const PRIVATE_ACCESS_BASES = new Set<RecommendationAccessBasis>(["authenticated_api", "oauth_scope"]);
 const ALLOWED_CURSOR_QUERY_PARAMETERS = new Set<string>([
   "limit",
   "max_id",
@@ -70,6 +88,14 @@ const ALLOWED_CURSOR_QUERY_PARAMETERS = new Set<string>([
   "local",
   "remote",
   "only_media"
+]);
+const PUBLIC_CAPABILITIES: readonly RecommendationSourceAdapterCapability[] = Object.freeze([
+  "read_public",
+  "supports_incremental_sync"
+]);
+const PRIVATE_CAPABILITIES: readonly RecommendationSourceAdapterCapability[] = Object.freeze([
+  "read_private_with_authorization",
+  "supports_incremental_sync"
 ]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -149,33 +175,58 @@ function normalizeTimeline(value: unknown): RecommendationMastodonTimelineKind {
   return value as RecommendationMastodonTimelineKind;
 }
 
+function normalizeAuthorizationBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new TypeError(`Invalid Mastodon timeline authorization ${label}.`);
+  return value;
+}
+
 function validateAuthorization(
-  authorization: unknown,
+  value: unknown,
   request: RecommendationSourceAdapterReadRequest,
   timeline: RecommendationMastodonTimelineKind
 ): RecommendationProtocolSourceReadAuthorization {
-  if (
-    !isPlainRecord(authorization) ||
-    authorization.status !== "authorized" ||
-    authorization.subjectId !== request.subjectId ||
-    typeof authorization.accessBasis !== "string" ||
-    typeof authorization.sourceVisibility !== "string"
-  ) {
+  if (!isPlainRecord(value) || value.status !== "authorized" || value.subjectId !== request.subjectId) {
     throw new TypeError("Invalid Mastodon timeline authorization.");
   }
 
+  const checkedAt = boundedString(value.checkedAt, MAX_CURSOR_LENGTH, "authorization timestamp");
+  normalizeRecommendationSourceAdapterReadRequest({ subjectId: "mastodon-timeline-authorization", since: checkedAt });
+  if (typeof value.sourceVisibility !== "string" || !VISIBILITY_SET.has(value.sourceVisibility)) {
+    throw new TypeError("Invalid Mastodon timeline authorization visibility.");
+  }
+  if (typeof value.accessBasis !== "string" || !ACCESS_BASIS_SET.has(value.accessBasis)) {
+    throw new TypeError("Invalid Mastodon timeline authorization access basis.");
+  }
+
+  const sourceVisibility = value.sourceVisibility as RecommendationSourceVisibility;
+  const accessBasis = value.accessBasis as RecommendationAccessBasis;
+  const authorization: RecommendationProtocolSourceReadAuthorization = {
+    status: "authorized",
+    subjectId: request.subjectId,
+    checkedAt,
+    sourceVisibility,
+    accessBasis
+  };
+  for (const [key, label] of [
+    ["containsPrivateData", "private-data flag"],
+    ["containsThirdPartyData", "third-party-data flag"],
+    ["serverSideProcessing", "server-processing flag"],
+    ["providerPolicyAllowsProcessing", "provider-policy flag"]
+  ] as const) {
+    const normalized = normalizeAuthorizationBoolean(value[key], label);
+    if (normalized !== undefined) authorization[key] = normalized;
+  }
+
   if (timeline === "public") {
-    if (authorization.sourceVisibility !== "public" || !PUBLIC_ACCESS_BASES.has(authorization.accessBasis)) {
+    if (sourceVisibility !== "public" || !PUBLIC_ACCESS_BASES.has(accessBasis)) {
       throw new TypeError("Mastodon public timeline requires public-read authorization evidence.");
     }
-  } else if (
-    authorization.containsPrivateData !== true ||
-    !PRIVATE_ACCESS_BASES.has(authorization.accessBasis)
-  ) {
+  } else if (authorization.containsPrivateData !== true || !PRIVATE_ACCESS_BASES.has(accessBasis)) {
     throw new TypeError("Mastodon private timeline requires explicit authenticated authorization evidence.");
   }
 
-  return authorization as unknown as RecommendationProtocolSourceReadAuthorization;
+  return Object.freeze(authorization);
 }
 
 function buildInitialUrl(
@@ -195,7 +246,26 @@ function buildInitialUrl(
   return url.toString();
 }
 
-function validateCursorUrl(cursor: unknown, baseUrl: URL, path: string, limit: number): string {
+function requireCursorFilter(url: URL, key: "local" | "remote", expected: boolean | undefined): void {
+  const values = url.searchParams.getAll(key);
+  if (expected === undefined) {
+    if (values.length !== 0) throw new TypeError("Invalid Mastodon timeline cursor.");
+    return;
+  }
+  if (values.length !== 1 || values[0] !== String(expected)) {
+    throw new TypeError("Invalid Mastodon timeline cursor.");
+  }
+}
+
+function validateCursorUrl(
+  cursor: unknown,
+  baseUrl: URL,
+  path: string,
+  timeline: RecommendationMastodonTimelineKind,
+  limit: number,
+  local: boolean | undefined,
+  remote: boolean | undefined
+): string {
   const raw = boundedString(cursor, MAX_CURSOR_LENGTH, "cursor");
   let url: URL;
   try {
@@ -221,14 +291,23 @@ function validateCursorUrl(cursor: unknown, baseUrl: URL, path: string, limit: n
     }
   }
 
-  const cursorLimit = url.searchParams.get("limit");
-  if (cursorLimit !== null) {
+  const cursorLimitValues = url.searchParams.getAll("limit");
+  if (cursorLimitValues.length > 1) throw new TypeError("Invalid Mastodon timeline cursor.");
+  const cursorLimit = cursorLimitValues[0];
+  if (cursorLimit !== undefined) {
     const parsed = Number.parseInt(cursorLimit, 10);
     if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > limit || String(parsed) !== cursorLimit) {
       throw new TypeError("Invalid Mastodon timeline cursor.");
     }
   } else {
     url.searchParams.set("limit", String(limit));
+  }
+
+  if (timeline === "public") {
+    requireCursorFilter(url, "local", local);
+    requireCursorFilter(url, "remote", remote);
+  } else if (url.searchParams.has("local") || url.searchParams.has("remote")) {
+    throw new TypeError("Invalid Mastodon timeline cursor.");
   }
   return url.toString();
 }
@@ -243,6 +322,7 @@ function normalizeResponse(value: unknown, maximum: number): RecommendationMasto
     throw new TypeError("Invalid Mastodon timeline transport response.");
   }
   const observedAt = boundedString(value.observedAt, MAX_CURSOR_LENGTH, "observation timestamp");
+  normalizeRecommendationSourceAdapterReadRequest({ subjectId: "mastodon-timeline-observation", since: observedAt });
   const response: RecommendationMastodonTimelineTransportResponse & { body: readonly Record<string, unknown>[] } = {
     body: Object.freeze([...value.body]) as readonly Record<string, unknown>[],
     observedAt
@@ -281,9 +361,11 @@ export function createRecommendationMastodonTimelineSourceAdapter(
   if (local === true && remote === true) throw new TypeError("Mastodon public timeline cannot be both local-only and remote-only.");
   const maximum = normalizeLimit(input.maxStatusesPerRead);
   const path = timelinePath(timeline, listId);
+  const capabilities = timeline === "public" ? PUBLIC_CAPABILITIES : PRIVATE_CAPABILITIES;
 
   return createMastodonProviderStatusSourceAdapter({
     ...(input.adapter ?? {}),
+    capabilities,
     maxRecordsPerRead: maximum,
     recordDefaults: {
       containsThirdPartyData: true,
@@ -298,7 +380,7 @@ export function createRecommendationMastodonTimelineSourceAdapter(
       const requestedLimit = request.limit === undefined ? maximum : Math.min(request.limit, maximum);
       const url = request.cursor === undefined
         ? buildInitialUrl(baseUrl, path, timeline, requestedLimit, local, remote)
-        : validateCursorUrl(request.cursor, baseUrl, path, requestedLimit);
+        : validateCursorUrl(request.cursor, baseUrl, path, timeline, requestedLimit, local, remote);
       const response = normalizeResponse(
         await input.transport.get({
           url,
@@ -322,7 +404,9 @@ export function createRecommendationMastodonTimelineSourceAdapter(
         authorization: RecommendationProtocolSourceReadAuthorization;
         cursor?: string;
       } = { records, authorization };
-      if (response.nextUrl !== undefined) result.cursor = validateCursorUrl(response.nextUrl, baseUrl, path, requestedLimit);
+      if (response.nextUrl !== undefined) {
+        result.cursor = validateCursorUrl(response.nextUrl, baseUrl, path, timeline, requestedLimit, local, remote);
+      }
       return result;
     }
   }) as RecommendationMastodonTimelineSourceAdapter;
