@@ -14,8 +14,20 @@ import {
   type RecommendationSignalLedgerSnapshot
 } from "./signal-ledger.js";
 
+export interface RecommendationEnginePersistedSubjectState {
+  events: readonly RecommendationSignalLedgerEventInput[];
+  deletedAt?: string;
+}
+
+export interface RecommendationEngineSubjectStateStore {
+  load(subjectId: string): Promise<RecommendationEnginePersistedSubjectState | undefined>;
+  save(subjectId: string, state: RecommendationEnginePersistedSubjectState): Promise<void>;
+}
+
 export interface RecommendationEngineOrchestratorOptions {
   profileStore: RecommendationProfileSignalReplacementStore;
+  stateStore?: RecommendationEngineSubjectStateStore;
+  allowEmptySubjectInitialization?: boolean;
   ledgerOptions?: RecommendationSignalLedgerOptions;
   now?: () => string;
   maxEventsPerBatch?: number;
@@ -42,6 +54,7 @@ export interface RecommendationEngineDeletionResult {
   subjectId: string;
   profile: RecommendationProfileSnapshot;
   ledgerCleared: true;
+  replayBarrierInstalled: true;
 }
 
 export interface RecommendationEngineOrchestrator {
@@ -55,6 +68,7 @@ export interface RecommendationEngineOrchestrator {
 const DEFAULT_MAX_EVENTS_PER_BATCH = 10_000;
 const MAX_EVENTS_PER_BATCH = 100_000;
 const MAX_SUBJECT_ID_LENGTH = 512;
+const OWNED_DELETION_TARGETS = new Set(["profile", "event_history"]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -101,17 +115,44 @@ function validateDeletionIntent(value: unknown): RecommendationDerivedDataDeleti
   if (
     candidate.scope !== "recommendation_derived_data" ||
     !Array.isArray(candidate.targets) ||
-    !candidate.targets.includes("profile") ||
-    !candidate.targets.includes("event_history")
+    candidate.targets.length !== 2 ||
+    new Set(candidate.targets).size !== 2 ||
+    candidate.targets.some((target) => !OWNED_DELETION_TARGETS.has(target))
   ) {
-    throw new TypeError("Recommendation engine deletion must include profile and event history.");
+    throw new TypeError("Recommendation engine deletion supports exactly profile and event history.");
   }
   return Object.freeze({
     subjectId: id,
     requestedAt,
     scope: "recommendation_derived_data",
-    targets: Object.freeze([...candidate.targets])
-  }) as RecommendationDerivedDataDeletionIntent;
+    targets: Object.freeze(["profile", "event_history"])
+  });
+}
+
+function cloneEvent(event: RecommendationSignalLedgerEventInput): RecommendationSignalLedgerEventInput {
+  return event.operation === "apply"
+    ? Object.freeze({ ...event, signal: event.signal })
+    : Object.freeze({ ...event });
+}
+
+function freezeState(state: RecommendationEnginePersistedSubjectState): RecommendationEnginePersistedSubjectState {
+  const frozen: RecommendationEnginePersistedSubjectState = {
+    events: Object.freeze(state.events.map(cloneEvent))
+  };
+  if (state.deletedAt !== undefined) frozen.deletedAt = timestamp(state.deletedAt);
+  return Object.freeze(frozen);
+}
+
+function createInMemoryStateStore(): RecommendationEngineSubjectStateStore {
+  const states = new Map<string, RecommendationEnginePersistedSubjectState>();
+  return Object.freeze({
+    async load(id) {
+      return states.get(id);
+    },
+    async save(id, state) {
+      states.set(id, freezeState(state));
+    }
+  });
 }
 
 export function createRecommendationEngineOrchestrator(
@@ -120,9 +161,19 @@ export function createRecommendationEngineOrchestrator(
   if (!isPlainRecord(options) || !isPlainRecord(options.profileStore)) {
     throw new TypeError("Invalid recommendation engine orchestrator options.");
   }
+  if (options.stateStore !== undefined && !isPlainRecord(options.stateStore)) {
+    throw new TypeError("Invalid recommendation engine subject state store.");
+  }
+  if (options.allowEmptySubjectInitialization !== undefined && typeof options.allowEmptySubjectInitialization !== "boolean") {
+    throw new TypeError("Invalid recommendation engine empty-subject initialization option.");
+  }
+
   const nowProvider = options.now ?? (() => new Date().toISOString());
   if (typeof nowProvider !== "function") throw new TypeError("Invalid recommendation engine clock.");
   const batchLimit = maxBatchSize(options.maxEventsPerBatch);
+  const stateStore = options.stateStore ?? createInMemoryStateStore();
+  const allowEmptyInitialization = options.allowEmptySubjectInitialization === true;
+  const states = new Map<string, RecommendationEnginePersistedSubjectState>();
   const ledgers = new Map<string, RecommendationSignalLedger>();
   const tails = new Map<string, Promise<void>>();
   const application = createRecommendationProfileApplicationOrchestrator({
@@ -130,12 +181,41 @@ export function createRecommendationEngineOrchestrator(
     now: nowProvider
   });
 
-  function ledgerFor(id: string): RecommendationSignalLedger {
-    const existing = ledgers.get(id);
-    if (existing !== undefined) return existing;
-    const created = createInMemoryRecommendationSignalLedger(options.ledgerOptions);
-    ledgers.set(id, created);
-    return created;
+  function buildLedger(events: readonly RecommendationSignalLedgerEventInput[]): RecommendationSignalLedger {
+    const ledger = createInMemoryRecommendationSignalLedger(options.ledgerOptions);
+    if (events.length > 0) ledger.ingestBatch(events);
+    return ledger;
+  }
+
+  async function loadState(id: string): Promise<RecommendationEnginePersistedSubjectState> {
+    const cached = states.get(id);
+    if (cached !== undefined) return cached;
+    const restored = await stateStore.load(id);
+    if (restored === undefined) {
+      if (!allowEmptyInitialization) {
+        throw new Error("Recommendation engine ledger recovery is required before subject processing.");
+      }
+      const empty = freezeState({ events: [] });
+      states.set(id, empty);
+      ledgers.set(id, buildLedger(empty.events));
+      return empty;
+    }
+    if (!isPlainRecord(restored) || !Array.isArray(restored.events)) {
+      throw new TypeError("Invalid recommendation engine persisted subject state.");
+    }
+    const normalized = freezeState(restored);
+    const ledger = buildLedger(normalized.events);
+    states.set(id, normalized);
+    ledgers.set(id, ledger);
+    return normalized;
+  }
+
+  async function requireActiveState(id: string): Promise<RecommendationEnginePersistedSubjectState> {
+    const state = await loadState(id);
+    if (state.deletedAt !== undefined) {
+      throw new Error("Recommendation engine subject is blocked by a deletion replay barrier.");
+    }
+    return state;
   }
 
   async function runSerialized<T>(id: string, work: () => Promise<T>): Promise<T> {
@@ -168,9 +248,15 @@ export function createRecommendationEngineOrchestrator(
       const now = resolveNow(input.now);
 
       return runSerialized(id, async () => {
-        const ledger = ledgerFor(id);
-        const ingestion = ledger.ingestBatch(input.events);
-        const applicationResult = await application.synchronize({ subjectId: id, ledger, now });
+        const state = await requireActiveState(id);
+        const candidate = buildLedger(state.events);
+        const ingestion = candidate.ingestBatch(input.events);
+        const acceptedEvents = input.events.filter((_, index) => ingestion.results[index]?.decision !== "duplicate");
+        const nextState = freezeState({ events: [...state.events, ...acceptedEvents] });
+        await stateStore.save(id, nextState);
+        states.set(id, nextState);
+        ledgers.set(id, candidate);
+        const applicationResult = await application.synchronize({ subjectId: id, ledger: candidate, now });
         return Object.freeze({ subjectId: id, ingestion, application: applicationResult });
       });
     },
@@ -179,7 +265,12 @@ export function createRecommendationEngineOrchestrator(
       if (!isPlainRecord(input)) throw new TypeError("Invalid recommendation engine synchronize input.");
       const id = subjectId(input.subjectId);
       const now = resolveNow(input.now);
-      return runSerialized(id, () => application.synchronize({ subjectId: id, ledger: ledgerFor(id), now }));
+      return runSerialized(id, async () => {
+        const state = await requireActiveState(id);
+        const ledger = ledgers.get(id) ?? buildLedger(state.events);
+        ledgers.set(id, ledger);
+        return application.synchronize({ subjectId: id, ledger, now });
+      });
     },
 
     async readProfile(rawSubjectId: string): Promise<RecommendationProfileSnapshot> {
@@ -191,17 +282,28 @@ export function createRecommendationEngineOrchestrator(
       if (!isPlainRecord(input)) throw new TypeError("Invalid recommendation engine ledger snapshot input.");
       const id = subjectId(input.subjectId);
       const now = resolveNow(input.now);
-      return runSerialized(id, async () => ledgerFor(id).snapshot({ now }));
+      return runSerialized(id, async () => {
+        const state = await requireActiveState(id);
+        const ledger = ledgers.get(id) ?? buildLedger(state.events);
+        ledgers.set(id, ledger);
+        return ledger.snapshot({ now });
+      });
     },
 
     async deleteSubject(rawIntent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult> {
       const intent = validateDeletionIntent(rawIntent);
       return runSerialized(intent.subjectId, async () => {
-        const profile = await options.profileStore.deleteProfile(intent);
-        const ledger = ledgers.get(intent.subjectId);
-        ledger?.clear();
+        const barrier = freezeState({ events: [], deletedAt: intent.requestedAt });
+        await stateStore.save(intent.subjectId, barrier);
+        states.set(intent.subjectId, barrier);
         ledgers.delete(intent.subjectId);
-        return Object.freeze({ subjectId: intent.subjectId, profile, ledgerCleared: true as const });
+        const profile = await options.profileStore.deleteProfile(intent);
+        return Object.freeze({
+          subjectId: intent.subjectId,
+          profile,
+          ledgerCleared: true as const,
+          replayBarrierInstalled: true as const
+        });
       });
     }
   });
