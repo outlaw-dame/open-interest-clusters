@@ -112,6 +112,32 @@ test("replacement store isolates subjects during atomic replacement", async () =
   assert.equal((await store.readProfile("did:plc:two")).entries[0]?.target.key, "technology.ai");
 });
 
+test("replacement store preserves a same-subject ingest queued after replacement", async () => {
+  const store = createInMemoryRecommendationProfileSignalReplacementStore();
+
+  await Promise.all([
+    store.replaceSignals({ subjectId: SUBJECT, signals: [signal("sports.nba")], now: NOW }),
+    store.ingestSignals({ subjectId: SUBJECT, signals: [signal("technology.ai")], now: NOW })
+  ]);
+
+  const profile = await store.readProfile(SUBJECT);
+  assert.equal(profile.signalCount, 2);
+  assert.deepEqual(profile.entries.map((entry) => entry.target.key).sort(), ["sports.nba", "technology.ai"]);
+});
+
+test("replacement store applies later replacement after an earlier same-subject ingest", async () => {
+  const store = createInMemoryRecommendationProfileSignalReplacementStore();
+
+  await Promise.all([
+    store.ingestSignals({ subjectId: SUBJECT, signals: [signal("technology.ai")], now: NOW }),
+    store.replaceSignals({ subjectId: SUBJECT, signals: [signal("sports.nba")], now: NOW })
+  ]);
+
+  const profile = await store.readProfile(SUBJECT);
+  assert.equal(profile.signalCount, 1);
+  assert.equal(profile.entries[0]?.target.key, "sports.nba");
+});
+
 test("profile application reports ledger metadata without exposing source-event keys", async () => {
   const ledger = createInMemoryRecommendationSignalLedger();
   ledger.ingest(apply("apply-1", "sensitive-provider-event", "sports.nba"));
