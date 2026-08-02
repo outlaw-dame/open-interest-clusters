@@ -32,6 +32,7 @@ export * from "./recommendation/mastodon-timeline-source-adapter.js";
 export * from "./recommendation/activitypub-curated-account-sets.js";
 export * from "./recommendation/account-recommendation-eligibility.js";
 export * from "./recommendation/legacy-fediverse-follow-packs.js";
+export * from "./recommendation/mastodon-hashtag-signals.js";
 export * from "./recommendation/atproto-labels.js";
 export * from "./recommendation/atproto-query-labels-client.js";
 export * from "./recommendation/atproto-subscribe-labels-client.js";
