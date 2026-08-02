@@ -53,6 +53,10 @@ export interface RecommendationEligibleFollowPackMember {
 const MAX_MEMBERS = 500;
 const MAX_TEXT = 4_096;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function text(value: unknown, label: string, max = MAX_TEXT): string {
   if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > max || hasUnsafeControlCharacter(value)) {
     throw new TypeError(`Invalid legacy follow pack ${label}.`);
@@ -119,6 +123,47 @@ function parseCsvRows(csv: string): readonly Record<string, string>[] {
   return Object.freeze(rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index]?.trim() ?? ""]))));
 }
 
+function requireStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function requireIdentityBoundPolicyEvidence(
+  value: unknown,
+  resolvedAccount: RecommendationAccountProfile
+): RecommendationFediverseEligibilityInput {
+  if (!isRecord(value) || !isRecord(value.account) || !isRecord(value.policy) || !isRecord(value.viewerControls)) {
+    throw new TypeError("Legacy follow pack eligibility requires complete Fediverse policy evidence.");
+  }
+  const account = value.account;
+  const identityMatches =
+    account.actorUri === resolvedAccount.uri ||
+    (resolvedAccount.handle !== undefined && account.acct === resolvedAccount.handle);
+  if (!identityMatches) {
+    throw new TypeError("Legacy follow pack Fediverse policy evidence does not match the resolved account.");
+  }
+  if (
+    typeof account.discoverable !== "boolean" ||
+    typeof account.indexable !== "boolean" ||
+    typeof account.noindex !== "boolean" ||
+    !requireStringArray(account.profileTags) ||
+    !requireStringArray(account.featuredTags)
+  ) {
+    throw new TypeError("Legacy follow pack eligibility requires complete account policy evidence.");
+  }
+  if (typeof value.policy.providerAllowsRecommendation !== "boolean") {
+    throw new TypeError("Legacy follow pack eligibility requires provider policy evidence.");
+  }
+  const viewerControls = value.viewerControls;
+  if (
+    !requireStringArray(viewerControls.blockedAccounts) ||
+    !requireStringArray(viewerControls.mutedAccounts) ||
+    !requireStringArray(viewerControls.blockedDomains)
+  ) {
+    throw new TypeError("Legacy follow pack eligibility requires complete viewer-control evidence.");
+  }
+  return value as RecommendationFediverseEligibilityInput;
+}
+
 export function normalizeLegacyFollowPackCsv(input: {
   source: RecommendationLegacyFollowPackSource;
   sourceUrl: string;
@@ -174,7 +219,8 @@ export async function filterEligibleLegacyFollowPackMembers(input: {
       ...(input.signal === undefined ? {} : { signal: input.signal })
     });
     if (!eligibility.eligible || eligibility.resolvedAccount === undefined) continue;
-    const policyInput = await input.resolveFediverseEligibility(member, eligibility.resolvedAccount, input.signal);
+    const rawPolicyInput = await input.resolveFediverseEligibility(member, eligibility.resolvedAccount, input.signal);
+    const policyInput = requireIdentityBoundPolicyEvidence(rawPolicyInput, eligibility.resolvedAccount);
     const fediverseEligibility = evaluateRecommendationFediverseEligibility(policyInput);
     if (!fediverseEligibility.eligible) continue;
     output.push(Object.freeze({ member, eligibility, fediverseEligibility }));
