@@ -122,6 +122,25 @@ test("queryLabels rejects labels issued by an unexpected source", async () => {
   );
 });
 
+test("queryLabels rejects responses larger than the requested page limit", async () => {
+  const { transport } = transportWith([{
+    labels: [rawLabel({ val: "first" }), rawLabel({ val: "second" })],
+    cursor: "after-two"
+  }]);
+  const client = createRecommendationAtprotoQueryLabelsClient(transport);
+
+  await assert.rejects(
+    client.queryPage({
+      subjectId: SUBJECT,
+      labeler,
+      subscription,
+      uriPatterns: URI_PATTERNS,
+      limit: 1
+    }),
+    /Invalid ATProto queryLabels response/u
+  );
+});
+
 test("queryAll follows bounded pagination and reports truncation", async () => {
   const { transport, urls } = transportWith([
     { labels: [rawLabel({ val: "first" })], cursor: "c1" },
@@ -162,6 +181,27 @@ test("queryAll caps each request to the remaining label budget", async () => {
   assert.equal(result.truncated, true);
 });
 
+test("queryAll rejects a server page larger than the remaining label budget", async () => {
+  const { transport, urls } = transportWith([{
+    labels: [rawLabel({ val: "first" }), rawLabel({ val: "second" })],
+    cursor: "after-two"
+  }]);
+  const client = createRecommendationAtprotoQueryLabelsClient(transport);
+
+  await assert.rejects(
+    client.queryAll({
+      subjectId: SUBJECT,
+      labeler,
+      subscription,
+      uriPatterns: URI_PATTERNS,
+      limit: 100,
+      maxLabels: 1
+    }),
+    /Invalid ATProto queryLabels response/u
+  );
+  assert.equal(new URL(urls[0] ?? "").searchParams.get("limit"), "1");
+});
+
 test("queryAll rejects repeated cursors to avoid an infinite loop", async () => {
   const { transport } = transportWith([
     { labels: [rawLabel()], cursor: "same" },
@@ -178,9 +218,11 @@ test("queryLabels rejects unsafe or unverified service endpoints", async () => {
   for (const serviceEndpoint of [
     "https://labels.example.com/path",
     "https://localhost/",
+    "https://localhost./",
     "https://127.0.0.1/",
     "https://[::1]/",
-    "https://labeler.local/"
+    "https://labeler.local/",
+    "https://labeler.local./"
   ]) {
     const { transport, urls } = transportWith([{ labels: [] }]);
     const client = createRecommendationAtprotoQueryLabelsClient(transport);
