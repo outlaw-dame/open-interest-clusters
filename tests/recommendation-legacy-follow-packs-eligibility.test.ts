@@ -8,6 +8,20 @@ import {
 
 const NOW = "2026-08-02T12:00:00.000Z";
 
+function allowFediverseAccount(profileUrl: string) {
+  return {
+    account: {
+      actorUri: profileUrl,
+      discoverable: true,
+      indexable: true,
+      noindex: false,
+      profileTags: []
+    },
+    policy: { providerAllowsRecommendation: true },
+    viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
+  } as const;
+}
+
 test("account eligibility follows moved accounts and applies the 45-day activity window", async () => {
   const profiles = new Map<string, unknown>([
     ["@old@example.social", { id: "1", uri: "https://example.social/@old", movedTo: "https://new.example/@new" }],
@@ -41,7 +55,20 @@ test("inactive, deactivated, suspended, deleted, and unresolved accounts fail cl
   }
 });
 
-test("legacy CSV packs preserve source metadata and only emit eligible resolved accounts", async () => {
+test("strict RFC3339 timestamps reject normalized calendar dates and timezone-less values", async () => {
+  for (const invalid of ["2026-02-30T00:00:00Z", "2026-08-01T00:00:00"]) {
+    await assert.rejects(
+      evaluateRecommendationAccountEligibility({
+        reference: "https://social.example/@candidate",
+        evaluatedAt: NOW,
+        resolver: { resolve: () => ({ id: "1", uri: "https://social.example/@candidate", lastActivityAt: invalid }) }
+      }),
+      /last activity timestamp/u
+    );
+  }
+});
+
+test("legacy CSV packs preserve source metadata and only emit active policy-eligible accounts", async () => {
   const pack = normalizeLegacyFollowPackCsv({
     source: "wptoots_wordpress_community",
     sourceUrl: "https://wp-community-on-mastodon.wptoots.social/",
@@ -49,9 +76,9 @@ test("legacy CSV packs preserve source metadata and only emit eligible resolved 
     curator: "@danielauener@wptoots.social",
     optOutSupported: true,
     observedAt: NOW,
-    csv: "account,name,url,keywords,language\n@active@social.example,Active,https://social.example/@active,wordpress community,en de\n@stale@social.example,Stale,https://social.example/@stale,wordpress,en"
+    csv: "\uFEFFaccount,name,url,keywords,language\n@active@social.example,Active,https://social.example/@active,wordpress community,en de\n@stale@social.example,Stale,https://social.example/@stale,wordpress,en\n@optout@social.example,Opt Out,https://social.example/@optout,wordpress,en"
   });
-  assert.equal(pack.members.length, 2);
+  assert.equal(pack.members.length, 3);
   assert.deepEqual(pack.members[0]?.languages, ["en", "de"]);
 
   const eligible = await filterEligibleLegacyFollowPackMembers({
@@ -62,13 +89,66 @@ test("legacy CSV packs preserve source metadata and only emit eligible resolved 
         return {
           id: reference,
           uri: reference,
-          lastActivityAt: reference.includes("active") ? "2026-07-20T00:00:00.000Z" : "2026-05-01T00:00:00.000Z"
+          lastActivityAt: reference.includes("stale") ? "2026-05-01T00:00:00.000Z" : "2026-07-20T00:00:00.000Z"
         };
       }
+    },
+    resolveFediverseEligibility(member, account) {
+      return member.reference.includes("optout")
+        ? {
+            account: {
+              actorUri: account.uri,
+              discoverable: true,
+              indexable: true,
+              profileTags: ["NoAI"]
+            }
+          }
+        : allowFediverseAccount(account.uri);
     }
   });
   assert.equal(eligible.length, 1);
   assert.equal(eligible[0]?.member.reference, "@active@social.example");
+  assert.equal(eligible[0]?.fediverseEligibility.reason, "eligible");
+});
+
+test("viewer blocks and provider denial prevent follow-pack recommendations", async () => {
+  const pack = normalizeLegacyFollowPackCsv({
+    source: "generic_csv",
+    sourceUrl: "https://packs.example/accounts.csv",
+    name: "Pack",
+    observedAt: NOW,
+    csv: "account,url\n@blocked@social.example,https://social.example/@blocked\n@denied@social.example,https://social.example/@denied"
+  });
+  const eligible = await filterEligibleLegacyFollowPackMembers({
+    pack,
+    evaluatedAt: NOW,
+    resolver: { resolve: (reference) => ({ id: reference, uri: reference, lastActivityAt: "2026-08-01T00:00:00.000Z" }) },
+    resolveFediverseEligibility(member, account) {
+      return member.reference.includes("blocked")
+        ? {
+            account: { actorUri: account.uri, discoverable: true },
+            viewerControls: { blockedAccounts: [account.uri] }
+          }
+        : {
+            account: { actorUri: account.uri, discoverable: true },
+            policy: { providerAllowsRecommendation: false }
+          };
+    }
+  });
+  assert.deepEqual(eligible, []);
+});
+
+test("localhost subdomains are rejected before profile resolution", () => {
+  assert.throws(
+    () => normalizeLegacyFollowPackCsv({
+      source: "generic_csv",
+      sourceUrl: "https://packs.example/accounts.csv",
+      name: "Unsafe",
+      observedAt: NOW,
+      csv: "account,url\n@unsafe@example,https://service.localhost/profile"
+    }),
+    /member profile URL/u
+  );
 });
 
 test("move loops are rejected", async () => {
