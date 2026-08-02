@@ -137,6 +137,52 @@ test("labeler discovery rejects malformed declaration identity and policy values
   );
 });
 
+test("labeler discovery rejects declarations that omit required labelValues", () => {
+  const malformed = {
+    type: "app.bsky.labeler.service",
+    recordKey: "self",
+    createdAt: "2026-08-01T00:00:00Z"
+  } as unknown as RecommendationLabelerDeclarationInput;
+
+  assert.throws(
+    () => normalizeRecommendationLabelerDiscoveryObservation(observation({ declaration: malformed })),
+    /label policy/u
+  );
+});
+
+test("labeler discovery enforces RFC 3339 timestamps and calendar validity", () => {
+  for (const discoveredAt of [
+    "2026-02-30T00:00:00Z",
+    "08/02/2026",
+    "2026-08-02 00:00:00Z",
+    "2026-08-02T24:00:00Z",
+    "2026-08-02T00:00:00+24:00"
+  ]) {
+    assert.throws(
+      () => normalizeRecommendationLabelerDiscoveryObservation(observation({ discoveredAt })),
+      /Invalid recommendation labeler discovery timestamp/u
+    );
+  }
+
+  assert.doesNotThrow(() => normalizeRecommendationLabelerDiscoveryObservation(observation({
+    discoveredAt: "2026-08-02T00:00:00.123-04:00"
+  })));
+});
+
+test("labeler discovery rejects invalid declaration timestamps", () => {
+  assert.throws(
+    () => normalizeRecommendationLabelerDiscoveryObservation(observation({
+      declaration: {
+        type: "app.bsky.labeler.service",
+        recordKey: "self",
+        createdAt: "2026-02-30T00:00:00Z",
+        labelValues: ["spam"]
+      }
+    })),
+    /Invalid recommendation labeler discovery timestamp/u
+  );
+});
+
 test("labeler discovery registry deterministically keeps the newest observation", () => {
   const registry = createInMemoryRecommendationLabelerDiscoveryRegistry();
   registry.upsert(observation({ discoveredAt: "2026-08-02T01:00:00Z" }));
@@ -159,7 +205,7 @@ test("labeler discovery registry deterministically keeps the newest observation"
   assert.equal(registry.list().length, 1);
 });
 
-test("labeler discovery registry resolves equal-time conflicts independently of delivery order", () => {
+test("labeler discovery registry resolves equal-time endpoint conflicts independently of delivery order", () => {
   const first = observation({ declaration: null });
   const second = observation({
     declaration: null,
@@ -182,6 +228,32 @@ test("labeler discovery registry resolves equal-time conflicts independently of 
   right.upsert(first);
 
   assert.deepEqual(left.get(DID), right.get(DID));
+});
+
+test("labeler discovery registry resolves equal-time policy conflicts independently of delivery order", () => {
+  const first = observation({ source: "user_provided" });
+  const second = observation({
+    source: "imported",
+    declaration: {
+      type: "app.bsky.labeler.service",
+      recordKey: "self",
+      createdAt: "2026-08-01T00:00:00Z",
+      labelValues: ["news"],
+      subjectTypes: ["account"],
+      subjectCollections: ["app.bsky.actor.profile"]
+    }
+  });
+
+  const left = createInMemoryRecommendationLabelerDiscoveryRegistry();
+  left.upsert(first);
+  left.upsert(second);
+
+  const right = createInMemoryRecommendationLabelerDiscoveryRegistry();
+  right.upsert(second);
+  right.upsert(first);
+
+  assert.deepEqual(left.get(DID), right.get(DID));
+  assert.notEqual(left.get(DID), undefined);
 });
 
 test("labeler discovery registry removes only discovery metadata", () => {
