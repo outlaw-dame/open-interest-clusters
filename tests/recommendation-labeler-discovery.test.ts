@@ -4,15 +4,18 @@ import assert from "node:assert/strict";
 import {
   createInMemoryRecommendationLabelerDiscoveryRegistry,
   normalizeRecommendationLabelerDiscoveryObservation,
+  type RecommendationLabelerDeclarationInput,
   type RecommendationLabelerDiscoveryObservationInput
 } from "../src/recommendation/labeler-discovery.js";
 
 const DID = "did:plc:labelerexample123";
 
-function observation(
-  overrides: Partial<RecommendationLabelerDiscoveryObservationInput> = {}
-): RecommendationLabelerDiscoveryObservationInput {
-  return {
+type ObservationOverrides = Omit<Partial<RecommendationLabelerDiscoveryObservationInput>, "declaration"> & {
+  declaration?: RecommendationLabelerDeclarationInput | null;
+};
+
+function observation(overrides: ObservationOverrides = {}): RecommendationLabelerDiscoveryObservationInput {
+  const base: RecommendationLabelerDiscoveryObservationInput = {
     source: "user_provided",
     discoveredAt: "2026-08-02T00:00:00Z",
     didDocument: {
@@ -30,9 +33,14 @@ function observation(
       labelValues: ["spam", "sports.nba", "spam"],
       subjectTypes: ["record"],
       subjectCollections: ["app.bsky.feed.post"]
-    },
-    ...overrides
+    }
   };
+
+  const { declaration, ...rest } = overrides;
+  const result: RecommendationLabelerDiscoveryObservationInput = { ...base, ...rest };
+  if (declaration === null) delete result.declaration;
+  else if (declaration !== undefined) result.declaration = declaration;
+  return result;
 }
 
 test("labeler discovery verifies DID service metadata without creating trust or subscription", () => {
@@ -50,7 +58,7 @@ test("labeler discovery verifies DID service metadata without creating trust or 
 
 test("labeler discovery supports a DID-only candidate with empty declared policy", () => {
   const candidate = normalizeRecommendationLabelerDiscoveryObservation(
-    observation({ declaration: undefined })
+    observation({ declaration: null })
   );
 
   assert.equal(candidate.verification, "did_document");
@@ -152,9 +160,9 @@ test("labeler discovery registry deterministically keeps the newest observation"
 });
 
 test("labeler discovery registry resolves equal-time conflicts independently of delivery order", () => {
-  const first = observation({ declaration: undefined });
+  const first = observation({ declaration: null });
   const second = observation({
-    declaration: undefined,
+    declaration: null,
     didDocument: {
       id: DID,
       service: [{
