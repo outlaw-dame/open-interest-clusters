@@ -169,6 +169,35 @@ test("labeler discovery enforces RFC 3339 timestamps and calendar validity", () 
   })));
 });
 
+test("labeler discovery accepts RFC 3339 leap seconds for observations and declarations", () => {
+  assert.doesNotThrow(() => normalizeRecommendationLabelerDiscoveryObservation(observation({
+    discoveredAt: "2016-12-31T23:59:60Z",
+    declaration: {
+      type: "app.bsky.labeler.service",
+      recordKey: "self",
+      createdAt: "2016-12-31T18:59:60-05:00",
+      labelValues: ["spam"]
+    }
+  })));
+});
+
+test("labeler discovery orders leap-second observations chronologically", () => {
+  const registry = createInMemoryRecommendationLabelerDiscoveryRegistry();
+  registry.upsert(observation({
+    declaration: null,
+    discoveredAt: "2016-12-31T23:59:59Z",
+    source: "imported"
+  }));
+  registry.upsert(observation({
+    declaration: null,
+    discoveredAt: "2016-12-31T23:59:60Z",
+    source: "user_provided"
+  }));
+
+  assert.equal(registry.get(DID)?.discoveredAt, "2016-12-31T23:59:60Z");
+  assert.equal(registry.get(DID)?.source, "user_provided");
+});
+
 test("labeler discovery rejects invalid declaration timestamps", () => {
   assert.throws(
     () => normalizeRecommendationLabelerDiscoveryObservation(observation({
