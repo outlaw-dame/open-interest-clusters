@@ -127,6 +127,10 @@ function requireStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function normalizeIdentity(value: string): string {
+  return value.trim().replace(/^@/u, "").toLocaleLowerCase("und");
+}
+
 function requireIdentityBoundPolicyEvidence(
   value: unknown,
   resolvedAccount: RecommendationAccountProfile
@@ -135,23 +139,34 @@ function requireIdentityBoundPolicyEvidence(
     throw new TypeError("Legacy follow pack eligibility requires complete Fediverse policy evidence.");
   }
   const account = value.account;
-  const identityMatches =
-    account.actorUri === resolvedAccount.uri ||
-    (resolvedAccount.handle !== undefined && account.acct === resolvedAccount.handle);
-  if (!identityMatches) {
+  const suppliedActorUri = typeof account.actorUri === "string";
+  const suppliedAcct = typeof account.acct === "string";
+  if (!suppliedActorUri && !suppliedAcct) {
+    throw new TypeError("Legacy follow pack Fediverse policy evidence requires account identity.");
+  }
+  if (suppliedActorUri && account.actorUri !== resolvedAccount.uri) {
+    throw new TypeError("Legacy follow pack Fediverse policy evidence does not match the resolved account.");
+  }
+  if (
+    suppliedAcct &&
+    (resolvedAccount.handle === undefined || normalizeIdentity(account.acct as string) !== normalizeIdentity(resolvedAccount.handle))
+  ) {
     throw new TypeError("Legacy follow pack Fediverse policy evidence does not match the resolved account.");
   }
   if (
     typeof account.discoverable !== "boolean" ||
     typeof account.indexable !== "boolean" ||
     typeof account.noindex !== "boolean" ||
-    !requireStringArray(account.profileTags) ||
-    !requireStringArray(account.featuredTags)
+    (account.profileTags !== undefined && !requireStringArray(account.profileTags)) ||
+    (account.featuredTags !== undefined && !requireStringArray(account.featuredTags))
   ) {
     throw new TypeError("Legacy follow pack eligibility requires complete account policy evidence.");
   }
   if (typeof value.policy.providerAllowsRecommendation !== "boolean") {
     throw new TypeError("Legacy follow pack eligibility requires provider policy evidence.");
+  }
+  if (value.policy.respectNoindex === false || value.policy.respectOptOutTags === false) {
+    throw new TypeError("Legacy follow pack policy cannot disable mandatory opt-out checks.");
   }
   const viewerControls = value.viewerControls;
   if (
@@ -161,7 +176,15 @@ function requireIdentityBoundPolicyEvidence(
   ) {
     throw new TypeError("Legacy follow pack eligibility requires complete viewer-control evidence.");
   }
-  return value as RecommendationFediverseEligibilityInput;
+  return Object.freeze({
+    ...value,
+    account: Object.freeze({
+      ...account,
+      profileTags: Object.freeze([...(requireStringArray(account.profileTags) ? account.profileTags : [])]),
+      featuredTags: Object.freeze([...(requireStringArray(account.featuredTags) ? account.featuredTags : [])])
+    }),
+    policy: Object.freeze({ ...value.policy, respectNoindex: true, respectOptOutTags: true })
+  }) as RecommendationFediverseEligibilityInput;
 }
 
 export function normalizeLegacyFollowPackCsv(input: {
