@@ -53,6 +53,7 @@ const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_ENDPOINT_LENGTH = 2_048;
 const MAX_INFO_NAME_LENGTH = 128;
 const MAX_INFO_MESSAGE_LENGTH = 2_048;
+const MAX_SIGNATURE_BYTES = 1_536;
 const MAX_LABELS_PER_FRAME = 1_000;
 const MAX_FRAMES = 10_000;
 const MAX_LABELS = 100_000;
@@ -122,6 +123,9 @@ function encodeBase64(bytes: Uint8Array): string {
 function normalizeStreamLabel(raw: Record<string, unknown>): Omit<RecommendationAtprotoLabelInput, "provenance"> {
   const normalized: Record<string, unknown> = { ...raw };
   if (raw.sig instanceof Uint8Array) {
+    if (raw.sig.byteLength > MAX_SIGNATURE_BYTES) {
+      throw new TypeError("Invalid ATProto subscribeLabels label signature.");
+    }
     normalized.sig = encodeBase64(raw.sig);
   } else if (raw.sig !== undefined && typeof raw.sig !== "string") {
     throw new TypeError("Invalid ATProto subscribeLabels label signature.");
