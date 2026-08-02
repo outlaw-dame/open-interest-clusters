@@ -79,7 +79,7 @@ function pinned(items: unknown, mode: RecommendationPinnedContentCapability): re
   return Object.freeze(values.map((item) => {
     if (!record(item)) throw new TypeError("Invalid account topic pinned content.");
     const result: RecommendationNormalizedPinnedContent = {
-      uri: requiredText(item.uri ?? item.url, "pinned content URI"),
+      uri: requiredText(item.uri ?? item.url ?? item.id, "pinned content URI"),
       text: optionalText(item.text ?? item.content, "pinned content text") ?? ""
     };
     const createdAt = optionalText(item.createdAt ?? item.created_at ?? item.published, "pinned content timestamp", 128);
