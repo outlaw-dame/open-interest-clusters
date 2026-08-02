@@ -100,10 +100,7 @@ test("home timeline requires explicit authenticated private-read evidence before
     }
   });
 
-  await assert.rejects(
-    adapter.read({ subjectId: SUBJECT }),
-    /explicit authenticated authorization evidence/u
-  );
+  await assert.rejects(adapter.read({ subjectId: SUBJECT }), /explicit authenticated authorization evidence/u);
   assert.equal(transportCalls, 0);
 });
 
@@ -140,11 +137,7 @@ test("timeline cursors are constrained to the configured origin, endpoint, query
     baseUrl: "https://social.example",
     timeline: "public",
     authorize: publicAuthorization,
-    transport: {
-      get() {
-        return { body: [], observedAt: OBSERVED_AT };
-      }
-    }
+    transport: { get: () => ({ body: [], observedAt: OBSERVED_AT }) }
   });
 
   for (const cursor of [
@@ -153,10 +146,7 @@ test("timeline cursors are constrained to the configured origin, endpoint, query
     "https://social.example/api/v1/timelines/public?limit=2&redirect=https://evil.example",
     "https://social.example/api/v1/timelines/public?limit=3&max_id=1"
   ]) {
-    await assert.rejects(
-      adapter.read({ subjectId: SUBJECT, limit: 2, cursor }),
-      /cursor/u
-    );
+    await assert.rejects(adapter.read({ subjectId: SUBJECT, limit: 2, cursor }), /cursor/u);
   }
 });
 
@@ -198,11 +188,7 @@ test("transport response bounds are enforced and timestamp since reads fail clos
     timeline: "public",
     maxStatusesPerRead: 1,
     authorize: publicAuthorization,
-    transport: {
-      get() {
-        return { body: [status("1"), status("2")], observedAt: OBSERVED_AT };
-      }
-    }
+    transport: { get: () => ({ body: [status("1"), status("2")], observedAt: OBSERVED_AT }) }
   });
 
   await assert.rejects(adapter.read({ subjectId: SUBJECT, limit: 1 }), /transport response/u);
@@ -210,4 +196,81 @@ test("transport response bounds are enforced and timestamp since reads fail clos
     adapter.read({ subjectId: SUBJECT, since: "2026-08-02T12:00:00Z" }),
     /opaque pagination cursors/u
   );
+});
+
+test("malformed private authorization is rejected before authenticated transport", async () => {
+  for (const authorization of [
+    { ...privateAuthorization(), checkedAt: undefined },
+    { ...privateAuthorization(), checkedAt: "not-a-timestamp" },
+    { ...privateAuthorization(), sourceVisibility: "secret" },
+    { ...privateAuthorization(), containsThirdPartyData: "yes" }
+  ]) {
+    let transportCalls = 0;
+    const adapter = createRecommendationMastodonTimelineSourceAdapter({
+      baseUrl: "https://social.example",
+      timeline: "home",
+      authorize: () => authorization as never,
+      transport: {
+        get() {
+          transportCalls += 1;
+          return { body: [], observedAt: OBSERVED_AT };
+        }
+      }
+    });
+    await assert.rejects(adapter.read({ subjectId: SUBJECT }), /authorization/u);
+    assert.equal(transportCalls, 0);
+  }
+});
+
+test("configured public timeline filters cannot be dropped, added, or flipped by pagination", async () => {
+  const configured = createRecommendationMastodonTimelineSourceAdapter({
+    baseUrl: "https://social.example",
+    timeline: "public",
+    local: true,
+    authorize: publicAuthorization,
+    transport: { get: () => ({ body: [], observedAt: OBSERVED_AT }) }
+  });
+  for (const cursor of [
+    "https://social.example/api/v1/timelines/public?limit=2&max_id=1",
+    "https://social.example/api/v1/timelines/public?limit=2&max_id=1&local=false",
+    "https://social.example/api/v1/timelines/public?limit=2&max_id=1&local=true&remote=false"
+  ]) {
+    await assert.rejects(configured.read({ subjectId: SUBJECT, limit: 2, cursor }), /cursor/u);
+  }
+
+  const unfiltered = createRecommendationMastodonTimelineSourceAdapter({
+    baseUrl: "https://social.example",
+    timeline: "public",
+    authorize: publicAuthorization,
+    transport: { get: () => ({ body: [], observedAt: OBSERVED_AT }) }
+  });
+  await assert.rejects(
+    unfiltered.read({
+      subjectId: SUBJECT,
+      limit: 2,
+      cursor: "https://social.example/api/v1/timelines/public?limit=2&max_id=1&remote=true"
+    }),
+    /cursor/u
+  );
+});
+
+test("timeline adapters expose only capabilities implemented by their fixed endpoint", () => {
+  const transport = { get: () => ({ body: [], observedAt: OBSERVED_AT }) };
+  const publicAdapter = createRecommendationMastodonTimelineSourceAdapter({
+    baseUrl: "https://social.example",
+    timeline: "public",
+    authorize: publicAuthorization,
+    transport
+  });
+  const privateAdapter = createRecommendationMastodonTimelineSourceAdapter({
+    baseUrl: "https://social.example",
+    timeline: "home",
+    authorize: privateAuthorization,
+    transport
+  });
+
+  assert.deepEqual(publicAdapter.capabilities, ["read_public", "supports_incremental_sync"]);
+  assert.deepEqual(privateAdapter.capabilities, ["read_private_with_authorization", "supports_incremental_sync"]);
+  assert.equal(publicAdapter.capabilities.includes("supports_deletion_events"), false);
+  assert.equal(privateAdapter.capabilities.includes("supports_deletion_events"), false);
 });
