@@ -71,6 +71,8 @@ const MAX_POLICY_VALUE_LENGTH = 256;
 const MAX_POLICY_VALUES = 1_000;
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u;
 const POLICY_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:#/-]*$/u;
+const RFC3339_TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/u;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -95,12 +97,58 @@ function normalizeDid(value: unknown, message = "Invalid recommendation labeler 
   return normalized;
 }
 
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
 function normalizeTimestamp(value: unknown): string {
   const normalized = boundedString(
     value,
     MAX_TIMESTAMP_LENGTH,
     "Invalid recommendation labeler discovery timestamp."
   );
+  const match = RFC3339_TIMESTAMP_PATTERN.exec(normalized);
+  if (match === null) {
+    throw new TypeError("Invalid recommendation labeler discovery timestamp.");
+  }
+
+  const year = Number.parseInt(match[1] ?? "", 10);
+  const month = Number.parseInt(match[2] ?? "", 10);
+  const day = Number.parseInt(match[3] ?? "", 10);
+  const hour = Number.parseInt(match[4] ?? "", 10);
+  const minute = Number.parseInt(match[5] ?? "", 10);
+  const second = Number.parseInt(match[6] ?? "", 10);
+  const zone = match[7] ?? "";
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59 ||
+    second < 0 ||
+    second > 59
+  ) {
+    throw new TypeError("Invalid recommendation labeler discovery timestamp.");
+  }
+
+  if (zone !== "Z") {
+    const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
+    const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
+    if (offsetHour > 23 || offsetMinute > 59) {
+      throw new TypeError("Invalid recommendation labeler discovery timestamp.");
+    }
+  }
+
   if (!Number.isFinite(Date.parse(normalized))) {
     throw new TypeError("Invalid recommendation labeler discovery timestamp.");
   }
@@ -143,8 +191,11 @@ function normalizeServiceEndpoint(value: unknown): string {
   return parsed.toString();
 }
 
-function normalizePolicyValues(value: unknown, message: string): readonly string[] {
-  if (value === undefined) return Object.freeze([]);
+function normalizePolicyValues(value: unknown, message: string, required = false): readonly string[] {
+  if (value === undefined) {
+    if (required) throw new TypeError(message);
+    return Object.freeze([]);
+  }
   if (!Array.isArray(value) || value.length > MAX_POLICY_VALUES) throw new TypeError(message);
   const unique = new Set<string>();
   for (const entry of value) {
@@ -169,6 +220,20 @@ function clone(candidate: RecommendationDiscoveredLabeler): RecommendationDiscov
     declaredSubjectTypes: Object.freeze([...candidate.declaredSubjectTypes]),
     declaredSubjectCollections: Object.freeze([...candidate.declaredSubjectCollections])
   });
+}
+
+function candidatePrecedenceKey(candidate: RecommendationDiscoveredLabeler): string {
+  return sha256Hex(JSON.stringify({
+    labelerDid: candidate.labelerDid,
+    serviceEndpoint: candidate.serviceEndpoint,
+    source: candidate.source,
+    discoveredAt: candidate.discoveredAt,
+    verification: candidate.verification,
+    declaredLabelValues: candidate.declaredLabelValues,
+    declaredSubjectTypes: candidate.declaredSubjectTypes,
+    declaredSubjectCollections: candidate.declaredSubjectCollections,
+    requiresExplicitSubscription: candidate.requiresExplicitSubscription
+  }));
 }
 
 export function normalizeRecommendationLabelerDiscoveryObservation(
@@ -205,7 +270,8 @@ export function normalizeRecommendationLabelerDiscoveryObservation(
     normalizeTimestamp(input.declaration.createdAt);
     declaredLabelValues = normalizePolicyValues(
       input.declaration.labelValues,
-      "Invalid recommendation labeler discovery label policy."
+      "Invalid recommendation labeler discovery label policy.",
+      true
     );
     declaredSubjectTypes = normalizePolicyValues(
       input.declaration.subjectTypes,
@@ -243,7 +309,8 @@ export function createInMemoryRecommendationLabelerDiscoveryRegistry(): Recommen
         const existingTime = Date.parse(existing.discoveredAt);
         const incomingTime = Date.parse(incoming.discoveredAt);
         const replace = incomingTime > existingTime || (
-          incomingTime === existingTime && incoming.discoveryKey.localeCompare(existing.discoveryKey) > 0
+          incomingTime === existingTime &&
+          candidatePrecedenceKey(incoming).localeCompare(candidatePrecedenceKey(existing)) > 0
         );
         if (!replace) return clone(existing);
       }
