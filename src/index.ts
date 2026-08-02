@@ -28,6 +28,7 @@ export * from "./recommendation/protocol-source-adapters.js";
 export * from "./recommendation/protocol-source-authorization.js";
 export * from "./recommendation/protocol-source-provider-records.js";
 export * from "./recommendation/protocol-provider-source-adapters.js";
+export * from "./recommendation/mastodon-timeline-source-adapter.js";
 export * from "./recommendation/atproto-labels.js";
 export * from "./recommendation/atproto-query-labels-client.js";
 export * from "./recommendation/atproto-subscribe-labels-client.js";
