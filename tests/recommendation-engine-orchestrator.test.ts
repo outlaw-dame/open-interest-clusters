@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { RecommendationDerivedDataDeletionIntent } from "../src/recommendation/consent.js";
-import { createRecommendationEngineOrchestrator } from "../src/recommendation/engine-orchestrator.js";
+import {
+  createRecommendationEngineOrchestrator,
+  type RecommendationEnginePersistedSubjectState,
+  type RecommendationEngineSubjectStateStore
+} from "../src/recommendation/engine-orchestrator.js";
 import { normalizeRecommendationInterestSignal } from "../src/recommendation/interest-signal.js";
 import {
   createInMemoryRecommendationProfileSignalReplacementStore,
@@ -71,11 +75,34 @@ function deletion(subjectId: string): RecommendationDerivedDataDeletionIntent {
   };
 }
 
+function engineOptions(profileStore = createInMemoryRecommendationProfileSignalReplacementStore()) {
+  return {
+    profileStore,
+    now: () => NOW,
+    allowEmptySubjectInitialization: true
+  } as const;
+}
+
+function memoryStateStore(initial: ReadonlyMap<string, RecommendationEnginePersistedSubjectState> = new Map()): {
+  store: RecommendationEngineSubjectStateStore;
+  states: Map<string, RecommendationEnginePersistedSubjectState>;
+} {
+  const states = new Map(initial);
+  return {
+    states,
+    store: {
+      async load(subjectId) {
+        return states.get(subjectId);
+      },
+      async save(subjectId, state) {
+        states.set(subjectId, state);
+      }
+    }
+  };
+}
+
 test("recommendation engine processes ledger events into a profile without retry double counting", async () => {
-  const engine = createRecommendationEngineOrchestrator({
-    profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
-    now: () => NOW
-  });
+  const engine = createRecommendationEngineOrchestrator(engineOptions());
 
   const first = await engine.process({ subjectId: "alice", events: [apply()] });
   const retry = await engine.process({ subjectId: "alice", events: [apply()] });
@@ -88,10 +115,7 @@ test("recommendation engine processes ledger events into a profile without retry
 });
 
 test("recommendation engine removes a retracted contribution from the derived profile", async () => {
-  const engine = createRecommendationEngineOrchestrator({
-    profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
-    now: () => NOW
-  });
+  const engine = createRecommendationEngineOrchestrator(engineOptions());
 
   await engine.process({ subjectId: "alice", events: [apply()] });
   const result = await engine.process({ subjectId: "alice", events: [retract()] });
@@ -103,7 +127,7 @@ test("recommendation engine removes a retracted contribution from the derived pr
   assert.deepEqual(result.application.profile.entries, []);
 });
 
-test("recommendation engine retains authoritative ledger state when profile application fails and repairs on synchronize", async () => {
+test("recommendation engine retains authoritative event history when profile application fails and repairs on synchronize", async () => {
   const backing = createInMemoryRecommendationProfileSignalReplacementStore();
   let failNextReplacement = true;
   const failingStore: RecommendationProfileSignalReplacementStore = {
@@ -116,7 +140,7 @@ test("recommendation engine retains authoritative ledger state when profile appl
       return backing.replaceSignals(input);
     }
   };
-  const engine = createRecommendationEngineOrchestrator({ profileStore: failingStore, now: () => NOW });
+  const engine = createRecommendationEngineOrchestrator(engineOptions(failingStore));
 
   await assert.rejects(
     engine.process({ subjectId: "alice", events: [apply()] }),
@@ -132,11 +156,45 @@ test("recommendation engine retains authoritative ledger state when profile appl
   assert.equal(repaired.acceptedSignalCount, 1);
 });
 
-test("recommendation engine isolates subjects", async () => {
+test("recommendation engine validates a complete batch before changing authoritative state", async () => {
+  const engine = createRecommendationEngineOrchestrator(engineOptions());
+  const conflicting = { ...apply("apply-1", "source-2") };
+
+  await assert.rejects(
+    engine.process({ subjectId: "alice", events: [apply(), conflicting] }),
+    /Conflicting recommendation signal ledger operation ID/u
+  );
+
+  const snapshot = await engine.readLedgerSnapshot({ subjectId: "alice", now: NOW });
+  assert.equal(snapshot.operationCount, 0);
+  assert.equal((await engine.readProfile("alice")).signalCount, 0);
+});
+
+test("recommendation engine restores event history before replacing an existing profile", async () => {
+  const profileStore = createInMemoryRecommendationProfileSignalReplacementStore();
+  await profileStore.replaceSignals({ subjectId: "alice", signals: [SIGNAL], now: NOW });
+  const { store } = memoryStateStore(new Map([["alice", { events: [apply()] }]]));
+  const engine = createRecommendationEngineOrchestrator({ profileStore, stateStore: store, now: () => NOW });
+
+  const synchronized = await engine.synchronize({ subjectId: "alice", now: NOW });
+  assert.equal(synchronized.profile.signalCount, 1);
+  assert.equal(synchronized.ledgerOperationCount, 1);
+});
+
+test("recommendation engine fails closed when ledger recovery was not supplied", async () => {
   const engine = createRecommendationEngineOrchestrator({
     profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
     now: () => NOW
   });
+
+  await assert.rejects(
+    engine.synchronize({ subjectId: "alice", now: NOW }),
+    /ledger recovery is required/u
+  );
+});
+
+test("recommendation engine isolates subjects", async () => {
+  const engine = createRecommendationEngineOrchestrator(engineOptions());
 
   await Promise.all([
     engine.process({ subjectId: "alice", events: [apply("alice-apply", "alice-source")] }),
@@ -145,43 +203,55 @@ test("recommendation engine isolates subjects", async () => {
 
   assert.equal((await engine.readProfile("alice")).signalCount, 1);
   assert.equal((await engine.readProfile("bob")).signalCount, 1);
-  assert.equal((await engine.readLedgerSnapshot({ subjectId: "alice", now: NOW })).operationCount, 1);
-  assert.equal((await engine.readLedgerSnapshot({ subjectId: "bob", now: NOW })).operationCount, 1);
 });
 
-test("recommendation engine deletion clears profile and event history without resurrection", async () => {
+test("recommendation engine deletion installs a replay barrier and prevents resurrection", async () => {
+  const { store, states } = memoryStateStore();
   const engine = createRecommendationEngineOrchestrator({
     profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
+    stateStore: store,
+    allowEmptySubjectInitialization: true,
     now: () => NOW
   });
   await engine.process({ subjectId: "alice", events: [apply()] });
 
   const result = await engine.deleteSubject(deletion("alice"));
   assert.equal(result.ledgerCleared, true);
+  assert.equal(result.replayBarrierInstalled, true);
   assert.equal(result.profile.signalCount, 0);
-  assert.equal((await engine.readProfile("alice")).signalCount, 0);
-  assert.equal((await engine.readLedgerSnapshot({ subjectId: "alice", now: NOW })).operationCount, 0);
+  assert.equal(states.get("alice")?.deletedAt, NOW);
+  assert.deepEqual(states.get("alice")?.events, []);
 
-  const synchronized = await engine.synchronize({ subjectId: "alice", now: NOW });
-  assert.equal(synchronized.profile.signalCount, 0);
+  await assert.rejects(
+    engine.process({ subjectId: "alice", events: [apply()] }),
+    /deletion replay barrier/u
+  );
+  await assert.rejects(
+    engine.synchronize({ subjectId: "alice", now: NOW }),
+    /deletion replay barrier/u
+  );
+  assert.equal((await engine.readProfile("alice")).signalCount, 0);
 });
 
-test("recommendation engine requires deletion of profile and event history together", async () => {
-  const engine = createRecommendationEngineOrchestrator({
-    profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
-    now: () => NOW
-  });
+test("recommendation engine rejects unsupported and partial deletion targets", async () => {
+  const engine = createRecommendationEngineOrchestrator(engineOptions());
 
   await assert.rejects(
     engine.deleteSubject({ ...deletion("alice"), targets: ["profile"] }),
-    /must include profile and event history/u
+    /supports exactly profile and event history/u
+  );
+  await assert.rejects(
+    engine.deleteSubject({
+      ...deletion("alice"),
+      targets: ["profile", "event_history", "embeddings"]
+    }),
+    /supports exactly profile and event history/u
   );
 });
 
 test("recommendation engine rejects malformed input and oversized batches", async () => {
   const engine = createRecommendationEngineOrchestrator({
-    profileStore: createInMemoryRecommendationProfileSignalReplacementStore(),
-    now: () => NOW,
+    ...engineOptions(),
     maxEventsPerBatch: 1
   });
 
