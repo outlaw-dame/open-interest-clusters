@@ -116,6 +116,7 @@ export function normalizeRecommendationMastodonAccountTopicSource(input: {
   const account = input.account;
   const accountId = requiredText(account.id, "account ID", 512);
   const accountUri = requiredText(account.uri ?? account.url, "account URI");
+  const displayName = optionalText(account.display_name ?? account.name, "display name", 512);
   const pinnedStatuses = Array.isArray(input.pinnedStatuses) ? input.pinnedStatuses.map((status) => {
     if (!record(status) || status.pinned !== true) throw new TypeError("Invalid Mastodon pinned status.");
     return {
@@ -137,7 +138,7 @@ export function normalizeRecommendationMastodonAccountTopicSource(input: {
     accountId,
     accountUri,
     profileText: optionalText(account.note ?? account.summary, "profile text") ?? "",
-    ...(optionalText(account.display_name ?? account.name, "display name", 512) === undefined ? {} : { displayName: optionalText(account.display_name ?? account.name, "display name", 512) }),
+    ...(displayName === undefined ? {} : { displayName }),
     featuredTopics: strings(input.featuredTags, "featured topics"),
     structuredTags: strings(account.tags, "structured tags"),
     pinnedContent: pinned(pinnedStatuses, "multiple"),
@@ -154,6 +155,7 @@ export function normalizeRecommendationActivityPubActorTopicSource(input: {
 }): RecommendationNormalizedAccountTopicSource {
   if (!record(input.actor)) throw new TypeError("Invalid ActivityPub account topic source.");
   const actor = input.actor;
+  const displayName = optionalText(actor.name, "display name", 512);
   const featuredItems = record(input.featuredItems) && Array.isArray(input.featuredItems.orderedItems)
     ? input.featuredItems.orderedItems
     : input.featuredItems;
@@ -170,7 +172,7 @@ export function normalizeRecommendationActivityPubActorTopicSource(input: {
     accountId: requiredText(actor.id, "account ID"),
     accountUri: requiredText(actor.id, "account URI"),
     profileText: optionalText(actor.summary, "profile text") ?? "",
-    ...(optionalText(actor.name, "display name", 512) === undefined ? {} : { displayName: optionalText(actor.name, "display name", 512) }),
+    ...(displayName === undefined ? {} : { displayName }),
     featuredTopics: strings(input.featuredTags ?? actor.featuredTags, "featured topics"),
     structuredTags: strings(actor.tag, "structured tags"),
     pinnedContent: pinned(featuredItems, featuredItems === undefined ? "none" : "multiple"),
@@ -187,6 +189,7 @@ export function normalizeRecommendationAtprotoAccountTopicSource(input: {
   if (!record(input.profile)) throw new TypeError("Invalid ATProto account topic source.");
   const profile = input.profile;
   const did = requiredText(profile.did, "account DID", 512);
+  const displayName = optionalText(profile.displayName, "display name", 512);
   let pinnedPost: unknown = undefined;
   if (profile.pinnedPost !== undefined && profile.pinnedPost !== null) {
     if (!record(profile.pinnedPost) || typeof profile.pinnedPost.uri !== "string" || typeof profile.pinnedPost.cid !== "string") throw new TypeError("Invalid ATProto pinned-post reference.");
@@ -212,7 +215,7 @@ export function normalizeRecommendationAtprotoAccountTopicSource(input: {
     accountId: did,
     accountUri: did,
     profileText: optionalText(profile.description, "profile text") ?? "",
-    ...(optionalText(profile.displayName, "display name", 512) === undefined ? {} : { displayName: optionalText(profile.displayName, "display name", 512) }),
+    ...(displayName === undefined ? {} : { displayName }),
     featuredTopics: Object.freeze([]),
     structuredTags: Object.freeze([]),
     pinnedContent: pinned(pinnedPost, "single"),
