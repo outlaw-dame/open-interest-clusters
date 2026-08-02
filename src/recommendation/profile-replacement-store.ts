@@ -16,6 +16,7 @@ export function createInMemoryRecommendationProfileSignalReplacementStore(
   options: InMemoryRecommendationProfileStoreOptions = {}
 ): RecommendationProfileSignalReplacementStore {
   const stores = new Map<string, RecommendationProfileStore>();
+  const mutationTails = new Map<string, Promise<void>>();
   const createStore = (): RecommendationProfileStore => createInMemoryRecommendationProfileStore(options);
 
   function storeFor(subjectId: string): RecommendationProfileStore {
@@ -26,28 +27,54 @@ export function createInMemoryRecommendationProfileSignalReplacementStore(
     return created;
   }
 
+  async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
+    const prior = mutationTails.get(subjectId) ?? Promise.resolve();
+    const ready = prior.catch(() => undefined);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = ready.then(() => gate);
+    mutationTails.set(subjectId, tail);
+
+    await ready;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (mutationTails.get(subjectId) === tail) mutationTails.delete(subjectId);
+    }
+  }
+
+  async function awaitSubjectMutations(subjectId: string): Promise<void> {
+    await (mutationTails.get(subjectId) ?? Promise.resolve()).catch(() => undefined);
+  }
+
   return Object.freeze({
     async ingestSignals(input: RecommendationProfileSignalIngestInput): Promise<RecommendationProfileSignalIngestResult> {
-      return storeFor(input.subjectId).ingestSignals(input);
+      return runSerialized(input.subjectId, () => storeFor(input.subjectId).ingestSignals(input));
     },
 
     async readProfile(subjectId: string): Promise<RecommendationProfileSnapshot> {
+      await awaitSubjectMutations(subjectId);
       const existing = stores.get(subjectId);
       return (existing ?? createStore()).readProfile(subjectId);
     },
 
     async deleteProfile(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationProfileSnapshot> {
-      const existing = stores.get(intent.subjectId);
-      const result = await (existing ?? createStore()).deleteProfile(intent);
-      if (intent.targets.includes("profile")) stores.delete(intent.subjectId);
-      return result;
+      return runSerialized(intent.subjectId, async () => {
+        const existing = stores.get(intent.subjectId);
+        const result = await (existing ?? createStore()).deleteProfile(intent);
+        if (intent.targets.includes("profile")) stores.delete(intent.subjectId);
+        return result;
+      });
     },
 
     async replaceSignals(input: RecommendationProfileSignalIngestInput): Promise<RecommendationProfileSignalIngestResult> {
-      const replacement = createStore();
-      const result = await replacement.ingestSignals(input);
-      stores.set(input.subjectId, replacement);
-      return result;
+      return runSerialized(input.subjectId, async () => {
+        const replacement = createStore();
+        const result = await replacement.ingestSignals(input);
+        stores.set(input.subjectId, replacement);
+        return result;
+      });
     }
   });
 }
