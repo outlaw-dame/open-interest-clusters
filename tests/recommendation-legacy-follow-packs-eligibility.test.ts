@@ -23,6 +23,25 @@ function allowFediverseAccount(profileUrl: string) {
   } as const;
 }
 
+function oneMemberPack() {
+  return normalizeLegacyFollowPackCsv({
+    source: "generic_csv",
+    sourceUrl: "https://packs.example/accounts.csv",
+    name: "Pack",
+    observedAt: NOW,
+    csv: "account,url\n@candidate@social.example,https://social.example/@candidate"
+  });
+}
+
+function activeResolver(reference: string) {
+  return {
+    id: reference,
+    uri: reference,
+    handle: "candidate@social.example",
+    lastActivityAt: "2026-08-01T00:00:00.000Z"
+  };
+}
+
 test("account eligibility follows moved accounts and applies the 45-day activity window", async () => {
   const profiles = new Map<string, unknown>([
     ["@old@example.social", { id: "1", uri: "https://example.social/@old", movedTo: "https://new.example/@new" }],
@@ -147,17 +166,11 @@ test("viewer blocks and provider denial prevent follow-pack recommendations", as
 });
 
 test("empty, incomplete, and identity-mismatched policy evidence fail closed", async () => {
-  const pack = normalizeLegacyFollowPackCsv({
-    source: "generic_csv",
-    sourceUrl: "https://packs.example/accounts.csv",
-    name: "Pack",
-    observedAt: NOW,
-    csv: "account,url\n@candidate@social.example,https://social.example/@candidate"
-  });
+  const pack = oneMemberPack();
   const base = {
     pack,
     evaluatedAt: NOW,
-    resolver: { resolve: (reference: string) => ({ id: reference, uri: reference, lastActivityAt: "2026-08-01T00:00:00.000Z" }) }
+    resolver: { resolve: activeResolver }
   };
   await assert.rejects(
     filterEligibleLegacyFollowPackMembers({ ...base, resolveFediverseEligibility: () => ({}) }),
@@ -173,6 +186,80 @@ test("empty, incomplete, and identity-mismatched policy evidence fail closed", a
     }),
     /does not match the resolved account/u
   );
+});
+
+test("every supplied account identity must match the resolved account", async () => {
+  const pack = oneMemberPack();
+  await assert.rejects(
+    filterEligibleLegacyFollowPackMembers({
+      pack,
+      evaluatedAt: NOW,
+      resolver: { resolve: activeResolver },
+      resolveFediverseEligibility: () => ({
+        account: {
+          actorUri: "https://other.social.example/@other",
+          acct: "candidate@social.example",
+          discoverable: true,
+          indexable: true,
+          noindex: false,
+          profileTags: []
+        },
+        policy: { providerAllowsRecommendation: true },
+        viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
+      })
+    }),
+    /does not match the resolved account/u
+  );
+});
+
+test("legacy follow packs cannot disable noindex or opt-out tag enforcement", async () => {
+  const pack = oneMemberPack();
+  for (const policy of [
+    { providerAllowsRecommendation: true, respectNoindex: false },
+    { providerAllowsRecommendation: true, respectOptOutTags: false }
+  ] as const) {
+    await assert.rejects(
+      filterEligibleLegacyFollowPackMembers({
+        pack,
+        evaluatedAt: NOW,
+        resolver: { resolve: activeResolver },
+        resolveFediverseEligibility: (_member, account) => ({
+          account: {
+            actorUri: account.uri,
+            discoverable: true,
+            indexable: true,
+            noindex: false,
+            profileTags: []
+          },
+          policy,
+          viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
+        })
+      }),
+      /cannot disable mandatory opt-out checks/u
+    );
+  }
+});
+
+test("combined Mastodon tag evidence is accepted without a fabricated featuredTags array", async () => {
+  const pack = oneMemberPack();
+  const eligible = await filterEligibleLegacyFollowPackMembers({
+    pack,
+    evaluatedAt: NOW,
+    resolver: { resolve: activeResolver },
+    resolveFediverseEligibility: (_member, account) => ({
+      account: {
+        actorUri: account.uri,
+        acct: account.handle,
+        discoverable: true,
+        indexable: true,
+        noindex: false,
+        profileTags: []
+      },
+      policy: { providerAllowsRecommendation: true },
+      viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
+    })
+  });
+  assert.equal(eligible.length, 1);
 });
 
 test("localhost subdomains are rejected before profile resolution", () => {
