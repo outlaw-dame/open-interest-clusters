@@ -2,8 +2,14 @@ import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   evaluateRecommendationAccountEligibility,
   type RecommendationAccountEligibilityResult,
+  type RecommendationAccountProfile,
   type RecommendationAccountProfileResolver
 } from "./account-recommendation-eligibility.js";
+import {
+  evaluateRecommendationFediverseEligibility,
+  type RecommendationFediverseEligibilityInput,
+  type RecommendationFediverseEligibilityResult
+} from "./protocol-source-contexts.js";
 
 export const RECOMMENDATION_LEGACY_FOLLOW_PACK_SOURCES = [
   "fedidevs",
@@ -32,9 +38,16 @@ export interface RecommendationLegacyFollowPack {
   members: readonly RecommendationLegacyFollowPackMember[];
 }
 
+export type RecommendationLegacyFollowPackPolicyResolver = (
+  member: RecommendationLegacyFollowPackMember,
+  resolvedAccount: RecommendationAccountProfile,
+  signal?: AbortSignal
+) => RecommendationFediverseEligibilityInput | Promise<RecommendationFediverseEligibilityInput>;
+
 export interface RecommendationEligibleFollowPackMember {
   member: RecommendationLegacyFollowPackMember;
   eligibility: RecommendationAccountEligibilityResult;
+  fediverseEligibility: RecommendationFediverseEligibilityResult;
 }
 
 const MAX_MEMBERS = 500;
@@ -55,7 +68,16 @@ function httpsUrl(value: unknown, label: string): string {
   let parsed: URL;
   try { parsed = new URL(text(value, label, 2_048)); } catch { throw new TypeError(`Invalid legacy follow pack ${label}.`); }
   const host = parsed.hostname.toLowerCase().replace(/\.+$/u, "");
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || host === "localhost" || host.endsWith(".local") || /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host) || host.includes(":")) {
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host) ||
+    host.includes(":")
+  ) {
     throw new TypeError(`Invalid legacy follow pack ${label}.`);
   }
   parsed.hostname = host;
@@ -90,7 +112,10 @@ function parseCsvRows(csv: string): readonly Record<string, string>[] {
   row.push(cell);
   if (row.some((entry) => entry.length > 0)) rows.push(row);
   if (rows.length < 2 || rows.length > MAX_MEMBERS + 1) throw new TypeError("Invalid legacy follow pack CSV.");
-  const headers = rows[0]!.map((header) => header.trim().toLocaleLowerCase("und"));
+  const headers = rows[0]!.map((header, index) => {
+    const normalized = index === 0 ? header.replace(/^\uFEFF/u, "") : header;
+    return normalized.trim().toLocaleLowerCase("und");
+  });
   return Object.freeze(rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index]?.trim() ?? ""]))));
 }
 
@@ -131,10 +156,14 @@ export function normalizeLegacyFollowPackCsv(input: {
 export async function filterEligibleLegacyFollowPackMembers(input: {
   pack: RecommendationLegacyFollowPack;
   resolver: RecommendationAccountProfileResolver;
+  resolveFediverseEligibility: RecommendationLegacyFollowPackPolicyResolver;
   evaluatedAt?: string;
   inactivityDays?: number;
   signal?: AbortSignal;
 }): Promise<readonly RecommendationEligibleFollowPackMember[]> {
+  if (typeof input.resolveFediverseEligibility !== "function") {
+    throw new TypeError("Legacy follow pack eligibility requires Fediverse policy evidence.");
+  }
   const output: RecommendationEligibleFollowPackMember[] = [];
   for (const member of input.pack.members) {
     const eligibility = await evaluateRecommendationAccountEligibility({
@@ -144,7 +173,11 @@ export async function filterEligibleLegacyFollowPackMembers(input: {
       ...(input.inactivityDays === undefined ? {} : { inactivityDays: input.inactivityDays }),
       ...(input.signal === undefined ? {} : { signal: input.signal })
     });
-    if (eligibility.eligible) output.push(Object.freeze({ member, eligibility }));
+    if (!eligibility.eligible || eligibility.resolvedAccount === undefined) continue;
+    const policyInput = await input.resolveFediverseEligibility(member, eligibility.resolvedAccount, input.signal);
+    const fediverseEligibility = evaluateRecommendationFediverseEligibility(policyInput);
+    if (!fediverseEligibility.eligible) continue;
+    output.push(Object.freeze({ member, eligibility, fediverseEligibility }));
   }
   return Object.freeze(output);
 }
