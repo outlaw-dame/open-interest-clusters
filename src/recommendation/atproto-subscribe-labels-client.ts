@@ -57,6 +57,7 @@ const MAX_LABELS_PER_FRAME = 1_000;
 const MAX_FRAMES = 10_000;
 const MAX_LABELS = 100_000;
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u;
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -101,6 +102,31 @@ function normalizeCursor(value: unknown, label: string): number {
     throw new TypeError(`Invalid ATProto subscribeLabels ${label}.`);
   }
   return value;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let encoded = "";
+  for (let offset = 0; offset < bytes.length; offset += 3) {
+    const first = bytes[offset] ?? 0;
+    const second = bytes[offset + 1];
+    const third = bytes[offset + 2];
+    const combined = (first << 16) | ((second ?? 0) << 8) | (third ?? 0);
+    encoded += BASE64_ALPHABET[(combined >>> 18) & 63];
+    encoded += BASE64_ALPHABET[(combined >>> 12) & 63];
+    encoded += second === undefined ? "=" : BASE64_ALPHABET[(combined >>> 6) & 63];
+    encoded += third === undefined ? "=" : BASE64_ALPHABET[combined & 63];
+  }
+  return encoded;
+}
+
+function normalizeStreamLabel(raw: Record<string, unknown>): Omit<RecommendationAtprotoLabelInput, "provenance"> {
+  const normalized: Record<string, unknown> = { ...raw };
+  if (raw.sig instanceof Uint8Array) {
+    normalized.sig = encodeBase64(raw.sig);
+  } else if (raw.sig !== undefined && typeof raw.sig !== "string") {
+    throw new TypeError("Invalid ATProto subscribeLabels label signature.");
+  }
+  return normalized as unknown as Omit<RecommendationAtprotoLabelInput, "provenance">;
 }
 
 function isUnsafeHost(hostname: string): boolean {
@@ -185,7 +211,7 @@ function normalizeFrame(
   const labels = value.labels.map((raw) => {
     if (!isPlainRecord(raw)) throw new TypeError("Invalid ATProto subscribeLabels label.");
     const normalized = normalizeRecommendationAtprotoLabel({
-      ...(raw as unknown as Omit<RecommendationAtprotoLabelInput, "provenance">),
+      ...normalizeStreamLabel(raw),
       provenance: "subscribe_labels"
     });
     if (normalized.labelerDid !== expectedLabelerDid) {
