@@ -186,9 +186,14 @@ function parseMastodon(body: unknown, observedAt: string, origin: URL): Recommen
   if (!record(body)) throw new TypeError("Invalid Mastodon collection response.");
   const collection = record(body.collection) ? body.collection : body;
   const accountsProvided = Array.isArray(body.accounts);
-  const accounts = accountsProvided ? body.accounts : [];
-  if (!record(collection) || accounts.length > MAX_MEMBERS || accounts.some((item) => !record(item))) {
+  const accountsRaw: unknown[] = accountsProvided ? body.accounts as unknown[] : [];
+  if (!record(collection) || accountsRaw.length > MAX_MEMBERS) {
     throw new TypeError("Invalid Mastodon collection response.");
+  }
+  const accounts: Record<string, unknown>[] = [];
+  for (const item of accountsRaw) {
+    if (!record(item)) throw new TypeError("Invalid Mastodon collection response.");
+    accounts.push(item);
   }
   if (collection.items !== undefined && !Array.isArray(collection.items)) {
     throw new TypeError("Invalid Mastodon collection response.");
