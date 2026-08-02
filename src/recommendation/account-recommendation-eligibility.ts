@@ -1,4 +1,5 @@
 import { hasUnsafeControlCharacter } from "./control-characters.js";
+import { normalizeRecommendationSourceAdapterReadRequest } from "./source-adapter.js";
 
 export const RECOMMENDATION_ACCOUNT_MAX_INACTIVITY_DAYS = 45;
 const MAX_MOVES = 5;
@@ -48,7 +49,11 @@ function text(value: unknown, label: string): string {
 
 function instant(value: unknown, label: string): string {
   const normalized = text(value, label);
-  if (!Number.isFinite(Date.parse(normalized))) throw new TypeError(`Invalid recommendation account ${label}.`);
+  try {
+    normalizeRecommendationSourceAdapterReadRequest({ subjectId: "account-eligibility-timestamp", since: normalized });
+  } catch {
+    throw new TypeError(`Invalid recommendation account ${label}.`);
+  }
   return normalized;
 }
 
