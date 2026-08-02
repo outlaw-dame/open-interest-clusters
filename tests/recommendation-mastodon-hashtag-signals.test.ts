@@ -13,8 +13,8 @@ function authorization(subjectId: string, authenticated = false) {
     status: "authorized",
     subjectId,
     checkedAt: NOW,
-    sourceVisibility: authenticated ? "private" : "public",
-    accessBasis: authenticated ? "oauth_scope" : "public_endpoint"
+    sourceVisibility: authenticated ? "followers_only" : "public",
+    accessBasis: authenticated ? "oauth_scope" : "public_web"
   } as const;
 }
 
@@ -91,7 +91,7 @@ test("trending tags are weak contextual signals with bounded history", async () 
   assert.equal(evidence[0]?.historyAccounts, 21);
 });
 
-test("invalid authorization enums, oversized responses, and numeric-only tags fail closed", async () => {
+test("invalid authorization enums and numeric-only tags fail closed", async () => {
   let calls = 0;
   const client = createRecommendationMastodonTrendingTagsClient({
     baseUrl: "https://social.example",
