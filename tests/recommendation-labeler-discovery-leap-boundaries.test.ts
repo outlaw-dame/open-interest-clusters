@@ -31,7 +31,7 @@ test("labeler discovery rejects second 60 outside a UTC month-end leap position"
   for (const discoveredAt of [
     "2026-08-02T12:34:60Z",
     "2026-08-31T22:59:60Z",
-    "2026-09-01T00:59:60+01:00",
+    "2026-09-02T00:59:60+01:00",
     "2026-08-31T23:59:60+01:00"
   ]) {
     assert.throws(
