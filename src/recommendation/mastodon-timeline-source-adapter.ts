@@ -7,6 +7,7 @@ import type { RecommendationProtocolSourceReadAuthorization } from "./protocol-s
 import type {
   RecommendationSourceAdapter,
   RecommendationSourceAdapterReadRequest,
+  RecommendationSourceAdapterReadResult,
   RecommendationSourceTrustBoundary
 } from "./source-adapter.js";
 
@@ -48,6 +49,10 @@ export interface RecommendationMastodonTimelineSourceAdapterInput {
   authorize: RecommendationMastodonTimelineAuthorizer;
   adapter?: Omit<RecommendationMastodonProviderStatusSourceAdapterInput, "read" | "maxRecordsPerRead">;
 }
+
+export type RecommendationMastodonTimelineSourceAdapter = Omit<RecommendationSourceAdapter, "read"> & {
+  read(request: RecommendationSourceAdapterReadRequest): Promise<RecommendationSourceAdapterReadResult>;
+};
 
 const MAX_BASE_URL_LENGTH = 2_048;
 const MAX_CURSOR_LENGTH = 2_048;
@@ -259,7 +264,7 @@ function statusTrustBoundary(status: Record<string, unknown>, baseUrl: URL): Rec
 
 export function createRecommendationMastodonTimelineSourceAdapter(
   input: RecommendationMastodonTimelineSourceAdapterInput
-): RecommendationSourceAdapter {
+): RecommendationMastodonTimelineSourceAdapter {
   if (!isPlainRecord(input) || !isPlainRecord(input.transport) || typeof input.transport.get !== "function" || typeof input.authorize !== "function") {
     throw new TypeError("Invalid Mastodon timeline source adapter input.");
   }
@@ -308,7 +313,9 @@ export function createRecommendationMastodonTimelineSourceAdapter(
         trustBoundary: statusTrustBoundary(rawStatus, baseUrl),
         containsThirdPartyData: true,
         serverSideProcessing: true,
-        providerPolicyAllowsProcessing: authorization.providerPolicyAllowsProcessing
+        ...(authorization.providerPolicyAllowsProcessing === undefined
+          ? {}
+          : { providerPolicyAllowsProcessing: authorization.providerPolicyAllowsProcessing })
       }));
       const result: {
         records: typeof records;
@@ -318,5 +325,5 @@ export function createRecommendationMastodonTimelineSourceAdapter(
       if (response.nextUrl !== undefined) result.cursor = validateCursorUrl(response.nextUrl, baseUrl, path, requestedLimit);
       return result;
     }
-  });
+  }) as RecommendationMastodonTimelineSourceAdapter;
 }
