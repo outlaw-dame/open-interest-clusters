@@ -15,7 +15,8 @@ function allowFediverseAccount(profileUrl: string) {
       discoverable: true,
       indexable: true,
       noindex: false,
-      profileTags: []
+      profileTags: [],
+      featuredTags: []
     },
     policy: { providerAllowsRecommendation: true },
     viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
@@ -55,8 +56,8 @@ test("inactive, deactivated, suspended, deleted, and unresolved accounts fail cl
   }
 });
 
-test("strict RFC3339 timestamps reject normalized calendar dates and timezone-less values", async () => {
-  for (const invalid of ["2026-02-30T00:00:00Z", "2026-08-01T00:00:00"]) {
+test("strict RFC3339 timestamps reject normalized calendar dates, timezone-less values, and leap seconds", async () => {
+  for (const invalid of ["2026-02-30T00:00:00Z", "2026-08-01T00:00:00", "2016-12-31T23:59:60Z"]) {
     await assert.rejects(
       evaluateRecommendationAccountEligibility({
         reference: "https://social.example/@candidate",
@@ -66,6 +67,14 @@ test("strict RFC3339 timestamps reject normalized calendar dates and timezone-le
       /last activity timestamp/u
     );
   }
+  await assert.rejects(
+    evaluateRecommendationAccountEligibility({
+      reference: "https://social.example/@candidate",
+      evaluatedAt: "2016-12-31T23:59:60Z",
+      resolver: { resolve: () => ({ id: "1", uri: "https://social.example/@candidate", lastActivityAt: "2016-12-31T23:59:59Z" }) }
+    }),
+    /evaluation timestamp/u
+  );
 });
 
 test("legacy CSV packs preserve source metadata and only emit active policy-eligible accounts", async () => {
@@ -100,8 +109,12 @@ test("legacy CSV packs preserve source metadata and only emit active policy-elig
               actorUri: account.uri,
               discoverable: true,
               indexable: true,
-              profileTags: ["NoAI"]
-            }
+              noindex: false,
+              profileTags: ["NoAI"],
+              featuredTags: []
+            },
+            policy: { providerAllowsRecommendation: true },
+            viewerControls: { blockedAccounts: [], mutedAccounts: [], blockedDomains: [] }
           }
         : allowFediverseAccount(account.uri);
     }
@@ -124,18 +137,42 @@ test("viewer blocks and provider denial prevent follow-pack recommendations", as
     evaluatedAt: NOW,
     resolver: { resolve: (reference) => ({ id: reference, uri: reference, lastActivityAt: "2026-08-01T00:00:00.000Z" }) },
     resolveFediverseEligibility(member, account) {
+      const evidence = allowFediverseAccount(account.uri);
       return member.reference.includes("blocked")
-        ? {
-            account: { actorUri: account.uri, discoverable: true },
-            viewerControls: { blockedAccounts: [account.uri] }
-          }
-        : {
-            account: { actorUri: account.uri, discoverable: true },
-            policy: { providerAllowsRecommendation: false }
-          };
+        ? { ...evidence, viewerControls: { blockedAccounts: [account.uri], mutedAccounts: [], blockedDomains: [] } }
+        : { ...evidence, policy: { providerAllowsRecommendation: false } };
     }
   });
   assert.deepEqual(eligible, []);
+});
+
+test("empty, incomplete, and identity-mismatched policy evidence fail closed", async () => {
+  const pack = normalizeLegacyFollowPackCsv({
+    source: "generic_csv",
+    sourceUrl: "https://packs.example/accounts.csv",
+    name: "Pack",
+    observedAt: NOW,
+    csv: "account,url\n@candidate@social.example,https://social.example/@candidate"
+  });
+  const base = {
+    pack,
+    evaluatedAt: NOW,
+    resolver: { resolve: (reference: string) => ({ id: reference, uri: reference, lastActivityAt: "2026-08-01T00:00:00.000Z" }) }
+  };
+  await assert.rejects(
+    filterEligibleLegacyFollowPackMembers({ ...base, resolveFediverseEligibility: () => ({}) }),
+    /complete Fediverse policy evidence/u
+  );
+  await assert.rejects(
+    filterEligibleLegacyFollowPackMembers({
+      ...base,
+      resolveFediverseEligibility: (_member, account) => ({
+        ...allowFediverseAccount(account.uri),
+        account: { ...allowFediverseAccount(account.uri).account, actorUri: "https://other.example/@other" }
+      })
+    }),
+    /does not match the resolved account/u
+  );
 });
 
 test("localhost subdomains are rejected before profile resolution", () => {
