@@ -9,6 +9,7 @@ import type { RecommendationDiscoveredLabeler } from "../src/recommendation/labe
 
 const DID = "did:plc:querylabelsservice";
 const SUBJECT = "subject-1";
+const URI_PATTERNS = ["at://did:plc:author/*"] as const;
 
 const labeler: RecommendationDiscoveredLabeler = {
   discoveryKey: "hashed-discovery-key",
@@ -64,7 +65,8 @@ test("queryLabels requires an explicit matching active subscription", async () =
     client.queryPage({
       subjectId: SUBJECT,
       labeler,
-      subscription: { ...subscription, labelerDid: "did:plc:other" }
+      subscription: { ...subscription, labelerDid: "did:plc:other" },
+      uriPatterns: URI_PATTERNS
     }),
     /matching explicit subscription/u
   );
@@ -72,10 +74,21 @@ test("queryLabels requires an explicit matching active subscription", async () =
     client.queryPage({
       subjectId: SUBJECT,
       labeler,
-      subscription: { ...subscription, revokedAt: "2026-08-01T20:03:00Z" }
+      subscription: { ...subscription, revokedAt: "2026-08-01T20:03:00Z" },
+      uriPatterns: URI_PATTERNS
     }),
     /revoked/u
   );
+});
+
+test("queryLabels requires at least one URI pattern", async () => {
+  const { transport, urls } = transportWith([{ labels: [] }]);
+  const client = createRecommendationAtprotoQueryLabelsClient(transport);
+  await assert.rejects(
+    client.queryPage({ subjectId: SUBJECT, labeler, subscription, uriPatterns: [] }),
+    /URI patterns/u
+  );
+  assert.equal(urls.length, 0);
 });
 
 test("queryLabels constructs the XRPC request and normalizes returned labels", async () => {
@@ -104,7 +117,7 @@ test("queryLabels rejects labels issued by an unexpected source", async () => {
   const { transport } = transportWith([{ labels: [rawLabel({ src: "did:plc:other" })] }]);
   const client = createRecommendationAtprotoQueryLabelsClient(transport);
   await assert.rejects(
-    client.queryPage({ subjectId: SUBJECT, labeler, subscription }),
+    client.queryPage({ subjectId: SUBJECT, labeler, subscription, uriPatterns: URI_PATTERNS }),
     /unexpected labeler DID/u
   );
 });
@@ -119,6 +132,7 @@ test("queryAll follows bounded pagination and reports truncation", async () => {
     subjectId: SUBJECT,
     labeler,
     subscription,
+    uriPatterns: URI_PATTERNS,
     maxPages: 2,
     maxLabels: 10
   });
@@ -130,6 +144,24 @@ test("queryAll follows bounded pagination and reports truncation", async () => {
   assert.equal(new URL(urls[1] ?? "").searchParams.get("cursor"), "c1");
 });
 
+test("queryAll caps each request to the remaining label budget", async () => {
+  const { transport, urls } = transportWith([{ labels: Array.from({ length: 10 }, (_, index) => rawLabel({ val: `topic-${index}` })), cursor: "after-ten" }]);
+  const client = createRecommendationAtprotoQueryLabelsClient(transport);
+  const result = await client.queryAll({
+    subjectId: SUBJECT,
+    labeler,
+    subscription,
+    uriPatterns: URI_PATTERNS,
+    limit: 100,
+    maxLabels: 10
+  });
+
+  assert.equal(new URL(urls[0] ?? "").searchParams.get("limit"), "10");
+  assert.equal(result.labels.length, 10);
+  assert.equal(result.nextCursor, "after-ten");
+  assert.equal(result.truncated, true);
+});
+
 test("queryAll rejects repeated cursors to avoid an infinite loop", async () => {
   const { transport } = transportWith([
     { labels: [rawLabel()], cursor: "same" },
@@ -137,20 +169,30 @@ test("queryAll rejects repeated cursors to avoid an infinite loop", async () => 
   ]);
   const client = createRecommendationAtprotoQueryLabelsClient(transport);
   await assert.rejects(
-    client.queryAll({ subjectId: SUBJECT, labeler, subscription }),
+    client.queryAll({ subjectId: SUBJECT, labeler, subscription, uriPatterns: URI_PATTERNS }),
     /cursor repeated/u
   );
 });
 
 test("queryLabels rejects unsafe or unverified service endpoints", async () => {
-  const { transport } = transportWith([{ labels: [] }]);
-  const client = createRecommendationAtprotoQueryLabelsClient(transport);
-  await assert.rejects(
-    client.queryPage({
-      subjectId: SUBJECT,
-      labeler: { ...labeler, serviceEndpoint: "https://labels.example.com/path" },
-      subscription
-    }),
-    /service endpoint/u
-  );
+  for (const serviceEndpoint of [
+    "https://labels.example.com/path",
+    "https://localhost/",
+    "https://127.0.0.1/",
+    "https://[::1]/",
+    "https://labeler.local/"
+  ]) {
+    const { transport, urls } = transportWith([{ labels: [] }]);
+    const client = createRecommendationAtprotoQueryLabelsClient(transport);
+    await assert.rejects(
+      client.queryPage({
+        subjectId: SUBJECT,
+        labeler: { ...labeler, serviceEndpoint },
+        subscription,
+        uriPatterns: URI_PATTERNS
+      }),
+      /service endpoint/u
+    );
+    assert.equal(urls.length, 0);
+  }
 });
