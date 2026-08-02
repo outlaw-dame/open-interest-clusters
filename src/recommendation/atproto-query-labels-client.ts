@@ -118,7 +118,7 @@ function positiveInteger(value: unknown, fallback: number, maximum: number, labe
 }
 
 function isUnsafeHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/\.+$/u, "");
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host)) return true;
   if (host.includes(":")) return true;
@@ -188,8 +188,17 @@ function buildUrl(input: RecommendationAtprotoQueryLabelsInput, endpoint: string
   return url.toString();
 }
 
-function parsePage(body: unknown, expectedLabelerDid: string): RecommendationAtprotoQueryLabelsPage {
-  if (!isPlainRecord(body) || !Array.isArray(body.labels) || body.labels.length > MAX_PAGE_LIMIT) {
+function parsePage(
+  body: unknown,
+  expectedLabelerDid: string,
+  requestedLimit: number
+): RecommendationAtprotoQueryLabelsPage {
+  if (
+    !isPlainRecord(body) ||
+    !Array.isArray(body.labels) ||
+    body.labels.length > requestedLimit ||
+    body.labels.length > MAX_PAGE_LIMIT
+  ) {
     throw new TypeError("Invalid ATProto queryLabels response.");
   }
   const labels = body.labels.map((raw) => {
@@ -219,6 +228,7 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
 
   async function queryPage(input: RecommendationAtprotoQueryLabelsInput): Promise<RecommendationAtprotoQueryLabelsPage> {
     const boundary = validateTrustBoundary(input);
+    const requestedLimit = positiveInteger(input.limit, 100, MAX_PAGE_LIMIT, "limit");
     const request: RecommendationAtprotoQueryLabelsTransportRequest = {
       url: buildUrl(input, boundary.endpoint)
     };
@@ -227,7 +237,7 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
     if (!isPlainRecord(response) || response.status !== 200) {
       throw new Error("ATProto queryLabels request failed.");
     }
-    return parsePage(response.body, boundary.labelerDid);
+    return parsePage(response.body, boundary.labelerDid, requestedLimit);
   }
 
   async function queryAll(input: RecommendationAtprotoQueryLabelsAllInput): Promise<RecommendationAtprotoQueryLabelsResult> {
