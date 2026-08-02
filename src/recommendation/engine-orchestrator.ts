@@ -121,12 +121,13 @@ function validateDeletionIntent(value: unknown): RecommendationDerivedDataDeleti
   ) {
     throw new TypeError("Recommendation engine deletion supports exactly profile and event history.");
   }
-  return Object.freeze({
+  const intent: RecommendationDerivedDataDeletionIntent = {
     subjectId: id,
     requestedAt,
     scope: "recommendation_derived_data",
-    targets: Object.freeze(["profile", "event_history"])
-  });
+    targets: Object.freeze(["profile", "event_history"] as const)
+  };
+  return Object.freeze(intent);
 }
 
 function cloneEvent(event: RecommendationSignalLedgerEventInput): RecommendationSignalLedgerEventInput {
@@ -146,10 +147,10 @@ function freezeState(state: RecommendationEnginePersistedSubjectState): Recommen
 function createInMemoryStateStore(): RecommendationEngineSubjectStateStore {
   const states = new Map<string, RecommendationEnginePersistedSubjectState>();
   return Object.freeze({
-    async load(id) {
+    async load(id: string): Promise<RecommendationEnginePersistedSubjectState | undefined> {
       return states.get(id);
     },
-    async save(id, state) {
+    async save(id: string, state: RecommendationEnginePersistedSubjectState): Promise<void> {
       states.set(id, freezeState(state));
     }
   });
