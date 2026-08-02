@@ -249,7 +249,7 @@ test("combined Mastodon tag evidence is accepted without a fabricated featuredTa
     resolveFediverseEligibility: (_member, account) => ({
       account: {
         actorUri: account.uri,
-        acct: account.handle,
+        ...(account.handle === undefined ? {} : { acct: account.handle }),
         discoverable: true,
         indexable: true,
         noindex: false,
