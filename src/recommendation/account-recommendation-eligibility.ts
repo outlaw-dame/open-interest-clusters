@@ -54,6 +54,12 @@ function instant(value: unknown, label: string): string {
   } catch {
     throw new TypeError(`Invalid recommendation account ${label}.`);
   }
+  // The shared source-adapter contract accepts RFC3339 leap seconds, but
+  // ECMAScript Date arithmetic does not. Eligibility must reject timestamps
+  // that cannot be represented by the arithmetic used for the inactivity gate.
+  if (!Number.isFinite(Date.parse(normalized))) {
+    throw new TypeError(`Invalid recommendation account ${label}.`);
+  }
   return normalized;
 }
 
@@ -130,7 +136,7 @@ export async function evaluateRecommendationAccountEligibility(input: {
     if (profile.suspended === true) return result(requestedReference, evaluatedAt, inactivityDays, "suspended", moveChain, profile);
     if (profile.lastActivityAt === undefined) return result(requestedReference, evaluatedAt, inactivityDays, "unresolved", moveChain, profile);
     const age = Date.parse(evaluatedAt) - Date.parse(profile.lastActivityAt);
-    if (age < 0) return result(requestedReference, evaluatedAt, inactivityDays, "unresolved", moveChain, profile);
+    if (!Number.isFinite(age) || age < 0) return result(requestedReference, evaluatedAt, inactivityDays, "unresolved", moveChain, profile);
     const maximumAge = inactivityDays * 86_400_000;
     return result(requestedReference, evaluatedAt, inactivityDays, age <= maximumAge ? "eligible" : "inactive", moveChain, profile);
   }
