@@ -63,6 +63,17 @@ export interface RecommendationLabelerDiscoveryRegistry {
   clear(): void;
 }
 
+interface ParsedRfc3339Timestamp {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  fractionalSeconds?: string;
+  zone: string;
+}
+
 const SOURCE_SET = new Set<string>(RECOMMENDATION_LABELER_DISCOVERY_SOURCES);
 const MAX_DID_LENGTH = 256;
 const MAX_ENDPOINT_LENGTH = 2_048;
@@ -72,7 +83,7 @@ const MAX_POLICY_VALUES = 1_000;
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/u;
 const POLICY_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:#/-]*$/u;
 const RFC3339_TIMESTAMP_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/u;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -104,7 +115,20 @@ function daysInMonth(year: number, month: number): number {
   return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
-function normalizeTimestamp(value: unknown): string {
+function fractionalMillis(fractionalSeconds: string | undefined): number {
+  if (fractionalSeconds === undefined) return 0;
+  return Number.parseInt(fractionalSeconds.slice(0, 3).padEnd(3, "0"), 10);
+}
+
+function timezoneOffsetMillis(zone: string): number {
+  if (zone === "Z") return 0;
+  const sign = zone[0] === "+" ? 1 : -1;
+  const offsetHour = Number.parseInt(zone.slice(1, 3), 10);
+  const offsetMinute = Number.parseInt(zone.slice(4, 6), 10);
+  return sign * ((offsetHour * 60 + offsetMinute) * 60_000);
+}
+
+function parseTimestamp(value: unknown): { normalized: string; parsed: ParsedRfc3339Timestamp } {
   const normalized = boundedString(
     value,
     MAX_TIMESTAMP_LENGTH,
@@ -121,7 +145,8 @@ function normalizeTimestamp(value: unknown): string {
   const hour = Number.parseInt(match[4] ?? "", 10);
   const minute = Number.parseInt(match[5] ?? "", 10);
   const second = Number.parseInt(match[6] ?? "", 10);
-  const zone = match[7] ?? "";
+  const fractionalSeconds = match[7];
+  const zone = match[8] ?? "";
 
   if (
     !Number.isInteger(year) ||
@@ -136,7 +161,7 @@ function normalizeTimestamp(value: unknown): string {
     minute < 0 ||
     minute > 59 ||
     second < 0 ||
-    second > 59
+    second > 60
   ) {
     throw new TypeError("Invalid recommendation labeler discovery timestamp.");
   }
@@ -149,9 +174,35 @@ function normalizeTimestamp(value: unknown): string {
     }
   }
 
-  if (!Number.isFinite(Date.parse(normalized))) {
+  const parsed: ParsedRfc3339Timestamp = { year, month, day, hour, minute, second, zone };
+  if (fractionalSeconds !== undefined) parsed.fractionalSeconds = fractionalSeconds;
+  return { normalized, parsed };
+}
+
+function utcMillisFromParsedTimestamp(parsed: ParsedRfc3339Timestamp): number {
+  const second = Math.min(parsed.second, 59);
+  const millis = fractionalMillis(parsed.fractionalSeconds);
+  if (parsed.year >= 0 && parsed.year < 100) {
+    const date = new Date(0);
+    date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+    date.setUTCHours(parsed.hour, parsed.minute, second, millis);
+    return date.getTime();
+  }
+  return Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, second, millis);
+}
+
+function timestampMillis(value: unknown): number {
+  const { parsed } = parseTimestamp(value);
+  const utcMillis = utcMillisFromParsedTimestamp(parsed);
+  if (!Number.isFinite(utcMillis)) {
     throw new TypeError("Invalid recommendation labeler discovery timestamp.");
   }
+  return utcMillis + (parsed.second === 60 ? 1_000 : 0) - timezoneOffsetMillis(parsed.zone);
+}
+
+function normalizeTimestamp(value: unknown): string {
+  const { normalized } = parseTimestamp(value);
+  timestampMillis(normalized);
   return normalized;
 }
 
@@ -306,8 +357,8 @@ export function createInMemoryRecommendationLabelerDiscoveryRegistry(): Recommen
       const incoming = normalizeRecommendationLabelerDiscoveryObservation(input);
       const existing = candidates.get(incoming.labelerDid);
       if (existing !== undefined) {
-        const existingTime = Date.parse(existing.discoveredAt);
-        const incomingTime = Date.parse(incoming.discoveredAt);
+        const existingTime = timestampMillis(existing.discoveredAt);
+        const incomingTime = timestampMillis(incoming.discoveredAt);
         const replace = incomingTime > existingTime || (
           incomingTime === existingTime &&
           candidatePrecedenceKey(incoming).localeCompare(candidatePrecedenceKey(existing)) > 0
