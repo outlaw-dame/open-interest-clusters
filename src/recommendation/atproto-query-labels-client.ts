@@ -91,7 +91,6 @@ function normalizeDid(value: unknown, label: string): string {
 function normalizeStringList(
   value: readonly string[] | undefined,
   maximum: number,
-  itemMaximum: number,
   label: string,
   normalizer: (item: unknown) => string
 ): readonly string[] {
@@ -111,7 +110,6 @@ function positiveInteger(value: unknown, fallback: number, maximum: number, labe
 }
 
 function validateTrustBoundary(input: RecommendationAtprotoQueryLabelsInput): {
-  subjectId: string;
   labelerDid: string;
   endpoint: string;
 } {
@@ -133,21 +131,19 @@ function validateTrustBoundary(input: RecommendationAtprotoQueryLabelsInput): {
   if (subscription.revokedAt !== undefined) {
     throw new TypeError("ATProto queryLabels subscription has been revoked.");
   }
-  return { subjectId, labelerDid, endpoint };
+  return { labelerDid, endpoint };
 }
 
 function buildUrl(input: RecommendationAtprotoQueryLabelsInput, endpoint: string): string {
   const uriPatterns = normalizeStringList(
     input.uriPatterns,
     MAX_URI_PATTERNS,
-    MAX_URI_PATTERN_LENGTH,
     "URI patterns",
     (item) => boundedString(item, MAX_URI_PATTERN_LENGTH, "URI pattern")
   );
   const sources = normalizeStringList(
     input.sources,
     MAX_SOURCES,
-    256,
     "sources",
     (item) => normalizeDid(item, "source DID")
   );
@@ -192,7 +188,11 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
 
   async function queryPage(input: RecommendationAtprotoQueryLabelsInput): Promise<RecommendationAtprotoQueryLabelsPage> {
     const boundary = validateTrustBoundary(input);
-    const response = await transport.request({ url: buildUrl(input, boundary.endpoint), signal: input.signal });
+    const request: RecommendationAtprotoQueryLabelsTransportRequest = {
+      url: buildUrl(input, boundary.endpoint)
+    };
+    if (input.signal !== undefined) request.signal = input.signal;
+    const response = await transport.request(request);
     if (!isPlainRecord(response) || response.status !== 200) {
       throw new Error("ATProto queryLabels request failed.");
     }
@@ -209,7 +209,17 @@ export function createRecommendationAtprotoQueryLabelsClient(transport: Recommen
     let truncated = false;
 
     while (pages < maxPages && labels.length < maxLabels) {
-      const page = await queryPage({ ...input, cursor });
+      const pageInput: RecommendationAtprotoQueryLabelsInput = {
+        subjectId: input.subjectId,
+        labeler: input.labeler,
+        subscription: input.subscription
+      };
+      if (input.uriPatterns !== undefined) pageInput.uriPatterns = input.uriPatterns;
+      if (input.sources !== undefined) pageInput.sources = input.sources;
+      if (input.limit !== undefined) pageInput.limit = input.limit;
+      if (input.signal !== undefined) pageInput.signal = input.signal;
+      if (cursor !== undefined) pageInput.cursor = cursor;
+      const page = await queryPage(pageInput);
       pages += 1;
       const remaining = maxLabels - labels.length;
       labels.push(...page.labels.slice(0, remaining));
