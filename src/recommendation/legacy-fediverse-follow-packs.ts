@@ -128,7 +128,12 @@ function requireStringArray(value: unknown): value is readonly string[] {
 }
 
 function normalizeIdentity(value: string): string {
-  return value.trim().replace(/^@/u, "").toLocaleLowerCase("und");
+  const trimmed = value.trim().replace(/^@/u, "");
+  const atIndex = trimmed.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return trimmed.normalize("NFKC").toLocaleLowerCase("und");
+  const username = trimmed.slice(0, atIndex).normalize("NFKC").toLocaleLowerCase("und");
+  const domain = new URL(`https://${trimmed.slice(atIndex + 1)}`).hostname.toLocaleLowerCase("en-US");
+  return `${username}@${domain}`;
 }
 
 function requireIdentityBoundPolicyEvidence(
