@@ -14,7 +14,8 @@ function authorization(subjectId: string, authenticated = false) {
     subjectId,
     checkedAt: NOW,
     sourceVisibility: authenticated ? "followers_only" : "public",
-    accessBasis: authenticated ? "oauth_scope" : "public_web"
+    accessBasis: authenticated ? "oauth_scope" : "public_web",
+    ...(authenticated ? { containsPrivateData: true } : {})
   } as const;
 }
 
@@ -48,7 +49,7 @@ test("account featured hashtags are strong public curator signals", async () => 
   assert.match(String((requests[0] as { url: string }).url), /accounts\/42\/featured_tags/u);
 });
 
-test("followed hashtags require authenticated authorization before transport", async () => {
+test("followed hashtags require explicit private-data authorization before transport", async () => {
   let calls = 0;
   const client = createRecommendationMastodonFollowedTagsClient({
     baseUrl: "https://social.example",
@@ -56,18 +57,22 @@ test("followed hashtags require authenticated authorization before transport", a
   });
   await assert.rejects(
     client.read({ subjectId: "viewer", authorization: authorization("viewer") }),
-    /authenticated authorization/u
+    /private-data authorization/u
+  );
+  await assert.rejects(
+    client.read({
+      subjectId: "viewer",
+      authorization: { ...authorization("viewer", true), containsPrivateData: false }
+    }),
+    /private-data authorization/u
   );
   assert.equal(calls, 0);
-  const evidence = await client.read({
-    subjectId: "viewer",
-    authorization: authorization("viewer", true)
-  });
+  const evidence = await client.read({ subjectId: "viewer", authorization: authorization("viewer", true) });
   assert.deepEqual(evidence, []);
   assert.equal(calls, 1);
 });
 
-test("trending tags are weak contextual signals with bounded history", async () => {
+test("trending tags are weak contextual signals with bounded valid history", async () => {
   const client = createRecommendationMastodonTrendingTagsClient({
     baseUrl: "https://social.example",
     transport: {
@@ -89,6 +94,34 @@ test("trending tags are weak contextual signals with bounded history", async () 
   assert.equal(evidence[0]?.confidence, 0.35);
   assert.equal(evidence[0]?.historyUses, 35);
   assert.equal(evidence[0]?.historyAccounts, 21);
+});
+
+test("configured limits and invalid history buckets fail closed", async () => {
+  const oversized = createRecommendationMastodonTrendingTagsClient({
+    baseUrl: "https://social.example",
+    limit: 1,
+    transport: { get: () => ({ observedAt: NOW, body: [{ name: "one" }, { name: "two" }] }) }
+  });
+  await assert.rejects(
+    oversized.read({ subjectId: "viewer", authorization: authorization("viewer") }),
+    /response/u
+  );
+
+  for (const history of [
+    [{ uses: "1", accounts: "1" }],
+    [{ day: "1785628800", uses: "1", accounts: "1" }, { day: "1785628800", uses: "1", accounts: "1" }],
+    [{ day: "1785715200", uses: "1", accounts: "1" }],
+    [{ day: "1785628801", uses: "1", accounts: "1" }]
+  ]) {
+    const client = createRecommendationMastodonTrendingTagsClient({
+      baseUrl: "https://social.example",
+      transport: { get: () => ({ observedAt: NOW, body: [{ name: "fediverse", history }] }) }
+    });
+    await assert.rejects(
+      client.read({ subjectId: "viewer", authorization: authorization("viewer") }),
+      /history/u
+    );
+  }
 });
 
 test("invalid authorization enums and numeric-only tags fail closed", async () => {
