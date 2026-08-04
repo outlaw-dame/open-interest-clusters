@@ -7,8 +7,8 @@ import {
   parseRecommendationMastodonDomainBlockCsv
 } from "../src/index.js";
 
-const listUrl = new URL("../data/moderation/garden-fence-domain-blocks.csv", import.meta.url);
-const packageUrl = new URL("../package.json", import.meta.url);
+const listUrl = new URL("../../data/moderation/garden-fence-domain-blocks.csv", import.meta.url);
+const packageUrl = new URL("../../package.json", import.meta.url);
 
 test("Garden Fence severe block list excludes explicitly allowed bridges", async () => {
   const csv = await readFile(listUrl, "utf8");
