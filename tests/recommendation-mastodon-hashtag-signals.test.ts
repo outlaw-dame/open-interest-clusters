@@ -2,20 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createRecommendationMastodonAccountFeaturedTagsClient,
-  createRecommendationMastodonFollowedTagsClient,
   createRecommendationMastodonTrendingTagsClient
 } from "../src/index.js";
 
 const NOW = "2026-08-02T12:00:00.000Z";
 
-function authorization(subjectId: string, authenticated = false) {
+function publicAuthorization(subjectId: string) {
   return {
     status: "authorized",
     subjectId,
     checkedAt: NOW,
-    sourceVisibility: authenticated ? "followers_only" : "public",
-    accessBasis: authenticated ? "oauth_scope" : "public_web",
-    ...(authenticated ? { containsPrivateData: true } : {})
+    sourceVisibility: "public",
+    accessBasis: "public_web"
   } as const;
 }
 
@@ -40,36 +38,40 @@ test("account featured hashtags are strong public curator signals", async () => 
       }
     }
   });
-  const evidence = await client.read({ subjectId: "viewer", authorization: authorization("viewer") });
+  const evidence = await client.read({ subjectId: "viewer", authorization: publicAuthorization("viewer") });
   assert.equal(evidence[0]?.kind, "account_featured");
   assert.equal(evidence[0]?.tag, "opensource");
   assert.equal(evidence[0]?.confidence, 0.95);
-  assert.equal(evidence[0]?.viewerSpecific, false);
   assert.equal(evidence[0]?.statusesCount, 23);
   assert.match(String((requests[0] as { url: string }).url), /accounts\/42\/featured_tags/u);
+  assert.equal((requests[0] as { requiresAuthentication: boolean }).requiresAuthentication, false);
 });
 
-test("followed hashtags require explicit private-data authorization before transport", async () => {
+test("private or non-public authorization is rejected before transport", async () => {
   let calls = 0;
-  const client = createRecommendationMastodonFollowedTagsClient({
+  const client = createRecommendationMastodonTrendingTagsClient({
     baseUrl: "https://social.example",
     transport: { get: () => { calls += 1; return { observedAt: NOW, body: [] }; } }
   });
-  await assert.rejects(
-    client.read({ subjectId: "viewer", authorization: authorization("viewer") }),
-    /private-data authorization/u
-  );
-  await assert.rejects(
-    client.read({
-      subjectId: "viewer",
-      authorization: { ...authorization("viewer", true), containsPrivateData: false }
-    }),
-    /private-data authorization/u
-  );
+
+  for (const authorization of [
+    {
+      ...publicAuthorization("viewer"),
+      sourceVisibility: "followers_only" as const,
+      accessBasis: "oauth_scope" as const,
+      containsPrivateData: true
+    },
+    {
+      ...publicAuthorization("viewer"),
+      containsPrivateData: true
+    }
+  ]) {
+    await assert.rejects(
+      client.read({ subjectId: "viewer", authorization }),
+      /explicitly public source data/u
+    );
+  }
   assert.equal(calls, 0);
-  const evidence = await client.read({ subjectId: "viewer", authorization: authorization("viewer", true) });
-  assert.deepEqual(evidence, []);
-  assert.equal(calls, 1);
 });
 
 test("trending tags are weak contextual signals with bounded valid history", async () => {
@@ -89,7 +91,7 @@ test("trending tags are weak contextual signals with bounded valid history", asy
       })
     }
   });
-  const evidence = await client.read({ subjectId: "viewer", authorization: authorization("viewer") });
+  const evidence = await client.read({ subjectId: "viewer", authorization: publicAuthorization("viewer") });
   assert.equal(evidence[0]?.kind, "instance_trending");
   assert.equal(evidence[0]?.confidence, 0.35);
   assert.equal(evidence[0]?.historyUses, 35);
@@ -103,7 +105,7 @@ test("configured limits and invalid history buckets fail closed", async () => {
     transport: { get: () => ({ observedAt: NOW, body: [{ name: "one" }, { name: "two" }] }) }
   });
   await assert.rejects(
-    oversized.read({ subjectId: "viewer", authorization: authorization("viewer") }),
+    oversized.read({ subjectId: "viewer", authorization: publicAuthorization("viewer") }),
     /response/u
   );
 
@@ -118,7 +120,7 @@ test("configured limits and invalid history buckets fail closed", async () => {
       transport: { get: () => ({ observedAt: NOW, body: [{ name: "fediverse", history }] }) }
     });
     await assert.rejects(
-      client.read({ subjectId: "viewer", authorization: authorization("viewer") }),
+      client.read({ subjectId: "viewer", authorization: publicAuthorization("viewer") }),
       /history/u
     );
   }
@@ -133,13 +135,13 @@ test("invalid authorization enums and numeric-only tags fail closed", async () =
   await assert.rejects(
     client.read({
       subjectId: "viewer",
-      authorization: { ...authorization("viewer"), sourceVisibility: "invented" as never }
+      authorization: { ...publicAuthorization("viewer"), sourceVisibility: "invented" as never }
     }),
     /authorization/u
   );
   assert.equal(calls, 0);
   await assert.rejects(
-    client.read({ subjectId: "viewer", authorization: authorization("viewer") }),
+    client.read({ subjectId: "viewer", authorization: publicAuthorization("viewer") }),
     /hashtag name/u
   );
 });
