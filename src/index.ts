@@ -33,6 +33,7 @@ export * from "./recommendation/activitypub-curated-account-sets.js";
 export * from "./recommendation/account-recommendation-eligibility.js";
 export * from "./recommendation/legacy-fediverse-follow-packs.js";
 export * from "./recommendation/mastodon-hashtag-signals.js";
+export * from "./recommendation/mastodon-viewer-safety.js";
 export * from "./recommendation/account-topic-source-adapters.js";
 export * from "./recommendation/profile-pinned-interest-signals.js";
 export * from "./recommendation/atproto-labels.js";
