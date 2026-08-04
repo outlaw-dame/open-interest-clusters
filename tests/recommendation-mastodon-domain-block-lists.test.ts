@@ -8,6 +8,7 @@ import {
 } from "../src/index.js";
 
 const listUrl = new URL("../data/moderation/garden-fence-domain-blocks.csv", import.meta.url);
+const packageUrl = new URL("../package.json", import.meta.url);
 
 test("Garden Fence severe block list excludes explicitly allowed bridges", async () => {
   const csv = await readFile(listUrl, "utf8");
@@ -20,6 +21,21 @@ test("Garden Fence severe block list excludes explicitly allowed bridges", async
   assert.equal(domains.has("bird.makeup"), false);
   assert.equal(rules.every((rule) => rule.severity === "suspend"), true);
   assert.equal(RECOMMENDATION_GARDEN_FENCE_DOMAIN_BLOCK_LIST.defaultEnabled, false);
+});
+
+test("Garden Fence policy data is included and addressable in the published package", async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, "utf8")) as {
+    files?: unknown;
+    exports?: Record<string, unknown>;
+  };
+  assert.equal(Array.isArray(packageJson.files), true);
+  assert.equal((packageJson.files as unknown[]).includes("data"), true);
+  assert.equal(
+    packageJson.exports?.["./data/moderation/garden-fence-domain-blocks.csv"],
+    "./data/moderation/garden-fence-domain-blocks.csv"
+  );
+  assert.equal(RECOMMENDATION_GARDEN_FENCE_DOMAIN_BLOCK_LIST.sourcePath, "data/moderation/garden-fence-domain-blocks.csv");
+  assert.match(await readFile(listUrl, "utf8"), /^#domain,#severity,/u);
 });
 
 test("Garden Fence blocks exact domains and subdomains", async () => {
