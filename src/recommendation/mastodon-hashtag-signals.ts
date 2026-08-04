@@ -92,6 +92,9 @@ function authorizePublic(value: unknown, subjectId: string): void {
   if (typeof value.sourceVisibility !== "string" || !SOURCE_VISIBILITIES.has(value.sourceVisibility) || typeof value.accessBasis !== "string" || !ACCESS_BASES.has(value.accessBasis)) {
     throw new TypeError("Invalid Mastodon hashtag authorization.");
   }
+  if (value.containsPrivateData !== undefined && typeof value.containsPrivateData !== "boolean") {
+    throw new TypeError("Invalid Mastodon hashtag authorization.");
+  }
   if (value.sourceVisibility !== "public" || value.containsPrivateData === true || value.accessBasis === "unknown") {
     throw new TypeError("Mastodon hashtag recommendations require explicitly public source data.");
   }
