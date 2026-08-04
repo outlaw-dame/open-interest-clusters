@@ -132,22 +132,27 @@ export function parseRecommendationMastodonDomainBlockCsv(input: string): readon
   const domains = new Set<string>();
   const rules = rows.slice(1).map((values): RecommendationMastodonDomainBlockRule => {
     if (values.length !== EXPECTED_HEADERS.length) throw new TypeError("Invalid Mastodon domain-block CSV row.");
-    const domain = normalizeDomain(values[0]);
+    const [domainValue, severityValue, rejectMediaValue, rejectReportsValue, publicCommentValue, obfuscateValue] = values;
+    if (
+      domainValue === undefined || severityValue === undefined || rejectMediaValue === undefined ||
+      rejectReportsValue === undefined || publicCommentValue === undefined || obfuscateValue === undefined
+    ) {
+      throw new TypeError("Invalid Mastodon domain-block CSV row.");
+    }
+    const domain = normalizeDomain(domainValue);
     if (domains.has(domain)) throw new TypeError("Duplicate Mastodon domain-block domain.");
     domains.add(domain);
-    const severity = values[1];
-    if (severity !== "silence" && severity !== "suspend") throw new TypeError("Invalid Mastodon domain-block severity.");
-    const publicComment = values[4];
-    if (publicComment.length > 2_048 || hasUnsafeControlCharacter(publicComment)) {
+    if (severityValue !== "silence" && severityValue !== "suspend") throw new TypeError("Invalid Mastodon domain-block severity.");
+    if (publicCommentValue.length > 2_048 || hasUnsafeControlCharacter(publicCommentValue)) {
       throw new TypeError("Invalid Mastodon domain-block public comment.");
     }
     return Object.freeze({
       domain,
-      severity,
-      rejectMedia: parseBoolean(values[2], "reject-media flag"),
-      rejectReports: parseBoolean(values[3], "reject-reports flag"),
-      publicComment,
-      obfuscate: parseBoolean(values[5], "obfuscation flag")
+      severity: severityValue,
+      rejectMedia: parseBoolean(rejectMediaValue, "reject-media flag"),
+      rejectReports: parseBoolean(rejectReportsValue, "reject-reports flag"),
+      publicComment: publicCommentValue,
+      obfuscate: parseBoolean(obfuscateValue, "obfuscation flag")
     });
   });
   return Object.freeze(rules);
