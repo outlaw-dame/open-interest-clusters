@@ -12,12 +12,14 @@
       "import": "./dist/src/index.js"
     },
     "./schema": "./schema/interest-cluster.schema.json",
-    "./datasets/global-v1": "./datasets/interests.global.v1.json"
+    "./datasets/global-v1": "./datasets/interests.global.v1.json",
+    "./data/moderation/garden-fence-domain-blocks.csv": "./data/moderation/garden-fence-domain-blocks.csv"
   },
   "files": [
     "dist",
     "schema",
     "datasets",
+    "data",
     "docs",
     "README.md",
     "LICENSE"
