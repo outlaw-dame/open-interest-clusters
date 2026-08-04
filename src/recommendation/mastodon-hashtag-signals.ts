@@ -35,6 +35,7 @@ export interface RecommendationMastodonHashtagTransport {
 const MAX_TAGS = 200;
 const MAX_TEXT = 2_048;
 const MAX_COUNT = 1_000_000_000;
+const MAX_EPOCH_SECONDS = 4_102_444_800;
 const MAX_HISTORY_DAYS = 14;
 const DAY_SECONDS = 86_400;
 const SOURCE_VISIBILITIES = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
@@ -58,10 +59,18 @@ function instant(value: unknown, label: string): string {
   return result;
 }
 
-function count(value: unknown, label: string): number {
+function boundedInteger(value: unknown, label: string, maximum: number): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/u.test(value) ? Number(value) : NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > MAX_COUNT) throw new TypeError(`Invalid Mastodon hashtag ${label}.`);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > maximum) throw new TypeError(`Invalid Mastodon hashtag ${label}.`);
   return parsed;
+}
+
+function count(value: unknown, label: string): number {
+  return boundedInteger(value, label, MAX_COUNT);
+}
+
+function epochSeconds(value: unknown, label: string): number {
+  return boundedInteger(value, label, MAX_EPOCH_SECONDS);
 }
 
 function tag(value: unknown): string {
@@ -104,7 +113,7 @@ function history(value: unknown, observedAt: string): { uses: number; accounts: 
   let accounts = 0;
   for (const item of value) {
     if (!record(item)) throw new TypeError("Invalid Mastodon hashtag history.");
-    const day = count(item.day, "history day");
+    const day = epochSeconds(item.day, "history day");
     if (day % DAY_SECONDS !== 0 || day < earliestAllowedDay || day > latestAllowedDay || days.has(day)) {
       throw new TypeError("Invalid Mastodon hashtag history day.");
     }
