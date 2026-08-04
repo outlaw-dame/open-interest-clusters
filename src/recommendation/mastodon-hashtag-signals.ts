@@ -5,8 +5,6 @@ import { normalizeRecommendationSourceAdapterReadRequest } from "./source-adapte
 
 export const RECOMMENDATION_MASTODON_HASHTAG_SIGNAL_KINDS = [
   "account_featured",
-  "viewer_followed",
-  "viewer_featured",
   "instance_trending"
 ] as const;
 export type RecommendationMastodonHashtagSignalKind = typeof RECOMMENDATION_MASTODON_HASHTAG_SIGNAL_KINDS[number];
@@ -23,11 +21,10 @@ export interface RecommendationMastodonHashtagEvidence {
   historyUses: number;
   historyAccounts: number;
   confidence: number;
-  viewerSpecific: boolean;
 }
 
 export interface RecommendationMastodonHashtagTransport {
-  get(input: { url: string; requiresAuthentication: boolean; signal?: AbortSignal }):
+  get(input: { url: string; requiresAuthentication: false; signal?: AbortSignal }):
     | { body: unknown; observedAt: string }
     | Promise<{ body: unknown; observedAt: string }>;
 }
@@ -89,16 +86,14 @@ function safeBaseUrl(value: unknown): URL {
   return url;
 }
 
-function authorize(value: unknown, subjectId: string, viewerSpecific: boolean): void {
+function authorizePublic(value: unknown, subjectId: string): void {
   if (!record(value) || value.status !== "authorized" || value.subjectId !== subjectId) throw new TypeError("Invalid Mastodon hashtag authorization.");
   instant(value.checkedAt, "authorization timestamp");
-  if (typeof value.sourceVisibility !== "string" || !SOURCE_VISIBILITIES.has(value.sourceVisibility) || typeof value.accessBasis !== "string" || !ACCESS_BASES.has(value.accessBasis)) throw new TypeError("Invalid Mastodon hashtag authorization.");
-  if (viewerSpecific) {
-    if ((value.accessBasis !== "oauth_scope" && value.accessBasis !== "authenticated_api") || value.containsPrivateData !== true || value.sourceVisibility === "public") {
-      throw new TypeError("Mastodon hashtag source requires explicit private-data authorization evidence.");
-    }
-  } else if (value.accessBasis === "unknown") {
-    throw new TypeError("Mastodon hashtag source requires public-read authorization evidence.");
+  if (typeof value.sourceVisibility !== "string" || !SOURCE_VISIBILITIES.has(value.sourceVisibility) || typeof value.accessBasis !== "string" || !ACCESS_BASES.has(value.accessBasis)) {
+    throw new TypeError("Invalid Mastodon hashtag authorization.");
+  }
+  if (value.sourceVisibility !== "public" || value.containsPrivateData === true || value.accessBasis === "unknown") {
+    throw new TypeError("Mastodon hashtag recommendations require explicitly public source data.");
   }
 }
 
@@ -131,7 +126,7 @@ function parseItems(input: { body: unknown; kind: RecommendationMastodonHashtagS
     if (!record(raw)) throw new TypeError("Invalid Mastodon hashtag response.");
     const normalizedTag = tag(raw.name);
     const aggregate = history(raw.history, input.observedAt);
-    const featured = input.kind === "account_featured" || input.kind === "viewer_featured";
+    const featured = input.kind === "account_featured";
     const sourceUrl = typeof raw.url === "string" ? new URL(raw.url, input.baseUrl) : new URL(`/tags/${encodeURIComponent(normalizedTag)}`, input.baseUrl);
     if (sourceUrl.protocol !== "https:" || sourceUrl.username !== "" || sourceUrl.password !== "") throw new TypeError("Invalid Mastodon hashtag source URL.");
     const result: RecommendationMastodonHashtagEvidence = {
@@ -141,8 +136,7 @@ function parseItems(input: { body: unknown; kind: RecommendationMastodonHashtagS
       observedAt: input.observedAt,
       historyUses: aggregate.uses,
       historyAccounts: aggregate.accounts,
-      confidence: featured ? 0.95 : input.kind === "viewer_followed" ? 0.9 : 0.35,
-      viewerSpecific: input.kind === "viewer_followed" || input.kind === "viewer_featured"
+      confidence: featured ? 0.95 : 0.35
     };
     if (input.accountId !== undefined) result.accountId = input.accountId;
     if (raw.id !== undefined) result.featuredTagId = text(raw.id, "ID", 512);
@@ -152,7 +146,7 @@ function parseItems(input: { body: unknown; kind: RecommendationMastodonHashtagS
   }));
 }
 
-function client(input: { baseUrl: string; path: string; viewerSpecific: boolean; responseLimit: number; kind: RecommendationMastodonHashtagSignalKind; transport: RecommendationMastodonHashtagTransport; accountId?: string }) {
+function client(input: { baseUrl: string; path: string; responseLimit: number; kind: RecommendationMastodonHashtagSignalKind; transport: RecommendationMastodonHashtagTransport; accountId?: string }) {
   const baseUrl = safeBaseUrl(input.baseUrl);
   if (!Number.isSafeInteger(input.responseLimit) || input.responseLimit < 1 || input.responseLimit > MAX_TAGS) throw new TypeError("Invalid Mastodon hashtag response limit.");
   if (!record(input.transport) || typeof input.transport.get !== "function") throw new TypeError("Invalid Mastodon hashtag transport.");
@@ -161,8 +155,8 @@ function client(input: { baseUrl: string; path: string; viewerSpecific: boolean;
     async read(readInput: { subjectId: string; authorization: RecommendationProtocolSourceReadAuthorization; signal?: AbortSignal }) {
       if (!record(readInput)) throw new TypeError("Invalid Mastodon hashtag read input.");
       const subjectId = text(readInput.subjectId, "subject ID", 512);
-      authorize(readInput.authorization, subjectId, input.viewerSpecific);
-      const response = await input.transport.get({ url: url.toString(), requiresAuthentication: input.viewerSpecific, ...(readInput.signal === undefined ? {} : { signal: readInput.signal }) });
+      authorizePublic(readInput.authorization, subjectId);
+      const response = await input.transport.get({ url: url.toString(), requiresAuthentication: false, ...(readInput.signal === undefined ? {} : { signal: readInput.signal }) });
       if (!record(response)) throw new TypeError("Invalid Mastodon hashtag transport response.");
       const observedAt = instant(response.observedAt, "observation timestamp");
       return parseItems({ body: response.body, kind: input.kind, observedAt, baseUrl, responseLimit: input.responseLimit, ...(input.accountId === undefined ? {} : { accountId: input.accountId }) });
@@ -172,21 +166,11 @@ function client(input: { baseUrl: string; path: string; viewerSpecific: boolean;
 
 export function createRecommendationMastodonAccountFeaturedTagsClient(input: { baseUrl: string; accountId: string; transport: RecommendationMastodonHashtagTransport }) {
   const accountId = text(input.accountId, "account ID", 512);
-  return client({ ...input, accountId, path: `/api/v1/accounts/${encodeURIComponent(accountId)}/featured_tags`, viewerSpecific: false, responseLimit: MAX_TAGS, kind: "account_featured" });
-}
-
-export function createRecommendationMastodonViewerFeaturedTagsClient(input: { baseUrl: string; transport: RecommendationMastodonHashtagTransport }) {
-  return client({ ...input, path: "/api/v1/featured_tags", viewerSpecific: true, responseLimit: MAX_TAGS, kind: "viewer_featured" });
-}
-
-export function createRecommendationMastodonFollowedTagsClient(input: { baseUrl: string; transport: RecommendationMastodonHashtagTransport; limit?: number }) {
-  const limit = input.limit ?? 200;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new TypeError("Invalid Mastodon followed-tags limit.");
-  return client({ ...input, path: `/api/v1/followed_tags?limit=${limit}`, viewerSpecific: true, responseLimit: limit, kind: "viewer_followed" });
+  return client({ ...input, accountId, path: `/api/v1/accounts/${encodeURIComponent(accountId)}/featured_tags`, responseLimit: MAX_TAGS, kind: "account_featured" });
 }
 
 export function createRecommendationMastodonTrendingTagsClient(input: { baseUrl: string; transport: RecommendationMastodonHashtagTransport; limit?: number }) {
   const limit = input.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new TypeError("Invalid Mastodon trending-tags limit.");
-  return client({ ...input, path: `/api/v1/trends/tags?limit=${limit}`, viewerSpecific: false, responseLimit: limit, kind: "instance_trending" });
+  return client({ ...input, path: `/api/v1/trends/tags?limit=${limit}`, responseLimit: limit, kind: "instance_trending" });
 }
