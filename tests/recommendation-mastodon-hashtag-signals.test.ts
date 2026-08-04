@@ -47,7 +47,7 @@ test("account featured hashtags are strong public curator signals", async () => 
   assert.equal((requests[0] as { requiresAuthentication: boolean }).requiresAuthentication, false);
 });
 
-test("private or non-public authorization is rejected before transport", async () => {
+test("private, malformed, or non-public authorization is rejected before transport", async () => {
   let calls = 0;
   const client = createRecommendationMastodonTrendingTagsClient({
     baseUrl: "https://social.example",
@@ -71,6 +71,13 @@ test("private or non-public authorization is rejected before transport", async (
       /explicitly public source data/u
     );
   }
+  await assert.rejects(
+    client.read({
+      subjectId: "viewer",
+      authorization: { ...publicAuthorization("viewer"), containsPrivateData: "true" as never }
+    }),
+    /authorization/u
+  );
   assert.equal(calls, 0);
 });
 
