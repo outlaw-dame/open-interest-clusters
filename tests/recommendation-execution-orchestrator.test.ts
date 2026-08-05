@@ -40,15 +40,15 @@ test("execution orchestrator composes profile, scoring, reranking, explanations,
     rerank: {
       enabled: true,
       resolveMetadata(clusterIds) {
-        assert.deepEqual([...clusterIds].sort(), ["cluster.a", "cluster.b", "cluster.c"]);
+        assert.deepEqual([...clusterIds].sort(), ["cluster.a", "cluster.c"]);
         return [
           { clusterId: "cluster.a", category: "technology", seenRecently: true },
-          { clusterId: "cluster.b", category: "technology", seenRecently: false },
           { clusterId: "cluster.c", category: "science", seenRecently: false }
         ];
       }
     },
     resolveExplanations(candidates) {
+      assert.deepEqual(candidates.map((candidate) => candidate.clusterId).sort(), ["cluster.a", "cluster.c"]);
       return new Map(candidates.map((candidate) => [candidate.clusterId, {
         clusterId: candidate.clusterId,
         summary: `Recommended from ${candidate.clusterId}`,
@@ -76,6 +76,42 @@ test("execution orchestrator composes profile, scoring, reranking, explanations,
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.response), true);
   assert.equal(Object.isFrozen(result.response.candidates), true);
+});
+
+test("execution orchestrator excludes candidates before diversity reranking", async () => {
+  const orchestrator = createRecommendationExecutionOrchestrator({
+    engine: engine(),
+    buildScoringInput() {
+      return {
+        deterministic: new Map([
+          ["cluster.excluded", 1],
+          ["cluster.eligible", 0.9],
+          ["cluster.other", 0.85]
+        ])
+      };
+    },
+    rerank: {
+      enabled: true,
+      weights: { relevance: 1, diversity: 0.2, novelty: 0 },
+      resolveMetadata(clusterIds) {
+        assert.deepEqual(clusterIds, ["cluster.eligible", "cluster.other"]);
+        return [
+          { clusterId: "cluster.eligible", category: "technology" },
+          { clusterId: "cluster.other", category: "science" }
+        ];
+      }
+    }
+  });
+
+  const result = await orchestrator.execute({
+    subjectId: "subject-1",
+    requestId: "request-exclusion-rerank",
+    limit: 1,
+    excludeClusterIds: ["cluster.excluded"]
+  });
+
+  assert.equal(result.scoredCandidateCount, 3);
+  assert.equal(result.response.candidates[0]?.clusterId, "cluster.eligible");
 });
 
 test("execution orchestrator returns an empty response when no scoring component yields candidates", async () => {
