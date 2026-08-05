@@ -11,6 +11,7 @@ export type RecommendationStorageAuthority =
 export const RECOMMENDATION_STORAGE_AUTHORITY_REASONS = [
   "storage.allow.device_owned",
   "storage.allow.user_owned",
+  "storage.allow.aggregate_only",
   "storage.deny.provider_owned",
   "storage.deny.shared_operator",
   "storage.deny.authority_boundary_mismatch"
@@ -19,9 +20,14 @@ export const RECOMMENDATION_STORAGE_AUTHORITY_REASONS = [
 export type RecommendationStorageAuthorityReason =
   typeof RECOMMENDATION_STORAGE_AUTHORITY_REASONS[number];
 
+export type RecommendationProcessingBoundary =
+  | "local_only"
+  | "server_allowed"
+  | "aggregate_only";
+
 export interface RecommendationStorageAuthorityEvaluationInput {
   authority: RecommendationStorageAuthority;
-  processingBoundary: "local_only" | "server_allowed" | "aggregate_only";
+  processingBoundary: RecommendationProcessingBoundary;
 }
 
 export interface RecommendationStorageAuthorityEvaluation {
@@ -30,6 +36,11 @@ export interface RecommendationStorageAuthorityEvaluation {
 }
 
 const AUTHORITY_SET = new Set<string>(RECOMMENDATION_STORAGE_AUTHORITIES);
+const PROCESSING_BOUNDARY_SET = new Set<string>([
+  "local_only",
+  "server_allowed",
+  "aggregate_only"
+]);
 
 export function isRecommendationStorageAuthority(
   value: unknown
@@ -37,8 +48,14 @@ export function isRecommendationStorageAuthority(
   return typeof value === "string" && AUTHORITY_SET.has(value);
 }
 
+export function isRecommendationProcessingBoundary(
+  value: unknown
+): value is RecommendationProcessingBoundary {
+  return typeof value === "string" && PROCESSING_BOUNDARY_SET.has(value);
+}
+
 export function inferLegacyRecommendationStorageAuthority(
-  processingBoundary: RecommendationStorageAuthorityEvaluationInput["processingBoundary"]
+  processingBoundary: RecommendationProcessingBoundary
 ): RecommendationStorageAuthority {
   if (processingBoundary === "local_only") return "device_owned";
   if (processingBoundary === "aggregate_only") return "shared_operator";
@@ -48,8 +65,12 @@ export function inferLegacyRecommendationStorageAuthority(
 export function evaluateRecommendationStorageAuthority(
   input: RecommendationStorageAuthorityEvaluationInput
 ): RecommendationStorageAuthorityEvaluation {
-  if (!isRecommendationStorageAuthority(input.authority)) {
-    throw new TypeError("Invalid recommendation storage authority.");
+  if (
+    input === null || typeof input !== "object" ||
+    !isRecommendationStorageAuthority(input.authority) ||
+    !isRecommendationProcessingBoundary(input.processingBoundary)
+  ) {
+    throw new TypeError("Invalid recommendation storage authority evaluation input.");
   }
 
   if (input.processingBoundary === "local_only") {
@@ -72,6 +93,6 @@ export function evaluateRecommendationStorageAuthority(
   }
 
   return input.authority === "shared_operator"
-    ? Object.freeze({ decision: "allow", reason: "storage.deny.shared_operator" })
+    ? Object.freeze({ decision: "allow", reason: "storage.allow.aggregate_only" })
     : Object.freeze({ decision: "deny", reason: "storage.deny.authority_boundary_mismatch" });
 }
