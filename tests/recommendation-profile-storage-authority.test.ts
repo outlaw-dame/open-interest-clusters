@@ -76,7 +76,7 @@ test("shared-operator storage cannot persist subject-level profiles", async () =
     writeRecommendationProfileStoreRecord(adapter, {
       ...input(),
       storageAuthority: "shared_operator",
-      processingBoundary: "server_allowed"
+      processingBoundary: "aggregate_only"
     }),
     /storage\.deny\.shared_operator/u
   );
