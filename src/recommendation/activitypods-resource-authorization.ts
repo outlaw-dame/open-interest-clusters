@@ -51,270 +51,180 @@ export interface RecommendationActivityPodsResourceGrantEvidence {
 }
 
 export interface RecommendationActivityPodsResourceGrantValidationOptions {
-  now?: string;
+  now?: string | undefined;
 }
 
 const MAX_IDENTIFIER_LENGTH = 2_048;
 const ACCESS_MODE_SET = new Set<string>(RECOMMENDATION_SOLID_ACCESS_MODES);
 const OPERATION_SET = new Set<string>(RECOMMENDATION_ACTIVITYPODS_RESOURCE_OPERATIONS);
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function boundedString(value: unknown, label: string): string {
+function string(value: unknown, label: string): string {
   if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value !== value.trim() ||
-    value.length > MAX_IDENTIFIER_LENGTH ||
-    hasUnsafeControlCharacter(value)
-  ) {
-    throw new TypeError(`Invalid ActivityPods ${label}.`);
-  }
+    typeof value !== "string" || value.trim().length === 0 || value !== value.trim() ||
+    value.length > MAX_IDENTIFIER_LENGTH || hasUnsafeControlCharacter(value)
+  ) throw new TypeError(`Invalid ActivityPods ${label}.`);
   return value;
 }
 
-function timestamp(value: unknown, label: string): string {
-  const normalized = boundedString(value, label);
-  normalizeRecommendationSourceAdapterReadRequest({ subjectId: "activitypods-resource-grant", since: normalized });
-  return normalized;
+function time(value: unknown, label: string): string {
+  const output = string(value, label);
+  normalizeRecommendationSourceAdapterReadRequest({ subjectId: "activitypods-resource-grant", since: output });
+  return output;
 }
 
-function optionalTimestamp(value: unknown, label: string): string | undefined {
-  return value === undefined ? undefined : timestamp(value, label);
+function url(value: unknown, label: string, directory = false): string {
+  let output: URL;
+  try { output = new URL(string(value, label)); }
+  catch { throw new TypeError(`Invalid ActivityPods ${label}.`); }
+  const host = output.hostname.toLocaleLowerCase("en-US").replace(/\.+$/u, "");
+  if (
+    output.protocol !== "https:" || output.username !== "" || output.password !== "" || output.hash !== "" ||
+    host.length === 0 || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host) || host.includes(":") ||
+    (directory && !output.pathname.endsWith("/"))
+  ) throw new TypeError(`Invalid ActivityPods ${label}.`);
+  output.hostname = host;
+  return output.toString();
 }
 
-function optionalBoolean(value: unknown, label: string): boolean | undefined {
+function within(child: string, parent: string): boolean {
+  const childUrl = new URL(child);
+  const parentUrl = new URL(parent);
+  return childUrl.origin === parentUrl.origin && childUrl.pathname.startsWith(parentUrl.pathname);
+}
+
+function sameOwnerOrigin(value: string, ownerWebId: string, label: string): void {
+  if (new URL(value).origin !== new URL(ownerWebId).origin) {
+    throw new TypeError(`ActivityPods ${label} must use the owner Pod authority.`);
+  }
+}
+
+function modes(value: unknown, label: string): readonly RecommendationSolidAccessMode[] {
+  if (
+    !Array.isArray(value) || value.length === 0 ||
+    value.some((mode) => typeof mode !== "string" || !ACCESS_MODE_SET.has(mode)) ||
+    new Set(value).size !== value.length
+  ) throw new TypeError(`Invalid ActivityPods ${label}.`);
+  return Object.freeze([...value]) as readonly RecommendationSolidAccessMode[];
+}
+
+function boolean(value: unknown, label: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw new TypeError(`Invalid ActivityPods ${label}.`);
   return value;
 }
 
-function httpsUrl(value: unknown, label: string, requireDirectory = false): string {
-  const raw = boundedString(value, label);
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new TypeError(`Invalid ActivityPods ${label}.`);
-  }
-  const hostname = url.hostname.toLocaleLowerCase("en-US").replace(/\.+$/u, "");
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.hash !== "" ||
-    hostname.length === 0 ||
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local") ||
-    /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(hostname) ||
-    hostname.includes(":") ||
-    (requireDirectory && !url.pathname.endsWith("/"))
-  ) {
-    throw new TypeError(`Invalid ActivityPods ${label}.`);
-  }
-  url.hostname = hostname;
-  return url.toString();
+function readAllowed(value: readonly RecommendationSolidAccessMode[]): boolean {
+  return value.includes("read") || value.includes("control");
 }
 
-function isWithin(childUri: string, parentUri: string): boolean {
-  const child = new URL(childUri);
-  const parent = new URL(parentUri);
-  return child.origin === parent.origin && child.pathname.startsWith(parent.pathname);
+function writeAllowed(value: readonly RecommendationSolidAccessMode[]): boolean {
+  return value.includes("write") || value.includes("control");
 }
 
-function assertSameOrigin(uri: string, ownerWebId: string, label: string): void {
-  if (new URL(uri).origin !== new URL(ownerWebId).origin) {
-    throw new TypeError(`ActivityPods ${label} must use the owner Pod authority.`);
-  }
-}
-
-function accessModes(value: unknown, label: string): readonly RecommendationSolidAccessMode[] {
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some((mode) => typeof mode !== "string" || !ACCESS_MODE_SET.has(mode)) ||
-    new Set(value).size !== value.length
-  ) {
-    throw new TypeError(`Invalid ActivityPods ${label}.`);
-  }
-  return Object.freeze([...value]) as readonly RecommendationSolidAccessMode[];
-}
-
-function normalizeNow(options: RecommendationActivityPodsResourceGrantValidationOptions): string {
-  if (!isPlainRecord(options)) {
-    throw new TypeError("Invalid ActivityPods resource grant validation options.");
-  }
-  return options.now === undefined
-    ? new Date().toISOString()
-    : timestamp(options.now, "resource grant validation time");
-}
-
-function assertTemporalValidity(
-  checkedAt: string,
-  expiresAt: string | undefined,
-  revokedAt: string | undefined,
-  now: string
-): void {
-  if (revokedAt !== undefined) throw new TypeError("ActivityPods resource grant has been revoked.");
-  const checkedAtMs = Date.parse(checkedAt);
-  const nowMs = Date.parse(now);
-  if (checkedAtMs > nowMs) throw new TypeError("ActivityPods resource grant check time is in the future.");
-  if (expiresAt !== undefined) {
-    const expiresAtMs = Date.parse(expiresAt);
-    if (expiresAtMs <= checkedAtMs) {
-      throw new TypeError("ActivityPods resource grant expiry must follow its check time.");
-    }
-    if (expiresAtMs <= nowMs) throw new TypeError("ActivityPods resource grant has expired.");
-  }
-}
-
-function hasRead(modes: readonly RecommendationSolidAccessMode[]): boolean {
-  return modes.includes("read") || modes.includes("control");
-}
-
-function hasWrite(modes: readonly RecommendationSolidAccessMode[]): boolean {
-  return modes.includes("write") || modes.includes("control");
-}
-
-function normalizeOperation(value: unknown): RecommendationActivityPodsResourceOperation {
+function operation(value: unknown): RecommendationActivityPodsResourceOperation {
   if (typeof value !== "string" || !OPERATION_SET.has(value)) {
     throw new TypeError("Invalid ActivityPods resource operation.");
   }
   return value as RecommendationActivityPodsResourceOperation;
 }
 
+function validateTimes(
+  checkedAt: string,
+  expiresAt: string | undefined,
+  revokedAt: string | undefined,
+  options: RecommendationActivityPodsResourceGrantValidationOptions
+): void {
+  if (!isRecord(options)) throw new TypeError("Invalid ActivityPods resource grant validation options.");
+  if (revokedAt !== undefined) throw new TypeError("ActivityPods resource grant has been revoked.");
+  const now = time(options.now ?? new Date().toISOString(), "resource grant validation time");
+  const checked = Date.parse(checkedAt);
+  if (checked > Date.parse(now)) throw new TypeError("ActivityPods resource grant check time is in the future.");
+  if (expiresAt !== undefined) {
+    const expires = Date.parse(expiresAt);
+    if (expires <= checked) throw new TypeError("ActivityPods resource grant expiry must follow its check time.");
+    if (expires <= Date.parse(now)) throw new TypeError("ActivityPods resource grant has expired.");
+  }
+}
+
 export function normalizeRecommendationActivityPodsResourceGrantEvidence(
   input: RecommendationActivityPodsResourceGrantEvidenceInput,
   options: RecommendationActivityPodsResourceGrantValidationOptions = {}
 ): RecommendationActivityPodsResourceGrantEvidence {
-  if (!isPlainRecord(input)) throw new TypeError("Invalid ActivityPods resource grant evidence.");
+  if (!isRecord(input)) throw new TypeError("Invalid ActivityPods resource grant evidence.");
+  const subjectId = string(input.subjectId, "resource grant subject");
+  const applicationActorUri = url(input.applicationActorUri, "application actor URI");
+  const ownerActorUri = url(input.ownerActorUri, "owner actor URI");
+  const ownerWebId = url(input.ownerWebId, "owner WebID");
+  if (ownerActorUri !== ownerWebId) throw new TypeError("ActivityPods owner actor URI must equal the owner WebID.");
+  if (applicationActorUri === ownerActorUri) throw new TypeError("ActivityPods application actor must be distinct from the owner actor.");
 
-  const subjectId = boundedString(input.subjectId, "resource grant subject");
-  const applicationActorUri = httpsUrl(input.applicationActorUri, "application actor URI");
-  const ownerActorUri = httpsUrl(input.ownerActorUri, "owner actor URI");
-  const ownerWebId = httpsUrl(input.ownerWebId, "owner WebID");
-  if (ownerActorUri !== ownerWebId) {
-    throw new TypeError("ActivityPods owner actor URI must equal the owner WebID.");
-  }
-  if (applicationActorUri === ownerActorUri) {
-    throw new TypeError("ActivityPods application actor must be distinct from the owner actor.");
-  }
+  const storageRootUri = url(input.storageRootUri, "storage root URI", true);
+  const containerUri = url(input.containerUri, "resource container URI", true);
+  const resourceUri = url(input.resourceUri, "resource URI");
+  const applicationRegistrationUri = url(input.applicationRegistrationUri, "application registration URI");
+  const accessGrantUri = url(input.accessGrantUri, "access grant URI");
+  const dataGrantUri = url(input.dataGrantUri, "data grant URI");
+  const shapeTreeUri = url(input.shapeTreeUri, "shape tree URI");
+  for (const [value, label] of [
+    [storageRootUri, "storage root URI"], [containerUri, "resource container URI"],
+    [resourceUri, "resource URI"], [applicationRegistrationUri, "application registration URI"],
+    [accessGrantUri, "access grant URI"], [dataGrantUri, "data grant URI"]
+  ] as const) sameOwnerOrigin(value, ownerWebId, label);
+  if (!within(containerUri, storageRootUri)) throw new TypeError("ActivityPods resource container must be within the owner storage root.");
+  if (!within(resourceUri, containerUri)) throw new TypeError("ActivityPods resource must be within its authorized container.");
 
-  const storageRootUri = httpsUrl(input.storageRootUri, "storage root URI", true);
-  const containerUri = httpsUrl(input.containerUri, "resource container URI", true);
-  const resourceUri = httpsUrl(input.resourceUri, "resource URI");
-  const applicationRegistrationUri = httpsUrl(
-    input.applicationRegistrationUri,
-    "application registration URI"
-  );
-  const accessGrantUri = httpsUrl(input.accessGrantUri, "access grant URI");
-  const dataGrantUri = httpsUrl(input.dataGrantUri, "data grant URI");
-  const shapeTreeUri = httpsUrl(input.shapeTreeUri, "shape tree URI");
-
-  for (const [uri, label] of [
-    [storageRootUri, "storage root URI"],
-    [containerUri, "resource container URI"],
-    [resourceUri, "resource URI"],
-    [applicationRegistrationUri, "application registration URI"],
-    [accessGrantUri, "access grant URI"],
-    [dataGrantUri, "data grant URI"]
-  ] as const) {
-    assertSameOrigin(uri, ownerWebId, label);
-  }
-  if (!isWithin(containerUri, storageRootUri)) {
-    throw new TypeError("ActivityPods resource container must be within the owner storage root.");
-  }
-  if (!isWithin(resourceUri, containerUri)) {
-    throw new TypeError("ActivityPods resource must be within its authorized container.");
-  }
-
-  const resourceAccessModes = accessModes(input.resourceAccessModes, "resource access modes");
-  const containerAccessModes = accessModes(input.containerAccessModes, "container access modes");
-  const isOwner = optionalBoolean(input.isOwner, "resource owner flag") ?? false;
-  if (
-    !isOwner &&
-    !hasRead(resourceAccessModes) &&
-    !hasWrite(resourceAccessModes) &&
-    !hasWrite(containerAccessModes)
-  ) {
+  const resourceAccessModes = modes(input.resourceAccessModes, "resource access modes");
+  const containerAccessModes = modes(input.containerAccessModes, "container access modes");
+  const isOwner = boolean(input.isOwner, "resource owner flag") ?? false;
+  if (!isOwner && !readAllowed(resourceAccessModes) && !writeAllowed(resourceAccessModes) && !writeAllowed(containerAccessModes)) {
     throw new TypeError("ActivityPods resource grant does not provide usable access.");
   }
+  const checkedAt = time(input.checkedAt, "resource grant check time");
+  const expiresAt = input.expiresAt === undefined ? undefined : time(input.expiresAt, "resource grant expiry time");
+  const revokedAt = input.revokedAt === undefined ? undefined : time(input.revokedAt, "resource grant revocation time");
+  validateTimes(checkedAt, expiresAt, revokedAt, options);
+  const providerPolicyAllowsProcessing = boolean(input.providerPolicyAllowsProcessing, "resource grant provider-policy flag");
 
-  const checkedAt = timestamp(input.checkedAt, "resource grant check time");
-  const expiresAt = optionalTimestamp(input.expiresAt, "resource grant expiry time");
-  const revokedAt = optionalTimestamp(input.revokedAt, "resource grant revocation time");
-  assertTemporalValidity(checkedAt, expiresAt, revokedAt, normalizeNow(options));
-  const providerPolicyAllowsProcessing = optionalBoolean(
-    input.providerPolicyAllowsProcessing,
-    "resource grant provider-policy flag"
-  );
-
-  const evidence: RecommendationActivityPodsResourceGrantEvidence = {
-    subjectId,
-    applicationActorUri,
-    applicationRegistrationUri,
-    accessGrantUri,
-    dataGrantUri,
-    ownerActorUri,
-    ownerWebId,
-    storageRootUri,
-    containerUri,
-    resourceUri,
-    shapeTreeUri,
-    resourceAccessModes,
-    containerAccessModes,
-    isOwner,
-    checkedAt
+  const output: RecommendationActivityPodsResourceGrantEvidence = {
+    subjectId, applicationActorUri, applicationRegistrationUri, accessGrantUri, dataGrantUri,
+    ownerActorUri, ownerWebId, storageRootUri, containerUri, resourceUri, shapeTreeUri,
+    resourceAccessModes, containerAccessModes, isOwner, checkedAt
   };
-  if (expiresAt !== undefined) evidence.expiresAt = expiresAt;
-  if (providerPolicyAllowsProcessing !== undefined) {
-    evidence.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
-  }
-  return Object.freeze(evidence);
+  if (expiresAt !== undefined) output.expiresAt = expiresAt;
+  if (providerPolicyAllowsProcessing !== undefined) output.providerPolicyAllowsProcessing = providerPolicyAllowsProcessing;
+  return Object.freeze(output);
 }
 
 export function requireRecommendationActivityPodsResourceOperation(
   input: RecommendationActivityPodsResourceGrantEvidenceInput,
-  operation: RecommendationActivityPodsResourceOperation,
+  requestedOperation: RecommendationActivityPodsResourceOperation,
   options: RecommendationActivityPodsResourceGrantValidationOptions = {}
 ): RecommendationActivityPodsResourceGrantEvidence {
-  const normalizedOperation = normalizeOperation(operation);
+  const requested = operation(requestedOperation);
   const evidence = normalizeRecommendationActivityPodsResourceGrantEvidence(input, options);
-  if (evidence.providerPolicyAllowsProcessing === false) {
-    throw new TypeError("ActivityPods provider policy denies resource processing.");
-  }
+  if (evidence.providerPolicyAllowsProcessing === false) throw new TypeError("ActivityPods provider policy denies resource processing.");
   if (evidence.isOwner) return evidence;
-
-  if (normalizedOperation === "read") {
-    if (!hasRead(evidence.resourceAccessModes)) {
-      throw new TypeError("ActivityPods resource grant does not allow read.");
-    }
+  if (requested === "read") {
+    if (!readAllowed(evidence.resourceAccessModes)) throw new TypeError("ActivityPods resource grant does not allow read.");
     return evidence;
   }
-
-  if (normalizedOperation === "write") {
-    if (!hasRead(evidence.resourceAccessModes) || !hasWrite(evidence.resourceAccessModes)) {
-      throw new TypeError(
-        "ActivityPods resource grant must allow read and write for conditional profile updates."
-      );
+  if (requested === "write") {
+    if (!readAllowed(evidence.resourceAccessModes) || !writeAllowed(evidence.resourceAccessModes)) {
+      throw new TypeError("ActivityPods resource grant must allow read and write for conditional profile updates.");
     }
-    if (!hasWrite(evidence.containerAccessModes)) {
+    if (!writeAllowed(evidence.containerAccessModes)) {
       throw new TypeError("ActivityPods resource grant does not allow writes in the profile container.");
     }
     return evidence;
   }
-
   if (
-    !hasRead(evidence.resourceAccessModes) ||
-    !hasWrite(evidence.resourceAccessModes) ||
-    !hasWrite(evidence.containerAccessModes)
-  ) {
-    throw new TypeError(
-      "ActivityPods resource deletion requires read/write access to the resource and write access to its container."
-    );
-  }
+    !readAllowed(evidence.resourceAccessModes) || !writeAllowed(evidence.resourceAccessModes) ||
+    !writeAllowed(evidence.containerAccessModes)
+  ) throw new TypeError("ActivityPods resource deletion requires read/write access to the resource and write access to its container.");
   return evidence;
 }
