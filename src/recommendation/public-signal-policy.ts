@@ -10,7 +10,6 @@ import type {
 } from "./interest-signal.js";
 import type { RecommendationInterestEvidence } from "./interest-signal.js";
 import {
-  evaluateRecommendationStorageAuthority,
   inferLegacyRecommendationStorageAuthority,
   isRecommendationStorageAuthority,
   type RecommendationStorageAuthority
@@ -28,8 +27,7 @@ export const RECOMMENDATION_PUBLIC_SIGNAL_POLICY_REASONS = [
   "signal.deny.private_affinity",
   "signal.deny.remote_private_filter",
   "signal.deny.non_public_provider_evidence",
-  "signal.deny.local_boundary_mismatch",
-  "signal.deny.storage_authority"
+  "signal.deny.local_boundary_mismatch"
 ] as const;
 export type RecommendationPublicSignalPolicyReason =
   typeof RECOMMENDATION_PUBLIC_SIGNAL_POLICY_REASONS[number];
@@ -157,14 +155,6 @@ export function evaluateRecommendationPublicSignalPolicy(
 ): RecommendationPublicSignalPolicyEvaluation {
   const effect = signalEffect(input);
   const storageAuthority = resolvedStorageAuthority(input);
-  const authorityEvaluation = evaluateRecommendationStorageAuthority({
-    authority: storageAuthority,
-    processingBoundary: input.privacyBoundary
-  });
-
-  if (authorityEvaluation.decision === "deny" && effect === "affinity") {
-    return evaluation("deny", "signal.deny.storage_authority", effect, storageAuthority);
-  }
 
   if (isExplicitPublic(input)) {
     return evaluation("allow", "signal.allow.explicit_public", effect, storageAuthority);
@@ -188,7 +178,6 @@ export function evaluateRecommendationPublicSignalPolicy(
       return evaluation("deny", "signal.deny.private_affinity", effect, storageAuthority);
     }
     if (
-      authorityEvaluation.decision === "deny" ||
       storageAuthority !== "device_owned" ||
       input.privacyBoundary !== "local_only" ||
       input.consent.serverSideProcessing
@@ -196,10 +185,6 @@ export function evaluateRecommendationPublicSignalPolicy(
       return evaluation("deny", "signal.deny.remote_private_filter", effect, storageAuthority);
     }
     return evaluation("allow", "signal.allow.local_private_filter", effect, storageAuthority);
-  }
-
-  if (authorityEvaluation.decision === "deny") {
-    return evaluation("deny", "signal.deny.storage_authority", effect, storageAuthority);
   }
 
   return evaluation("deny", "signal.deny.non_public_provider_evidence", effect, storageAuthority);
