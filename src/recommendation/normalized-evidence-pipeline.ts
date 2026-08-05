@@ -67,6 +67,7 @@ export interface RecommendationNormalizedEvidencePipelineOptions {
   namespace?: string;
   maxEvidencePerRead?: number;
   maxSignalsPerEvidence?: number;
+  maxEventsPerProcess?: number;
 }
 
 export interface RecommendationNormalizedEvidencePipelineProcessInput {
@@ -101,6 +102,8 @@ const DEFAULT_MAX_EVIDENCE = 10_000;
 const MAX_EVIDENCE = 100_000;
 const DEFAULT_MAX_SIGNALS_PER_EVIDENCE = 64;
 const MAX_SIGNALS_PER_EVIDENCE = 1_024;
+const DEFAULT_MAX_EVENTS_PER_PROCESS = 10_000;
+const MAX_EVENTS_PER_PROCESS = 100_000;
 const MAX_IDENTIFIER_LENGTH = 2_048;
 const MAX_NAMESPACE_LENGTH = 128;
 
@@ -115,11 +118,13 @@ function boundedString(value: unknown, maximum: number, message: string): string
     value !== value.trim() ||
     value.length > maximum ||
     hasUnsafeControlCharacter(value)
-  ) throw new TypeError(message);
+  ) {
+    throw new TypeError(message);
+  }
   return value;
 }
 
-function dataUse(value: unknown): RecommendationDataUse {
+function normalizeDataUse(value: unknown): RecommendationDataUse {
   if (typeof value !== "string" || !DATA_USE_SET.has(value)) {
     throw new TypeError("Invalid recommendation normalized evidence data use.");
   }
@@ -152,6 +157,14 @@ function assertEvaluationBinding(
 ): void {
   const audit = evaluation.auditEvent;
   if (
+    evaluation.reason !== audit.reason ||
+    evaluation.dataUse !== audit.dataUse ||
+    evaluation.protocol !== audit.protocol ||
+    evaluation.sourceVisibility !== audit.sourceVisibility ||
+    evaluation.accessBasis !== audit.accessBasis ||
+    evaluation.containsPrivateData !== audit.containsPrivateData ||
+    evaluation.containsThirdPartyData !== audit.containsThirdPartyData ||
+    evaluation.serverSideProcessing !== audit.serverSideProcessing ||
     audit.dataUse !== expectedDataUse ||
     audit.protocol !== source.context.protocol ||
     audit.sourceVisibility !== source.context.sourceVisibility ||
@@ -164,15 +177,17 @@ function assertEvaluationBinding(
   }
 }
 
-function evidenceId(
+function createEvidenceId(
   namespace: string,
   subjectId: string,
+  dataUse: RecommendationDataUse,
   source: RecommendationSourceItem,
   rawSourceEventId: string
 ): string {
   const material = [
     namespace,
     subjectId,
+    dataUse,
     source.provenance.adapterId,
     source.provenance.sourceSystem,
     rawSourceEventId
@@ -199,13 +214,23 @@ export function createRecommendationNormalizedEvidenceBatch(
     !Array.isArray(input.readResult.items) ||
     !Array.isArray(input.readResult.consentEvaluations) ||
     typeof input.identifySourceEvent !== "function"
-  ) throw new TypeError("Invalid recommendation normalized evidence batch input.");
+  ) {
+    throw new TypeError("Invalid recommendation normalized evidence batch input.");
+  }
 
-  const subject = boundedString(input.subjectId, MAX_IDENTIFIER_LENGTH, "Invalid recommendation normalized evidence subject ID.");
-  const use = dataUse(input.dataUse);
+  const subject = boundedString(
+    input.subjectId,
+    MAX_IDENTIFIER_LENGTH,
+    "Invalid recommendation normalized evidence subject ID."
+  );
+  const dataUse = normalizeDataUse(input.dataUse);
   const namespace = input.namespace === undefined
     ? DEFAULT_NAMESPACE
-    : boundedString(input.namespace, MAX_NAMESPACE_LENGTH, "Invalid recommendation normalized evidence namespace.");
+    : boundedString(
+      input.namespace,
+      MAX_NAMESPACE_LENGTH,
+      "Invalid recommendation normalized evidence namespace."
+    );
 
   if (input.readResult.items.length !== input.readResult.consentEvaluations.length) {
     throw new TypeError("Recommendation normalized evidence source and consent counts differ.");
@@ -214,16 +239,16 @@ export function createRecommendationNormalizedEvidenceBatch(
   const evidence = input.readResult.items.map((rawSource, index) => {
     const source = normalizeRecommendationSourceItem(rawSource);
     const evaluation = allowedEvaluation(input.readResult.consentEvaluations[index]);
-    assertEvaluationBinding(evaluation, source, use);
+    assertEvaluationBinding(evaluation, source, dataUse);
     const rawId = boundedString(
       input.identifySourceEvent(source, index),
       MAX_IDENTIFIER_LENGTH,
       "Invalid recommendation normalized evidence source event ID."
     );
     return freezeEvidence({
-      evidenceId: evidenceId(namespace, subject, source, rawId),
+      evidenceId: createEvidenceId(namespace, subject, dataUse, source, rawId),
       subjectId: subject,
-      dataUse: use,
+      dataUse,
       source,
       consentEvaluation: evaluation
     });
@@ -265,6 +290,20 @@ function assertSignalBinding(
   }
 }
 
+function signalEventId(evidenceId: string, signal: RecommendationInterestSignal, index: number): string {
+  const material = [
+    evidenceId,
+    String(index),
+    signal.target.kind,
+    signal.target.key,
+    signal.action,
+    signal.polarity,
+    signal.dataUse,
+    signal.privacyBoundary
+  ].join("\u0000");
+  return `signal-event:${sha256Hex(material)}`;
+}
+
 export function createRecommendationNormalizedEvidencePipeline(
   options: RecommendationNormalizedEvidencePipelineOptions
 ): RecommendationNormalizedEvidencePipeline {
@@ -274,11 +313,17 @@ export function createRecommendationNormalizedEvidencePipeline(
     typeof options.engine.process !== "function" ||
     typeof options.identifySourceEvent !== "function" ||
     typeof options.deriveSignals !== "function"
-  ) throw new TypeError("Invalid recommendation normalized evidence pipeline options.");
+  ) {
+    throw new TypeError("Invalid recommendation normalized evidence pipeline options.");
+  }
 
   const namespace = options.namespace === undefined
     ? DEFAULT_NAMESPACE
-    : boundedString(options.namespace, MAX_NAMESPACE_LENGTH, "Invalid recommendation normalized evidence namespace.");
+    : boundedString(
+      options.namespace,
+      MAX_NAMESPACE_LENGTH,
+      "Invalid recommendation normalized evidence namespace."
+    );
   const maxEvidence = positiveInteger(
     options.maxEvidencePerRead,
     DEFAULT_MAX_EVIDENCE,
@@ -291,6 +336,12 @@ export function createRecommendationNormalizedEvidencePipeline(
     MAX_SIGNALS_PER_EVIDENCE,
     "Invalid recommendation normalized evidence signal limit."
   );
+  const maxEvents = positiveInteger(
+    options.maxEventsPerProcess,
+    DEFAULT_MAX_EVENTS_PER_PROCESS,
+    MAX_EVENTS_PER_PROCESS,
+    "Invalid recommendation normalized evidence event limit."
+  );
 
   return Object.freeze({
     async process(
@@ -299,23 +350,25 @@ export function createRecommendationNormalizedEvidencePipeline(
       if (!isPlainRecord(input)) {
         throw new TypeError("Invalid recommendation normalized evidence pipeline process input.");
       }
+
       const readRequest = normalizeRecommendationSourceAdapterReadRequest(input.readRequest);
-      const use = dataUse(input.dataUse);
+      const dataUse = normalizeDataUse(input.dataUse);
       const readResult = await readRecommendationSourceAdapterWithConsent({
         adapter: input.adapter,
         readRequest,
-        dataUse: use,
+        dataUse,
         policy: input.policy,
         ...(input.enforcementOptions === undefined ? {} : { enforcementOptions: input.enforcementOptions }),
         ...(input.deniedItemMode === undefined ? {} : { deniedItemMode: input.deniedItemMode })
       });
+
       if (readResult.items.length > maxEvidence) {
         throw new RangeError("Recommendation normalized evidence read limit exceeded.");
       }
 
       const batch = createRecommendationNormalizedEvidenceBatch({
         subjectId: readRequest.subjectId,
-        dataUse: use,
+        dataUse,
         readResult,
         identifySourceEvent: options.identifySourceEvent,
         namespace
@@ -323,6 +376,7 @@ export function createRecommendationNormalizedEvidencePipeline(
 
       const signals: RecommendationInterestSignal[] = [];
       const events: RecommendationSignalLedgerEventInput[] = [];
+
       for (const evidence of batch.evidence) {
         const derived = await options.deriveSignals(evidence);
         if (!Array.isArray(derived)) {
@@ -331,24 +385,32 @@ export function createRecommendationNormalizedEvidencePipeline(
         if (derived.length > maxSignals) {
           throw new RangeError("Recommendation normalized evidence signal limit exceeded.");
         }
-        derived.forEach((rawSignal, index) => {
-          const signal = normalizeRecommendationInterestSignal(rawSignal);
+        if (events.length + derived.length > maxEvents) {
+          throw new RangeError("Recommendation normalized evidence total event limit exceeded.");
+        }
+
+        for (let index = 0; index < derived.length; index += 1) {
+          const signal = normalizeRecommendationInterestSignal(derived[index]);
           assertSignalBinding(signal, evidence);
+          const sourceEventId = signalEventId(evidence.evidenceId, signal, index);
+          const operationId = `apply:${sha256Hex(`${sourceEventId}\u0000${evidence.evidenceId}`)}`;
           signals.push(signal);
           events.push(Object.freeze({
-            operation: "apply" as const,
-            operationId: `${evidence.evidenceId}:apply:${index}`,
-            sourceEventId: `${evidence.evidenceId}:signal:${index}`,
+            operation: "apply",
+            operationId,
+            sourceEventId,
             occurredAt: evidence.source.provenance.observedAt,
             signal
           }));
-        });
+        }
       }
 
-      const processInput = input.now === undefined
-        ? { subjectId: readRequest.subjectId, events: Object.freeze(events) }
-        : { subjectId: readRequest.subjectId, events: Object.freeze(events), now: input.now };
-      const processResult = await options.engine.process(processInput);
+      const processResult = await options.engine.process({
+        subjectId: readRequest.subjectId,
+        events: Object.freeze(events),
+        ...(input.now === undefined ? {} : { now: input.now })
+      });
+
       const result: RecommendationNormalizedEvidencePipelineProcessResult = {
         subjectId: readRequest.subjectId,
         evidence: batch.evidence,
