@@ -49,41 +49,32 @@ export interface RecommendationActivityPodsProfileTransportDeleteRequest
 export type RecommendationActivityPodsProfileTransportReadResult =
   | { status: "not_found" }
   | { status: "found"; document: unknown; entityTag: string };
-
 export type RecommendationActivityPodsProfileTransportWriteResult =
   | { status: "written"; entityTag: string }
   | { status: "precondition_failed" };
-
 export type RecommendationActivityPodsProfileTransportDeleteResult =
   | { status: "deleted" }
   | { status: "not_found" }
   | { status: "precondition_failed" };
 
 export interface RecommendationActivityPodsProfileTransport {
-  read(
-    request: RecommendationActivityPodsProfileTransportRequest
-  ):
-    | RecommendationActivityPodsProfileTransportReadResult
-    | Promise<RecommendationActivityPodsProfileTransportReadResult>;
-  write(
-    request: RecommendationActivityPodsProfileTransportWriteRequest
-  ):
-    | RecommendationActivityPodsProfileTransportWriteResult
-    | Promise<RecommendationActivityPodsProfileTransportWriteResult>;
-  delete(
-    request: RecommendationActivityPodsProfileTransportDeleteRequest
-  ):
-    | RecommendationActivityPodsProfileTransportDeleteResult
-    | Promise<RecommendationActivityPodsProfileTransportDeleteResult>;
+  read(request: RecommendationActivityPodsProfileTransportRequest):
+    RecommendationActivityPodsProfileTransportReadResult |
+    Promise<RecommendationActivityPodsProfileTransportReadResult>;
+  write(request: RecommendationActivityPodsProfileTransportWriteRequest):
+    RecommendationActivityPodsProfileTransportWriteResult |
+    Promise<RecommendationActivityPodsProfileTransportWriteResult>;
+  delete(request: RecommendationActivityPodsProfileTransportDeleteRequest):
+    RecommendationActivityPodsProfileTransportDeleteResult |
+    Promise<RecommendationActivityPodsProfileTransportDeleteResult>;
 }
 
 export type RecommendationActivityPodsProfileAuthorizer = (
   operation: RecommendationActivityPodsResourceOperation,
   resourceUri: string,
   subjectKey: string
-) =>
-  | RecommendationActivityPodsResourceGrantEvidenceInput
-  | Promise<RecommendationActivityPodsResourceGrantEvidenceInput>;
+) => RecommendationActivityPodsResourceGrantEvidenceInput |
+  Promise<RecommendationActivityPodsResourceGrantEvidenceInput>;
 
 export interface RecommendationActivityPodsProfilePersistenceAdapterInput {
   subjectId: string;
@@ -106,7 +97,6 @@ export interface RecommendationActivityPodsProfilePersistenceAdapterInput {
 
 export class RecommendationActivityPodsProfileConflictError extends Error {
   readonly code = "activitypods_profile_conflict" as const;
-
   constructor() {
     super("ActivityPods profile resource changed concurrently.");
     this.name = "RecommendationActivityPodsProfileConflictError";
@@ -117,71 +107,49 @@ const MAX_IDENTIFIER_LENGTH = 2_048;
 const MAX_CONTEXT_LENGTH = 16 * 1_024;
 const MAX_ENTITY_TAG_LENGTH = 512;
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function boundedString(value: unknown, maximum: number, label: string): string {
+function string(value: unknown, maximum: number, label: string): string {
   if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value !== value.trim() ||
-    value.length > maximum ||
-    hasUnsafeControlCharacter(value)
-  ) {
-    throw new TypeError(`Invalid ActivityPods profile ${label}.`);
-  }
+    typeof value !== "string" || value.trim().length === 0 || value !== value.trim() ||
+    value.length > maximum || hasUnsafeControlCharacter(value)
+  ) throw new TypeError(`Invalid ActivityPods profile ${label}.`);
   return value;
 }
 
-function httpsUrl(value: unknown, label: string, requireDirectory = false): string {
-  const raw = boundedString(value, MAX_IDENTIFIER_LENGTH, label);
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new TypeError(`Invalid ActivityPods profile ${label}.`);
-  }
-  const hostname = url.hostname.toLocaleLowerCase("en-US").replace(/\.+$/u, "");
+function url(value: unknown, label: string, directory = false): string {
+  let output: URL;
+  try { output = new URL(string(value, MAX_IDENTIFIER_LENGTH, label)); }
+  catch { throw new TypeError(`Invalid ActivityPods profile ${label}.`); }
+  const host = output.hostname.toLocaleLowerCase("en-US").replace(/\.+$/u, "");
   if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.hash !== "" ||
-    url.search !== "" ||
-    hostname.length === 0 ||
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local") ||
-    /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(hostname) ||
-    hostname.includes(":") ||
-    (requireDirectory && !url.pathname.endsWith("/"))
-  ) {
-    throw new TypeError(`Invalid ActivityPods profile ${label}.`);
-  }
-  url.hostname = hostname;
-  return url.toString();
+    output.protocol !== "https:" || output.username !== "" || output.password !== "" ||
+    output.hash !== "" || output.search !== "" || host.length === 0 || host === "localhost" ||
+    host.endsWith(".localhost") || host.endsWith(".local") ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(host) || host.includes(":") ||
+    (directory && !output.pathname.endsWith("/"))
+  ) throw new TypeError(`Invalid ActivityPods profile ${label}.`);
+  output.hostname = host;
+  return output.toString();
 }
 
-function isWithin(childUri: string, parentUri: string): boolean {
-  const child = new URL(childUri);
-  const parent = new URL(parentUri);
-  return child.origin === parent.origin && child.pathname.startsWith(parent.pathname);
+function within(child: string, parent: string): boolean {
+  const childUrl = new URL(child);
+  const parentUrl = new URL(parent);
+  return childUrl.origin === parentUrl.origin && childUrl.pathname.startsWith(parentUrl.pathname);
 }
 
-function jsonLdContext(value: unknown): string | undefined {
+function contextHeader(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  const raw = boundedString(value, MAX_CONTEXT_LENGTH, "JSON-LD context header");
-  try {
-    return httpsUrl(raw, "JSON-LD context header");
-  } catch {
+  const raw = string(value, MAX_CONTEXT_LENGTH, "JSON-LD context header");
+  try { return url(raw, "JSON-LD context header"); }
+  catch {
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new TypeError("Invalid ActivityPods profile JSON-LD context header.");
-    }
-    if (!isPlainRecord(parsed) && !Array.isArray(parsed)) {
+    try { parsed = JSON.parse(raw); }
+    catch { throw new TypeError("Invalid ActivityPods profile JSON-LD context header."); }
+    if (!isRecord(parsed) && !Array.isArray(parsed)) {
       throw new TypeError("Invalid ActivityPods profile JSON-LD context header.");
     }
     return JSON.stringify(parsed);
@@ -189,17 +157,25 @@ function jsonLdContext(value: unknown): string | undefined {
 }
 
 function entityTag(value: unknown): string {
-  const tag = boundedString(value, MAX_ENTITY_TAG_LENGTH, "entity tag");
-  const strong = tag.startsWith("\"") && tag.endsWith("\"");
-  const weak = tag.startsWith("W/\"") && tag.endsWith("\"");
-  if ((!strong && !weak) || tag === "\"\"" || tag === "W/\"\"") {
+  const output = string(value, MAX_ENTITY_TAG_LENGTH, "entity tag");
+  const strong = output.startsWith("\"") && output.endsWith("\"");
+  const weak = output.startsWith("W/\"") && output.endsWith("\"");
+  if ((!strong && !weak) || output === "\"\"" || output === "W/\"\"") {
     throw new TypeError("Invalid ActivityPods profile entity tag.");
   }
-  return tag;
+  return output;
 }
 
-function normalizeReadResult(value: unknown): RecommendationActivityPodsProfileTransportReadResult {
-  if (!isPlainRecord(value) || (value.status !== "found" && value.status !== "not_found")) {
+function strongEntityTag(value: string): string {
+  const output = entityTag(value);
+  if (output.startsWith("W/")) {
+    throw new TypeError("ActivityPods profile conditional mutations require a strong entity tag.");
+  }
+  return output;
+}
+
+function readResult(value: unknown): RecommendationActivityPodsProfileTransportReadResult {
+  if (!isRecord(value) || (value.status !== "found" && value.status !== "not_found")) {
     throw new TypeError("Invalid ActivityPods profile transport read result.");
   }
   if (value.status === "not_found") {
@@ -209,15 +185,11 @@ function normalizeReadResult(value: unknown): RecommendationActivityPodsProfileT
     return Object.freeze({ status: "not_found" });
   }
   if (!("document" in value)) throw new TypeError("Invalid ActivityPods profile found response.");
-  return Object.freeze({
-    status: "found",
-    document: value.document,
-    entityTag: entityTag(value.entityTag)
-  });
+  return Object.freeze({ status: "found", document: value.document, entityTag: entityTag(value.entityTag) });
 }
 
-function normalizeWriteResult(value: unknown): RecommendationActivityPodsProfileTransportWriteResult {
-  if (!isPlainRecord(value) || (value.status !== "written" && value.status !== "precondition_failed")) {
+function writeResult(value: unknown): RecommendationActivityPodsProfileTransportWriteResult {
+  if (!isRecord(value) || (value.status !== "written" && value.status !== "precondition_failed")) {
     throw new TypeError("Invalid ActivityPods profile transport write result.");
   }
   if (value.status === "precondition_failed") {
@@ -229,124 +201,94 @@ function normalizeWriteResult(value: unknown): RecommendationActivityPodsProfile
   return Object.freeze({ status: "written", entityTag: entityTag(value.entityTag) });
 }
 
-function normalizeDeleteResult(value: unknown): RecommendationActivityPodsProfileTransportDeleteResult {
+function deleteResult(value: unknown): RecommendationActivityPodsProfileTransportDeleteResult {
   if (
-    !isPlainRecord(value) ||
+    !isRecord(value) ||
     (value.status !== "deleted" && value.status !== "not_found" && value.status !== "precondition_failed") ||
     Object.keys(value).some((key) => key !== "status")
-  ) {
-    throw new TypeError("Invalid ActivityPods profile transport delete result.");
-  }
+  ) throw new TypeError("Invalid ActivityPods profile transport delete result.");
   return Object.freeze({ status: value.status }) as RecommendationActivityPodsProfileTransportDeleteResult;
 }
 
-function profileResourceUri(containerUri: string, subjectKey: string): string {
+function resourceUri(container: string, subjectKey: string): string {
   assertValidRecommendationProfileSubjectKey(subjectKey);
-  const resourceUri = new URL(
+  const output = new URL(
     `${encodeURIComponent(subjectKey)}${RECOMMENDATION_ACTIVITYPODS_PROFILE_EXTENSION}`,
-    containerUri
+    container
   ).toString();
-  if (!isWithin(resourceUri, containerUri)) {
-    throw new TypeError("ActivityPods profile resource escaped its container.");
-  }
-  return resourceUri;
+  if (!within(output, container)) throw new TypeError("ActivityPods profile resource escaped its container.");
+  return output;
 }
 
-function normalizeRecord(value: unknown): RecommendationProfileStoreRecord {
-  const record = normalizeRecommendationProfileStoreRecord(value, { pruneExpiredEntries: false });
-  if (record === null) throw new TypeError("Invalid ActivityPods profile store record.");
-  return record;
+function record(value: unknown): RecommendationProfileStoreRecord {
+  const output = normalizeRecommendationProfileStoreRecord(value, { pruneExpiredEntries: false });
+  if (output === null) throw new TypeError("Invalid ActivityPods profile store record.");
+  return output;
 }
 
 export function createRecommendationActivityPodsProfilePersistenceAdapter(
   input: RecommendationActivityPodsProfilePersistenceAdapterInput
 ): RecommendationProfilePersistenceAdapter {
   if (
-    !isPlainRecord(input) ||
-    !isPlainRecord(input.transport) ||
-    typeof input.transport.read !== "function" ||
-    typeof input.transport.write !== "function" ||
-    typeof input.transport.delete !== "function" ||
-    !isPlainRecord(input.codec) ||
-    typeof input.codec.encode !== "function" ||
-    typeof input.codec.decode !== "function" ||
-    typeof input.authorize !== "function" ||
-    (input.now !== undefined && typeof input.now !== "function")
-  ) {
-    throw new TypeError("Invalid ActivityPods profile persistence adapter input.");
-  }
+    !isRecord(input) || !isRecord(input.transport) || typeof input.transport.read !== "function" ||
+    typeof input.transport.write !== "function" || typeof input.transport.delete !== "function" ||
+    !isRecord(input.codec) || typeof input.codec.encode !== "function" || typeof input.codec.decode !== "function" ||
+    typeof input.authorize !== "function" || (input.now !== undefined && typeof input.now !== "function")
+  ) throw new TypeError("Invalid ActivityPods profile persistence adapter input.");
 
-  const configuredSubjectId = boundedString(input.subjectId, MAX_IDENTIFIER_LENGTH, "subject ID");
-  const applicationActorUri = httpsUrl(input.applicationActorUri, "application actor URI");
-  const ownerActorUri = httpsUrl(input.ownerActorUri, "owner actor URI");
-  const ownerWebId = httpsUrl(input.ownerWebId, "owner WebID");
-  if (ownerActorUri !== ownerWebId) {
-    throw new TypeError("ActivityPods profile owner actor must equal the owner WebID.");
-  }
-  if (applicationActorUri === ownerActorUri) {
-    throw new TypeError("ActivityPods profile application actor must be distinct from the owner actor.");
-  }
+  const subjectId = string(input.subjectId, MAX_IDENTIFIER_LENGTH, "subject ID");
+  const applicationActorUri = url(input.applicationActorUri, "application actor URI");
+  const ownerActorUri = url(input.ownerActorUri, "owner actor URI");
+  const ownerWebId = url(input.ownerWebId, "owner WebID");
+  if (ownerActorUri !== ownerWebId) throw new TypeError("ActivityPods profile owner actor must equal the owner WebID.");
+  if (applicationActorUri === ownerActorUri) throw new TypeError("ActivityPods profile application actor must be distinct from the owner actor.");
   const ownerOrigin = new URL(ownerWebId).origin;
-  const storageRootUri = httpsUrl(input.storageRootUri, "storage root URI", true);
-  const profileContainerUri = httpsUrl(input.profileContainerUri, "container URI", true);
-  const applicationRegistrationUri = httpsUrl(
-    input.applicationRegistrationUri,
-    "application registration URI"
-  );
-  const accessGrantUri = httpsUrl(input.accessGrantUri, "access grant URI");
-  const dataGrantUri = httpsUrl(input.dataGrantUri, "data grant URI");
-  for (const [uri, label] of [
-    [storageRootUri, "storage root URI"],
-    [profileContainerUri, "container URI"],
+  const storageRootUri = url(input.storageRootUri, "storage root URI", true);
+  const profileContainerUri = url(input.profileContainerUri, "container URI", true);
+  const applicationRegistrationUri = url(input.applicationRegistrationUri, "application registration URI");
+  const accessGrantUri = url(input.accessGrantUri, "access grant URI");
+  const dataGrantUri = url(input.dataGrantUri, "data grant URI");
+  for (const [value, label] of [
+    [storageRootUri, "storage root URI"], [profileContainerUri, "container URI"],
     [applicationRegistrationUri, "application registration URI"],
-    [accessGrantUri, "access grant URI"],
-    [dataGrantUri, "data grant URI"]
+    [accessGrantUri, "access grant URI"], [dataGrantUri, "data grant URI"]
   ] as const) {
-    if (new URL(uri).origin !== ownerOrigin) {
+    if (new URL(value).origin !== ownerOrigin) {
       throw new TypeError(`ActivityPods profile ${label} must use the owner Pod authority.`);
     }
   }
-  if (!isWithin(profileContainerUri, storageRootUri)) {
+  if (!within(profileContainerUri, storageRootUri)) {
     throw new TypeError("ActivityPods profile container must be within the owner storage root.");
   }
-  const shapeTreeUri = httpsUrl(input.shapeTreeUri, "shape tree URI");
-  const context = jsonLdContext(input.jsonLdContext);
+  const shapeTreeUri = url(input.shapeTreeUri, "shape tree URI");
+  const jsonLdContext = contextHeader(input.jsonLdContext);
 
   const authorize = async (
     operation: RecommendationActivityPodsResourceOperation,
-    resourceUri: string,
+    profileResourceUri: string,
     subjectKey: string
   ): Promise<RecommendationActivityPodsResourceGrantEvidence> => {
     const evidence = requireRecommendationActivityPodsResourceOperation(
-      await input.authorize(operation, resourceUri, subjectKey),
+      await input.authorize(operation, profileResourceUri, subjectKey),
       operation,
-      { now: input.now?.() }
+      input.now === undefined ? {} : { now: input.now() }
     );
     if (
-      evidence.subjectId !== configuredSubjectId ||
-      evidence.applicationActorUri !== applicationActorUri ||
+      evidence.subjectId !== subjectId || evidence.applicationActorUri !== applicationActorUri ||
       evidence.applicationRegistrationUri !== applicationRegistrationUri ||
-      evidence.accessGrantUri !== accessGrantUri ||
-      evidence.dataGrantUri !== dataGrantUri ||
-      evidence.ownerActorUri !== ownerActorUri ||
-      evidence.ownerWebId !== ownerWebId ||
-      evidence.storageRootUri !== storageRootUri ||
-      evidence.containerUri !== profileContainerUri ||
-      evidence.resourceUri !== resourceUri ||
-      evidence.shapeTreeUri !== shapeTreeUri
-    ) {
-      throw new TypeError(
-        "ActivityPods profile grant does not match the configured subject, application, owner, storage, resource, or access need."
-      );
-    }
+      evidence.accessGrantUri !== accessGrantUri || evidence.dataGrantUri !== dataGrantUri ||
+      evidence.ownerActorUri !== ownerActorUri || evidence.ownerWebId !== ownerWebId ||
+      evidence.storageRootUri !== storageRootUri || evidence.containerUri !== profileContainerUri ||
+      evidence.resourceUri !== profileResourceUri || evidence.shapeTreeUri !== shapeTreeUri
+    ) throw new TypeError("ActivityPods profile grant does not match the configured subject, application, owner, storage, resource, or access need.");
     return evidence;
   };
 
   const request = (
-    resourceUri: string,
+    profileResourceUri: string,
     evidence: RecommendationActivityPodsResourceGrantEvidence
   ): RecommendationActivityPodsProfileTransportRequest => ({
-    resourceUri,
+    resourceUri: profileResourceUri,
     applicationActorUri,
     ownerWebId,
     applicationRegistrationUri: evidence.applicationRegistrationUri,
@@ -354,66 +296,51 @@ export function createRecommendationActivityPodsProfilePersistenceAdapter(
     dataGrantUri: evidence.dataGrantUri,
     shapeTreeUri,
     mediaType: RECOMMENDATION_ACTIVITYPODS_PROFILE_MEDIA_TYPE,
-    ...(context === undefined ? {} : { jsonLdContext: context }),
+    ...(jsonLdContext === undefined ? {} : { jsonLdContext }),
     ...(input.signal === undefined ? {} : { signal: input.signal })
   });
 
   return Object.freeze({
-    async readProfileRecord(rawSubjectKey: string): Promise<unknown | null> {
-      assertValidRecommendationProfileSubjectKey(rawSubjectKey);
-      const resourceUri = profileResourceUri(profileContainerUri, rawSubjectKey);
-      const evidence = await authorize("read", resourceUri, rawSubjectKey);
-      const result = normalizeReadResult(await input.transport.read(request(resourceUri, evidence)));
+    async readProfileRecord(subjectKey: string): Promise<unknown | null> {
+      const profileResourceUri = resourceUri(profileContainerUri, subjectKey);
+      const evidence = await authorize("read", profileResourceUri, subjectKey);
+      const result = readResult(await input.transport.read(request(profileResourceUri, evidence)));
       if (result.status === "not_found") return null;
-      const decoded = await input.codec.decode(result.document);
-      const record = normalizeRecord(decoded);
-      if (record.subjectKey !== rawSubjectKey) {
-        throw new TypeError("ActivityPods profile document subject key mismatch.");
-      }
-      return record;
+      const output = record(await input.codec.decode(result.document));
+      if (output.subjectKey !== subjectKey) throw new TypeError("ActivityPods profile document subject key mismatch.");
+      return output;
     },
 
-    async writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<RecommendationProfileStoreRecord> {
-      const normalized = normalizeRecord(record);
-      const resourceUri = profileResourceUri(profileContainerUri, normalized.subjectKey);
-      const evidence = await authorize("write", resourceUri, normalized.subjectKey);
-      const baseRequest = request(resourceUri, evidence);
-      const current = normalizeReadResult(await input.transport.read(baseRequest));
+    async writeProfileRecord(value: RecommendationProfileStoreRecord): Promise<RecommendationProfileStoreRecord> {
+      const normalized = record(value);
+      const profileResourceUri = resourceUri(profileContainerUri, normalized.subjectKey);
+      const evidence = await authorize("write", profileResourceUri, normalized.subjectKey);
+      const base = request(profileResourceUri, evidence);
+      const current = readResult(await input.transport.read(base));
       const document = await input.codec.encode(normalized);
-      if (!isPlainRecord(document)) {
-        throw new TypeError("Invalid ActivityPods profile encoded document.");
-      }
-      const result = normalizeWriteResult(
-        await input.transport.write({
-          ...baseRequest,
-          document,
-          condition: current.status === "found"
-            ? { kind: "if_match", entityTag: current.entityTag }
-            : { kind: "if_none_match", value: "*" }
-        })
-      );
-      if (result.status === "precondition_failed") {
-        throw new RecommendationActivityPodsProfileConflictError();
-      }
+      if (!isRecord(document)) throw new TypeError("Invalid ActivityPods profile encoded document.");
+      const result = writeResult(await input.transport.write({
+        ...base,
+        document,
+        condition: current.status === "found"
+          ? { kind: "if_match", entityTag: strongEntityTag(current.entityTag) }
+          : { kind: "if_none_match", value: "*" }
+      }));
+      if (result.status === "precondition_failed") throw new RecommendationActivityPodsProfileConflictError();
       return normalized;
     },
 
-    async deleteProfileRecord(rawSubjectKey: string): Promise<void> {
-      assertValidRecommendationProfileSubjectKey(rawSubjectKey);
-      const resourceUri = profileResourceUri(profileContainerUri, rawSubjectKey);
-      const evidence = await authorize("delete", resourceUri, rawSubjectKey);
-      const baseRequest = request(resourceUri, evidence);
-      const current = normalizeReadResult(await input.transport.read(baseRequest));
+    async deleteProfileRecord(subjectKey: string): Promise<void> {
+      const profileResourceUri = resourceUri(profileContainerUri, subjectKey);
+      const evidence = await authorize("delete", profileResourceUri, subjectKey);
+      const base = request(profileResourceUri, evidence);
+      const current = readResult(await input.transport.read(base));
       if (current.status === "not_found") return;
-      const result = normalizeDeleteResult(
-        await input.transport.delete({
-          ...baseRequest,
-          condition: { kind: "if_match", entityTag: current.entityTag }
-        })
-      );
-      if (result.status === "precondition_failed") {
-        throw new RecommendationActivityPodsProfileConflictError();
-      }
+      const result = deleteResult(await input.transport.delete({
+        ...base,
+        condition: { kind: "if_match", entityTag: strongEntityTag(current.entityTag) }
+      }));
+      if (result.status === "precondition_failed") throw new RecommendationActivityPodsProfileConflictError();
     }
   });
 }
