@@ -147,7 +147,7 @@ test("execution orchestrator rejects non-finite scores before explanation or ser
   await assert.rejects(() => orchestrator.execute({
     subjectId: "subject-1",
     requestId: "request-invalid"
-  }), /candidate score/u);
+  }), /score component/u);
   assert.equal(explanationCalls, 0);
 });
 
