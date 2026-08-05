@@ -51,6 +51,7 @@ export * from "./recommendation/labeler-signal-policy.js";
 export * from "./recommendation/label-semantic-classification.js";
 export * from "./recommendation/label-signal-effect-policy.js";
 export * from "./recommendation/consent-gated-source-adapter.js";
+export * from "./recommendation/normalized-evidence-pipeline.js";
 export * from "./recommendation/interest-signal.js";
 export * from "./recommendation/interest-signal-derivation.js";
 export * from "./recommendation/labeler-interest-signal-derivation.js";
