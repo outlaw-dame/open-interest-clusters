@@ -10,25 +10,27 @@ Open Interest Clusters is a portable, privacy-preserving recommendation and sema
 
 The core remains protocol-neutral, runtime-neutral, storage-neutral, and deny-by-default. Provider transports, credentials, retry policy, HTTP signatures, OAuth, persistence engines, and deployment frameworks remain dependency-injected or external.
 
-### Recommendation-data privacy invariant
+### Recommendation-data privacy policy
 
-Interest inference may use only:
+Project-owned provider integrations and deployment guidance permit interest inference from:
 
 - explicitly public posts;
 - explicitly public account metadata;
 - explicitly public topic, hashtag, collection, and provider metadata;
 - local user selections or feedback when the user explicitly opts in to the applicable local processing.
 
-Authenticated access is not, by itself, permission to use private data for interest inference. Followed hashtags, private timelines, follower-only posts, direct messages, and equivalent viewer-private state are not recommendation-interest signals.
+Authenticated access is not, by itself, permission to use private data for interest inference. Followed hashtags, private timelines, follower-only posts, direct messages, and equivalent viewer-private state are not intended recommendation-interest signals.
 
-The narrow private-data exception is moderation and safety preferences. Blocks, mutes, labeler subscriptions, and similar settings may filter, suppress, or explain candidates, but must not be converted into positive interest evidence.
+This is not yet a repository-wide enforced invariant. The generic consent evaluator can authorize private-data ranking when a caller explicitly configures that use, and generic signal derivation currently trusts an allowed consent decision. Until a shared public-only derivation guard is implemented, integrations must prevent private source items from entering recommendation-interest derivation.
+
+The narrow private-data exception in project-owned recommendation flows is moderation and safety preferences. Blocks, mutes, labeler subscriptions, and similar settings may filter, suppress, or explain candidates, but must not be converted into positive interest evidence.
 
 ## Current maturity
 
 | Area | Status |
 | --- | --- |
 | Dataset, schema, normalization, catalog | Mature library capability |
-| Consent, privacy, deletion contracts | Mature library capability |
+| Consent, privacy, deletion contracts | Mature library capability; public-only inference is not yet globally enforced in generic derivation |
 | Interest signals and profile primitives | Implemented |
 | Embedding, ANN, graph, scoring, serving | Implemented primitives |
 | End-to-end orchestration | Implemented reusable orchestration layer, still not a turnkey service |
@@ -53,7 +55,7 @@ The narrow private-data exception is moderation and safety preferences. Blocks, 
 - Legacy Fediverse follow-pack ingestion with moved-account resolution, activity recency, discoverability, opt-out, block, mute, provider-policy, and identity-binding checks.
 - Public account featured hashtags and public instance trending hashtags.
 
-Home and list timeline readers exist as provider adapters because applications may need normalized reads for non-recommendation workflows. Their private contents must not be used as recommendation-interest evidence.
+Home and list timeline readers exist as provider adapters because applications may need normalized reads for non-recommendation workflows. Project policy forbids using their private contents as recommendation-interest evidence, but the generic derivation APIs do not yet enforce that prohibition automatically.
 
 ### ATProto sources
 
@@ -74,8 +76,9 @@ Home and list timeline readers exist as provider adapters because applications m
 ## Core privacy and safety behavior
 
 - Ambiguous authorization or consent fails closed.
-- Private recommendation-interest inference is prohibited unless an explicit local-only user action contract allows it.
-- Moderation settings affect eligibility and filtering only.
+- Project-owned integrations reject or exclude private recommendation-interest inputs.
+- Generic derivation callers must enforce the public-only project policy until a shared guard exists.
+- Moderation settings affect eligibility and filtering only in project-owned recommendation flows.
 - Source records, URLs, identifiers, timestamps, cursors, limits, and signatures are bounded and runtime-validated.
 - Local-network, credential-bearing, malformed, cross-origin, and endpoint-confused URLs are rejected where applicable.
 - Provider-specific semantics remain outside generic scoring contracts.
@@ -94,20 +97,25 @@ Home and list timeline readers exist as provider adapters because applications m
    - Keep private personalization local or Pod-controlled by default.
    - Preserve interoperability for providers that extend ActivityPub without adopting ATProto.
 
-3. **Retraction integration across profiles and embeddings**
+3. **Repository-wide public-only derivation guard**
+   - Prevent private or authenticated-only provider records from becoming recommendation-interest signals.
+   - Preserve explicitly opted-in local selections and local feedback.
+   - Keep moderation and safety settings available for filtering without converting them into affinity evidence.
+
+4. **Retraction integration across profiles and embeddings**
    - Ensure source deletion, label negation, consent revocation, and provider-policy changes remove derived contributions consistently.
 
-4. **Reference persistence adapters**
+5. **Reference persistence adapters**
    - IndexedDB/SQLite local-first path.
    - Solid Pod path.
    - Durable Postgres/pgvector path.
 
-5. **Operational hardening**
+6. **Operational hardening**
    - Privacy-safe health and freshness reporting.
    - Property, fuzz, replay, concurrency, cancellation, and recovery tests.
    - Benchmarks, package examples, release automation, and compatibility policy.
 
-6. **Turnkey service composition**
+7. **Turnkey service composition**
    - Optional operator HTTP API and workers built around the reusable core, without making centralized operation mandatory.
 
 ## Correct next execution order
@@ -115,9 +123,10 @@ Home and list timeline readers exist as provider adapters because applications m
 1. Keep README and architecture/status documentation synchronized with merged behavior.
 2. Add generic public ActivityPub actor/outbox ingestion.
 3. Add the ActivityPods/Solid live deployment slice.
-4. Integrate retractions through profile and embedding state.
-5. Add reference local-first and durable persistence paths.
-6. Add observability, adversarial testing, performance budgets, and release tooling.
+4. Add the repository-wide public-only derivation guard.
+5. Integrate retractions through profile and embedding state.
+6. Add reference local-first and durable persistence paths.
+7. Add observability, adversarial testing, performance budgets, and release tooling.
 
 A repository-driven dependency or security finding may change this order, but that change must be documented before implementation.
 
@@ -126,6 +135,7 @@ A repository-driven dependency or security finding may change this order, but th
 The project should not be described as a complete hosted recommendation service until it has:
 
 - generic ActivityPub and ActivityPods/Solid live paths;
+- repository-wide enforcement of the public-only recommendation-interest policy;
 - end-to-end deletion and retraction propagation;
 - at least one tested local-first persistence implementation;
 - at least one tested durable server implementation;
