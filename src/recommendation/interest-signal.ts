@@ -10,6 +10,7 @@ import {
   type RecommendationProtocol,
   type RecommendationSourceVisibility
 } from "./consent.js";
+import { requireRecommendationPublicSignalPolicy } from "./public-signal-policy.js";
 import {
   normalizeRecommendationSourceItem,
   RECOMMENDATION_SOURCE_ITEM_KINDS,
@@ -55,11 +56,9 @@ export const RECOMMENDATION_INTEREST_ACTIONS = [
 export type RecommendationInterestAction = typeof RECOMMENDATION_INTEREST_ACTIONS[number];
 
 export const RECOMMENDATION_INTEREST_POLARITIES = ["positive", "negative", "neutral"] as const;
-
 export type RecommendationInterestPolarity = typeof RECOMMENDATION_INTEREST_POLARITIES[number];
 
 export const RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES = ["local_only", "server_allowed", "aggregate_only"] as const;
-
 export type RecommendationInterestPrivacyBoundary = typeof RECOMMENDATION_INTEREST_PRIVACY_BOUNDARIES[number];
 
 export interface RecommendationInterestTarget {
@@ -153,10 +152,7 @@ function isBoundedUnitNumber(value: unknown): value is number {
 }
 
 function isPrivacySafeTargetKey(value: unknown): value is string {
-  if (!isNonEmptyString(value)) {
-    return false;
-  }
-
+  if (!isNonEmptyString(value)) return false;
   const trimmed = value.trim();
   return (
     trimmed === value &&
@@ -172,25 +168,16 @@ function isPrivacySafeDomainTargetKey(value: unknown): value is string {
 }
 
 function isInterestTarget(value: unknown): value is RecommendationInterestTarget {
-  if (!isObject(value)) {
-    return false;
-  }
-
+  if (!isObject(value)) return false;
   const candidate = value as Partial<RecommendationInterestTarget>;
-  if (!hasString(TARGET_KIND_SET, candidate.kind)) {
-    return false;
-  }
-
+  if (!hasString(TARGET_KIND_SET, candidate.kind)) return false;
   return candidate.kind === "domain"
     ? isPrivacySafeDomainTargetKey(candidate.key)
     : isPrivacySafeTargetKey(candidate.key);
 }
 
 function isInterestEvidence(value: unknown): value is RecommendationInterestEvidence {
-  if (!isObject(value)) {
-    return false;
-  }
-
+  if (!isObject(value)) return false;
   const candidate = value as Partial<RecommendationInterestEvidence>;
   return (
     hasString(SOURCE_ITEM_KIND_SET, candidate.sourceItemKind) &&
@@ -203,10 +190,7 @@ function isInterestEvidence(value: unknown): value is RecommendationInterestEvid
 }
 
 function isConsentEvent(value: unknown): value is PrivacySafeRecommendationConsentEvent {
-  if (!isObject(value)) {
-    return false;
-  }
-
+  if (!isObject(value)) return false;
   const candidate = value as Partial<PrivacySafeRecommendationConsentEvent>;
   return (
     candidate.decision === "allow" &&
@@ -251,10 +235,7 @@ function cloneConsentEvent(consent: PrivacySafeRecommendationConsentEvent): Priv
 }
 
 function isValidInterestSignal(value: unknown): value is RecommendationInterestSignal {
-  if (!isObject(value)) {
-    return false;
-  }
-
+  if (!isObject(value)) return false;
   const candidate = value as Partial<RecommendationInterestSignal>;
   return (
     isInterestTarget(candidate.target) &&
@@ -279,9 +260,7 @@ export function isRecommendationInterestSignal(value: unknown): value is Recomme
 }
 
 export function normalizeRecommendationInterestSignal(input: RecommendationInterestSignalInput): RecommendationInterestSignal {
-  if (!isObject(input)) {
-    throw new TypeError("Invalid recommendation interest signal input.");
-  }
+  if (!isObject(input)) throw new TypeError("Invalid recommendation interest signal input.");
 
   const candidate: RecommendationInterestSignal = {
     target: input.target,
@@ -294,14 +273,21 @@ export function normalizeRecommendationInterestSignal(input: RecommendationInter
     evidence: input.evidence,
     consent: input.consent
   };
-
-  if (input.expiresAt !== undefined) {
-    candidate.expiresAt = input.expiresAt;
-  }
+  if (input.expiresAt !== undefined) candidate.expiresAt = input.expiresAt;
 
   if (!isValidInterestSignal(candidate)) {
     throw new TypeError("Invalid recommendation interest signal.");
   }
+
+  requireRecommendationPublicSignalPolicy({
+    action: candidate.action,
+    polarity: candidate.polarity,
+    targetKind: candidate.target.kind,
+    dataUse: candidate.dataUse,
+    privacyBoundary: candidate.privacyBoundary,
+    evidence: candidate.evidence,
+    consent: candidate.consent
+  });
 
   const normalized: RecommendationInterestSignal = {
     target: cloneTarget(candidate.target),
@@ -314,11 +300,7 @@ export function normalizeRecommendationInterestSignal(input: RecommendationInter
     evidence: cloneEvidence(candidate.evidence),
     consent: cloneConsentEvent(candidate.consent)
   };
-
-  if (candidate.expiresAt !== undefined) {
-    normalized.expiresAt = candidate.expiresAt;
-  }
-
+  if (candidate.expiresAt !== undefined) normalized.expiresAt = candidate.expiresAt;
   return Object.freeze(normalized);
 }
 
@@ -336,9 +318,7 @@ function sourceEvidence(source: RecommendationSourceItem): RecommendationInteres
 export function createRecommendationInterestSignalFromSource(
   input: RecommendationInterestSignalFromSourceInput
 ): RecommendationInterestSignal {
-  if (!isObject(input)) {
-    throw new TypeError("Invalid recommendation interest signal source input.");
-  }
+  if (!isObject(input)) throw new TypeError("Invalid recommendation interest signal source input.");
 
   const source = normalizeRecommendationSourceItem(input.source);
   const consent = input.consentEvaluation.auditEvent;
@@ -352,17 +332,8 @@ export function createRecommendationInterestSignalFromSource(
     consent
   };
 
-  if (input.polarity !== undefined) {
-    signalInput.polarity = input.polarity;
-  }
-
-  if (input.privacyBoundary !== undefined) {
-    signalInput.privacyBoundary = input.privacyBoundary;
-  }
-
-  if (input.expiresAt !== undefined) {
-    signalInput.expiresAt = input.expiresAt;
-  }
-
+  if (input.polarity !== undefined) signalInput.polarity = input.polarity;
+  if (input.privacyBoundary !== undefined) signalInput.privacyBoundary = input.privacyBoundary;
+  if (input.expiresAt !== undefined) signalInput.expiresAt = input.expiresAt;
   return normalizeRecommendationInterestSignal(signalInput);
 }

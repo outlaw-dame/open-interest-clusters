@@ -202,7 +202,7 @@ test("onboarding profile seed rejects revoked consent before deriving profile st
   );
 });
 
-test("onboarding profile seed blocks server-side profile seeding unless the policy explicitly allows it", async () => {
+test("onboarding profile seed never permits application-server storage of user-selected preferences", async () => {
   const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
   const selection = createRecommendationOnboardingSelection({
     catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
@@ -221,25 +221,25 @@ test("onboarding profile seed blocks server-side profile seeding unless the poli
     (error: unknown) => error instanceof RecommendationConsentDeniedError && error.reason === "consent.deny.server_processing_not_allowed"
   );
 
-  const serverAllowed = await createRecommendationOnboardingProfileSeed({
-    subjectId: SUBJECT_ID,
-    catalogIndex,
-    selection,
-    policy: Object.freeze({
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({
       subjectId: SUBJECT_ID,
-      allowedDataUses: LOCAL_PERSONALIZATION_USES,
-      privateDataUses: LOCAL_PERSONALIZATION_USES,
-      serverSideDataUses: LOCAL_PERSONALIZATION_USES
+      catalogIndex,
+      selection,
+      policy: Object.freeze({
+        subjectId: SUBJECT_ID,
+        allowedDataUses: LOCAL_PERSONALIZATION_USES,
+        privateDataUses: LOCAL_PERSONALIZATION_USES,
+        serverSideDataUses: LOCAL_PERSONALIZATION_USES
+      }),
+      privacyBoundary: "server_allowed",
+      profileStore: createInMemoryRecommendationProfileStore({
+        allowedPrivacyBoundaries: ["server_allowed"],
+        now: () => SELECTED_AT
+      })
     }),
-    privacyBoundary: "server_allowed",
-    profileStore: createInMemoryRecommendationProfileStore({
-      allowedPrivacyBoundaries: ["server_allowed"],
-      now: () => SELECTED_AT
-    })
-  });
-
-  assert.ok(serverAllowed.signals.every((signal) => signal.privacyBoundary === "server_allowed"));
-  assert.equal(serverAllowed.consent.serverSideProcessing, true);
+    (error: unknown) => error instanceof TypeError && error.message.includes("signal.deny.local_boundary_mismatch")
+  );
 });
 
 test("onboarding profile seed refuses aggregate-only boundaries for subject-level profile state", async () => {
