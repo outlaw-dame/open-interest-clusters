@@ -138,15 +138,15 @@ test("rejects revoked, expired, future-dated, duplicate, and unsafe grants", () 
 
 test("resource grants enforce read versus mutation access without inventing a new consent access basis", () => {
   const evidence = normalizeRecommendationActivityPodsResourceGrantEvidence(resourceGrant(), { now: NOW });
-  assert.equal(requireRecommendationActivityPodsResourceOperation(evidence, "read"), evidence);
-  assert.equal(requireRecommendationActivityPodsResourceOperation(evidence, "write"), evidence);
-  assert.equal(requireRecommendationActivityPodsResourceOperation(evidence, "delete"), evidence);
+  assert.deepEqual(requireRecommendationActivityPodsResourceOperation(evidence, "read"), evidence);
+  assert.deepEqual(requireRecommendationActivityPodsResourceOperation(evidence, "write"), evidence);
+  assert.deepEqual(requireRecommendationActivityPodsResourceOperation(evidence, "delete"), evidence);
 
   const readOnly = normalizeRecommendationActivityPodsResourceGrantEvidence({
     ...resourceGrant(),
     accessModes: ["read"]
   });
-  assert.equal(requireRecommendationActivityPodsResourceOperation(readOnly, "read"), readOnly);
+  assert.deepEqual(requireRecommendationActivityPodsResourceOperation(readOnly, "read"), readOnly);
   assert.throws(
     () => requireRecommendationActivityPodsResourceOperation(readOnly, "write"),
     /does not allow write/u
@@ -163,7 +163,7 @@ test("owner grants may perform resource operations but provider policy still fai
     accessModes: ["none"],
     isOwner: true
   });
-  assert.equal(requireRecommendationActivityPodsResourceOperation(ownerGrant, "delete"), ownerGrant);
+  assert.deepEqual(requireRecommendationActivityPodsResourceOperation(ownerGrant, "delete"), ownerGrant);
 
   const denied = normalizeRecommendationActivityPodsResourceGrantEvidence({
     ...resourceGrant(),
