@@ -107,21 +107,22 @@ test("normalized evidence hashes source identity and binds consent to source con
 });
 
 test("normalized evidence rejects consent evaluations that do not match their source", () => {
+  const mismatchedConsent = {
+    decision: "allow" as const,
+    reason: "consent.allow.explicit" as const,
+    dataUse: "ranking" as const,
+    protocol: "activitypub" as const,
+    sourceVisibility: "followers_only" as const,
+    accessBasis: "public_web" as const,
+    containsPrivateData: false,
+    containsThirdPartyData: false,
+    serverSideProcessing: false
+  };
   const readResult: RecommendationConsentGatedSourceAdapterReadResult = {
     items: [source],
     consentEvaluations: [{
-      decision: "allow",
-      auditEvent: {
-        decision: "allow",
-        reason: "consent.allow.explicit",
-        dataUse: "ranking",
-        protocol: "activitypub",
-        sourceVisibility: "followers_only",
-        accessBasis: "public_web",
-        containsPrivateData: false,
-        containsThirdPartyData: false,
-        serverSideProcessing: false
-      }
+      ...mismatchedConsent,
+      auditEvent: mismatchedConsent
     }],
     deniedItemCount: 0
   };
