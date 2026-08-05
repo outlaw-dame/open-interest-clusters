@@ -136,6 +136,25 @@ test("rejects revoked, expired, future-dated, duplicate, and unsafe grants", () 
   );
 });
 
+test("uses the current time by default so stale grants cannot authorize reads", () => {
+  assert.throws(
+    () => normalizeRecommendationActivityPodsBoxGrantEvidence({
+      ...boxGrant(),
+      checkedAt: "2020-01-01T00:00:00Z",
+      expiresAt: "2020-01-01T01:00:00Z"
+    }),
+    /expired/u
+  );
+  assert.throws(
+    () => normalizeRecommendationActivityPodsResourceGrantEvidence({
+      ...resourceGrant(),
+      checkedAt: "2020-01-01T00:00:00Z",
+      expiresAt: "2020-01-01T01:00:00Z"
+    }),
+    /expired/u
+  );
+});
+
 test("resource grants enforce read versus mutation access without inventing a new consent access basis", () => {
   const evidence = normalizeRecommendationActivityPodsResourceGrantEvidence(resourceGrant(), { now: NOW });
   assert.deepEqual(requireRecommendationActivityPodsResourceOperation(evidence, "read"), evidence);
