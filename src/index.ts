@@ -29,6 +29,7 @@ export * from "./recommendation/protocol-source-authorization.js";
 export * from "./recommendation/protocol-source-provider-records.js";
 export * from "./recommendation/protocol-provider-source-adapters.js";
 export * from "./recommendation/mastodon-timeline-source-adapter.js";
+export * from "./recommendation/activitypub-public-outbox-source-adapter.js";
 export * from "./recommendation/activitypub-curated-account-sets.js";
 export * from "./recommendation/account-recommendation-eligibility.js";
 export * from "./recommendation/legacy-fediverse-follow-packs.js";
