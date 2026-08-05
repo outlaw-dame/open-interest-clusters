@@ -545,11 +545,11 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
     });
   };
 
-  return Object.freeze({
+  const adapter: RecommendationActivityPodsLiveSourceAdapter = {
     id: adapterId,
     protocol: "activitypods",
     capabilities: CAPABILITIES,
-    read: async (request) => {
+    read: async (request: RecommendationSourceAdapterReadRequest) => {
       const result = await readChanges(request);
       return normalizeRecommendationSourceAdapterReadResult({
         items: result.items,
@@ -557,5 +557,6 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
       });
     },
     readChanges
-  });
+  };
+  return Object.freeze(adapter);
 }
