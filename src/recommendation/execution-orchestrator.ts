@@ -201,7 +201,7 @@ function normalizeExplanations(
     if (!Array.isArray(explanation.components) || explanation.components.length > MAX_EXPLANATION_COMPONENTS) {
       throw new TypeError("Invalid recommendation explanation components.");
     }
-    const components = explanation.components.map((component) => {
+    const components: RecommendationExplanation["components"] = explanation.components.map((component) => {
       if (!isPlainRecord(component)) throw new TypeError("Invalid recommendation explanation component.");
       return Object.freeze({
         label: boundedString(component.label, MAX_CATEGORY_LENGTH, "Invalid recommendation explanation component label."),
@@ -223,7 +223,9 @@ function normalizeExplanations(
 }
 
 function freezeResponse(response: CandidateServingResponse): CandidateServingResponse {
-  const candidates = response.candidates.map((candidate) => Object.freeze({ ...candidate }));
+  const candidates: CandidateServingResponse["candidates"] = response.candidates.map((candidate) =>
+    Object.freeze({ ...candidate })
+  );
   Object.freeze(candidates);
   const frozen: CandidateServingResponse = {
     requestId: response.requestId,
@@ -261,6 +263,13 @@ export function createRecommendationExecutionOrchestrator(
       const scoringInput = await options.buildScoringInput(context);
       if (!isPlainRecord(scoringInput)) throw new TypeError("Invalid recommendation execution scoring input.");
       let scored = normalizeScoredCandidates(hybridScore(scoringInput), maxCandidates);
+      const scoredCandidateCount = scored.length;
+      if (request.excludeClusterIds !== undefined && request.excludeClusterIds.length > 0) {
+        const excluded = new Set(request.excludeClusterIds);
+        const eligible = scored.filter((candidate) => !excluded.has(candidate.clusterId));
+        Object.freeze(eligible);
+        scored = eligible;
+      }
       const expected = new Set(scored.map((candidate) => candidate.clusterId));
 
       if (rerankEnabled) {
@@ -308,7 +317,7 @@ export function createRecommendationExecutionOrchestrator(
         subjectId: request.subjectId,
         profileUpdatedAt: profile.updatedAt,
         profileSignalCount: profile.signalCount,
-        scoredCandidateCount: scored.length,
+        scoredCandidateCount,
         response
       };
       return Object.freeze(result);
