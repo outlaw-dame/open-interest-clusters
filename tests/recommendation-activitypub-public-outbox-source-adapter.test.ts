@@ -71,6 +71,79 @@ test("reads a public actor outbox through the generic ActivityPub mapper", async
   assert.match(result.items[0]?.provenance.opaqueSourceId ?? "", /activities\/1/u);
 });
 
+test("follows a collection first link before reading its first page", async () => {
+  const firstPage = `${OUTBOX}?page=true`;
+  const requests: RecommendationActivityPubOutboxTransportRequest[] = [];
+  const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
+    actorUrl: ACTOR,
+    maxPagesPerRead: 1,
+    transport: {
+      get(request) {
+        requests.push(request);
+        if (request.url === ACTOR) return { observedAt: NOW, body: { id: ACTOR, type: "Person", outbox: OUTBOX } };
+        if (request.url === OUTBOX) {
+          return {
+            observedAt: NOW,
+            body: {
+              id: OUTBOX,
+              type: "OrderedCollection",
+              first: { type: "Link", href: firstPage }
+            }
+          };
+        }
+        return {
+          observedAt: NOW,
+          body: {
+            id: firstPage,
+            type: "OrderedCollectionPage",
+            partOf: OUTBOX,
+            orderedItems: [createActivity("https://social.example/activities/first-page")]
+          }
+        };
+      }
+    },
+    authorize: (request) => publicAuthorization(request.subjectId)
+  });
+
+  const result = await adapter.read({ subjectId: "viewer", limit: 1 });
+  assert.deepEqual(requests.map((request) => request.url), [ACTOR, OUTBOX, firstPage]);
+  assert.equal(result.items.length, 1);
+  assert.match(result.items[0]?.provenance.opaqueSourceId ?? "", /first-page/u);
+});
+
+test("accepts an inline first page while preserving outbox and partOf binding", async () => {
+  const firstPage = `${OUTBOX}?page=inline`;
+  const requests: RecommendationActivityPubOutboxTransportRequest[] = [];
+  const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
+    actorUrl: ACTOR,
+    transport: {
+      get(request) {
+        requests.push(request);
+        if (request.url === ACTOR) return { observedAt: NOW, body: { id: ACTOR, type: "Person", outbox: OUTBOX } };
+        return {
+          observedAt: NOW,
+          body: {
+            id: OUTBOX,
+            type: "OrderedCollection",
+            first: {
+              id: firstPage,
+              type: "OrderedCollectionPage",
+              partOf: OUTBOX,
+              orderedItems: [createActivity("https://social.example/activities/inline-first")]
+            }
+          }
+        };
+      }
+    },
+    authorize: (request) => publicAuthorization(request.subjectId)
+  });
+
+  const result = await adapter.read({ subjectId: "viewer" });
+  assert.deepEqual(requests.map((request) => request.url), [ACTOR, OUTBOX]);
+  assert.equal(result.items.length, 1);
+  assert.match(result.items[0]?.provenance.opaqueSourceId ?? "", /inline-first/u);
+});
+
 test("authorization is validated before transport and private evidence fails closed", async () => {
   let calls = 0;
   const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
@@ -146,11 +219,69 @@ test("supports bounded pagination and resumes within a page without replaying em
   const first = await adapter.read({ subjectId: "viewer", limit: 1 });
   assert.equal(first.items.length, 1);
   assert.ok(first.cursor);
+  assert.ok(first.cursor.length <= 1_024);
   const second = await adapter.read({ subjectId: "viewer", limit: 2, cursor: first.cursor });
   assert.equal(second.items.length, 2);
   assert.equal(
     new Set([...first.items, ...second.items].map((item) => item.provenance.opaqueSourceId)).size,
     3
+  );
+});
+
+test("keeps long same-origin pagination cursors within the shared adapter boundary", async () => {
+  const firstPage = `${OUTBOX}?page=${"x".repeat(850)}`;
+  const activities = [
+    createActivity("https://social.example/activities/long-1"),
+    createActivity("https://social.example/activities/long-2")
+  ];
+  const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
+    actorUrl: ACTOR,
+    transport: {
+      get: ({ url }) => {
+        if (url === ACTOR) return { observedAt: NOW, body: { id: ACTOR, type: "Person", outbox: OUTBOX } };
+        if (url === OUTBOX) {
+          return { observedAt: NOW, body: { id: OUTBOX, type: "OrderedCollection", first: firstPage } };
+        }
+        return {
+          observedAt: NOW,
+          body: { id: firstPage, type: "OrderedCollectionPage", partOf: OUTBOX, orderedItems: activities }
+        };
+      }
+    },
+    authorize: (request) => publicAuthorization(request.subjectId)
+  });
+
+  const first = await adapter.read({ subjectId: "viewer", limit: 1 });
+  assert.ok(first.cursor);
+  assert.ok(first.cursor.length <= 1_024);
+  const second = await adapter.read({ subjectId: "viewer", limit: 1, cursor: first.cursor });
+  assert.equal(second.items.length, 1);
+  assert.match(second.items[0]?.provenance.opaqueSourceId ?? "", /long-2/u);
+});
+
+test("rejects pagination URLs that cannot fit the repository-wide cursor contract", async () => {
+  const nextPage = `${OUTBOX}?page=${"x".repeat(2_000)}`;
+  const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
+    actorUrl: ACTOR,
+    transport: {
+      get: ({ url }) => url === ACTOR
+        ? { observedAt: NOW, body: { id: ACTOR, type: "Person", outbox: OUTBOX } }
+        : {
+            observedAt: NOW,
+            body: {
+              id: OUTBOX,
+              type: "OrderedCollectionPage",
+              orderedItems: [createActivity("https://social.example/activities/cursor-boundary")],
+              next: nextPage
+            }
+          }
+    },
+    authorize: (request) => publicAuthorization(request.subjectId)
+  });
+
+  await assert.rejects(
+    adapter.read({ subjectId: "viewer", limit: 1 }),
+    /shared cursor boundary/u
   );
 });
 
@@ -191,6 +322,33 @@ test("rejects actor, collection, activity, origin, cycle, and cursor boundary vi
   });
   await assert.rejects(cycle.read({ subjectId: "viewer" }), /cycle/u);
   await assert.rejects(cycle.read({ subjectId: "viewer", cursor: "https://social.example/not-an-opaque-cursor" }), /cursor/u);
+});
+
+test("rejects pages bound to a different collection", async () => {
+  const firstPage = `${OUTBOX}?page=1`;
+  const adapter = createRecommendationActivityPubPublicOutboxSourceAdapter({
+    actorUrl: ACTOR,
+    transport: {
+      get: ({ url }) => {
+        if (url === ACTOR) return { observedAt: NOW, body: { id: ACTOR, outbox: OUTBOX } };
+        if (url === OUTBOX) return {
+          observedAt: NOW,
+          body: { id: OUTBOX, type: "OrderedCollection", first: firstPage }
+        };
+        return {
+          observedAt: NOW,
+          body: {
+            id: firstPage,
+            type: "OrderedCollectionPage",
+            partOf: "https://social.example/users/mallory/outbox",
+            orderedItems: []
+          }
+        };
+      }
+    },
+    authorize: (request) => publicAuthorization(request.subjectId)
+  });
+  await assert.rejects(adapter.read({ subjectId: "viewer" }), /page collection mismatch/u);
 });
 
 test("rejects unsafe endpoints, oversized pages, ambiguous item arrays, and timestamp cursors", async () => {
