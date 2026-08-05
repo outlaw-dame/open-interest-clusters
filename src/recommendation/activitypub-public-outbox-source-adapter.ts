@@ -79,6 +79,11 @@ const COLLECTION_TYPES = new Set<string>([
   "OrderedCollectionPage"
 ]);
 const COLLECTION_PAGE_TYPES = new Set<string>(["CollectionPage", "OrderedCollectionPage"]);
+const ACTIVITYSTREAMS_LINK_TYPES = new Set<string>([
+  "Link",
+  "as:Link",
+  "https://www.w3.org/ns/activitystreams#Link"
+]);
 const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 const PUBLIC_ACCESS_BASES = new Set<RecommendationAccessBasis>([
@@ -208,19 +213,23 @@ function response(value: unknown): RecommendationActivityPubOutboxTransportRespo
   };
 }
 
-function idFromLink(value: unknown, label: string): string {
-  if (typeof value === "string") return boundedString(value, MAX_URL_LENGTH, label);
-  if (isPlainRecord(value)) {
-    if (typeof value.id === "string") return boundedString(value.id, MAX_URL_LENGTH, label);
-    if (typeof value.href === "string") return boundedString(value.href, MAX_URL_LENGTH, label);
-  }
-  throw new TypeError(`Invalid ActivityPub outbox ${label}.`);
-}
-
 function typeValues(value: unknown): readonly string[] {
   if (typeof value === "string") return [value];
   if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value;
   return [];
+}
+
+function idFromLink(value: unknown, label: string): string {
+  if (typeof value === "string") return boundedString(value, MAX_URL_LENGTH, label);
+  if (isPlainRecord(value)) {
+    const isActivityStreamsLink = typeValues(value.type).some((type) => ACTIVITYSTREAMS_LINK_TYPES.has(type));
+    if (isActivityStreamsLink && typeof value.href === "string") {
+      return boundedString(value.href, MAX_URL_LENGTH, label);
+    }
+    if (typeof value.id === "string") return boundedString(value.id, MAX_URL_LENGTH, label);
+    if (typeof value.href === "string") return boundedString(value.href, MAX_URL_LENGTH, label);
+  }
+  throw new TypeError(`Invalid ActivityPub outbox ${label}.`);
 }
 
 function collectionPage(value: Record<string, unknown>): boolean {
