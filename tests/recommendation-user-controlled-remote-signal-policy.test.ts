@@ -43,7 +43,7 @@ function activityPodSignal(
   };
 }
 
-test("public-only policy allows affinity persisted in a user-controlled ActivityPod", () => {
+test("authority policy allows affinity persisted in a user-controlled ActivityPod", () => {
   const input = activityPodSignal();
   const evaluation = evaluateRecommendationPublicSignalPolicy({
     action: input.action,
@@ -58,7 +58,8 @@ test("public-only policy allows affinity persisted in a user-controlled Activity
   assert.deepEqual(evaluation, {
     decision: "allow",
     reason: "signal.allow.user_controlled_remote",
-    effect: "affinity"
+    effect: "affinity",
+    storageAuthority: "user_owned"
   });
   assert.doesNotThrow(() => normalizeRecommendationInterestSignal(input));
 });
@@ -86,7 +87,7 @@ test("user-controlled remote exception requires Solid control authority and user
         serverSideProcessing: true
       }
     })),
-    /signal\.deny\.private_affinity/u
+    /signal\.deny\.storage_authority/u
   );
 
   assert.throws(
@@ -100,33 +101,51 @@ test("user-controlled remote exception requires Solid control authority and user
         observedAt: OBSERVED_AT
       }
     })),
-    /signal\.deny\.private_affinity/u
+    /signal\.deny\.storage_authority/u
   );
 });
 
-test("generic application-managed server storage remains denied", () => {
+test("generic application-managed server storage remains provider-owned and denied", () => {
+  const input = activityPodSignal({
+    evidence: {
+      sourceItemKind: "collection",
+      protocol: "app_local",
+      sourceVisibility: "local_only",
+      accessBasis: "owner",
+      trustBoundary: "user_owned",
+      observedAt: OBSERVED_AT
+    },
+    consent: {
+      decision: "allow",
+      reason: "consent.allow.explicit",
+      dataUse: "local_personalization",
+      protocol: "app_local",
+      sourceVisibility: "local_only",
+      accessBasis: "owner",
+      containsPrivateData: true,
+      containsThirdPartyData: false,
+      serverSideProcessing: true
+    }
+  });
+
+  const evaluation = evaluateRecommendationPublicSignalPolicy({
+    action: input.action,
+    polarity: input.polarity ?? "neutral",
+    targetKind: input.target.kind,
+    dataUse: input.dataUse,
+    privacyBoundary: input.privacyBoundary ?? "local_only",
+    evidence: input.evidence,
+    consent: input.consent
+  });
+
+  assert.deepEqual(evaluation, {
+    decision: "deny",
+    reason: "signal.deny.storage_authority",
+    effect: "affinity",
+    storageAuthority: "provider_owned"
+  });
   assert.throws(
-    () => normalizeRecommendationInterestSignal(activityPodSignal({
-      evidence: {
-        sourceItemKind: "collection",
-        protocol: "app_local",
-        sourceVisibility: "local_only",
-        accessBasis: "owner",
-        trustBoundary: "user_owned",
-        observedAt: OBSERVED_AT
-      },
-      consent: {
-        decision: "allow",
-        reason: "consent.allow.explicit",
-        dataUse: "local_personalization",
-        protocol: "app_local",
-        sourceVisibility: "local_only",
-        accessBasis: "owner",
-        containsPrivateData: true,
-        containsThirdPartyData: false,
-        serverSideProcessing: true
-      }
-    })),
-    /signal\.deny\.local_boundary_mismatch/u
+    () => normalizeRecommendationInterestSignal(input),
+    /signal\.deny\.storage_authority/u
   );
 });
