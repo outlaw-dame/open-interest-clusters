@@ -1,4 +1,4 @@
-# Public-only recommendation signal policy
+# Public and user-controlled recommendation signal policy
 
 Recommendation interest inference is enforced at the normalized signal boundary.
 
@@ -8,9 +8,12 @@ Affinity-bearing signals may be created only from:
 
 - explicitly public provider evidence using `public` visibility and `public_web` access;
 - ATProto public repository evidence using the matching `atproto_public_repo` visibility and access basis;
-- explicit user-owned local evidence using the `app_local`, `local_only`, `owner`, `user_owned`, and `local_only` processing boundary with no server-side processing.
+- explicit user-owned local evidence using the `app_local`, `local_only`, `owner`, `user_owned`, and `local_only` processing boundary with no server-side processing;
+- explicitly authorized user-controlled ActivityPods/Solid Pod evidence using `activitypods`, `acl_controlled`, `solid_acl_control`, `user_owned`, and the `server_allowed` boundary.
 
-Generic consent does not override this project policy. Authenticated access to a private timeline, follower-only post, ACL-controlled resource, followed hashtag, or equivalent private provider state cannot become affinity evidence.
+The ActivityPods/Solid exception represents remote persistence under the user's authority. It requires control authority, not merely read access, and excludes third-party private data. It does not authorize application-managed servers, provider-controlled stores, private timelines, follower-only posts, followed hashtags, or equivalent provider-private state to become affinity evidence.
+
+Generic consent does not override this project policy. A generic `serverSideDataUses` grant is insufficient unless the normalized evidence also proves the narrow user-controlled Pod boundary above.
 
 Unlisted ActivityPub content is not treated as explicitly public discovery evidence.
 
