@@ -104,7 +104,8 @@ export async function writeRecommendationProfileStoreRecord(
   const authority = resolveProfileWriteAuthority(input);
   const decision = evaluateRecommendationStorageAuthority({
     authority: authority.storageAuthority,
-    processingBoundary: authority.processingBoundary
+    processingBoundary: authority.processingBoundary,
+    subjectLevel: true
   });
   if (decision.decision === "deny") {
     throw new TypeError(`Recommendation profile persistence denied: ${decision.reason}.`);
