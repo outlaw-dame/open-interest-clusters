@@ -57,7 +57,6 @@ export interface RecommendationActivityPodsResourceGrantValidationOptions {
 const MAX_IDENTIFIER_LENGTH = 2_048;
 const ACCESS_MODE_SET = new Set<string>(RECOMMENDATION_SOLID_ACCESS_MODES);
 const OPERATION_SET = new Set<string>(RECOMMENDATION_ACTIVITYPODS_RESOURCE_OPERATIONS);
-const LEAP_SECOND_PATTERN = /T\d{2}:\d{2}:60(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -74,10 +73,15 @@ function string(value: unknown, label: string): string {
 function time(value: unknown, label: string): string {
   const output = string(value, label);
   normalizeRecommendationSourceAdapterReadRequest({ subjectId: "activitypods-resource-grant", since: output });
-  if (LEAP_SECOND_PATTERN.test(output) || !Number.isFinite(Date.parse(output))) {
+  return output;
+}
+
+function comparableTime(value: string, label: string): number {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
     throw new TypeError(`Invalid ActivityPods ${label}.`);
   }
-  return output;
+  return parsed;
 }
 
 function url(value: unknown, label: string, directory = false): string {
@@ -146,11 +150,11 @@ function validateTimes(
   if (!isRecord(options)) throw new TypeError("Invalid ActivityPods resource grant validation options.");
   if (revokedAt !== undefined) throw new TypeError("ActivityPods resource grant has been revoked.");
   const now = time(options.now ?? new Date().toISOString(), "resource grant validation time");
-  const checked = Date.parse(checkedAt);
-  const nowMillis = Date.parse(now);
+  const checked = comparableTime(checkedAt, "resource grant check time");
+  const nowMillis = comparableTime(now, "resource grant validation time");
   if (checked > nowMillis) throw new TypeError("ActivityPods resource grant check time is in the future.");
   if (expiresAt !== undefined) {
-    const expires = Date.parse(expiresAt);
+    const expires = comparableTime(expiresAt, "resource grant expiry time");
     if (expires <= checked) throw new TypeError("ActivityPods resource grant expiry must follow its check time.");
     if (expires <= nowMillis) throw new TypeError("ActivityPods resource grant has expired.");
   }
