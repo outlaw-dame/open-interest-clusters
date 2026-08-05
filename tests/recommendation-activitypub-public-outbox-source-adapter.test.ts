@@ -65,9 +65,10 @@ test("reads a public actor outbox through the generic ActivityPub mapper", async
   assert.equal(requests[0]?.url, ACTOR);
   assert.equal(requests[1]?.url, OUTBOX);
   assert.equal(result.items.length, 1);
-  assert.equal(result.items[0]?.protocol, "activitypub");
-  assert.equal(result.items[0]?.sourceVisibility, "public");
-  assert.equal(result.items[0]?.actorUri, ACTOR);
+  assert.equal(result.items[0]?.context.protocol, "activitypub");
+  assert.equal(result.items[0]?.context.sourceVisibility, "public");
+  assert.equal(result.items[0]?.provenance.trustBoundary, "same_provider");
+  assert.match(result.items[0]?.provenance.opaqueSourceId ?? "", /activities\/1/u);
 });
 
 test("authorization is validated before transport and private evidence fails closed", async () => {
@@ -117,7 +118,7 @@ test("skips non-public activities without turning them into recommendation recor
   });
   const result = await adapter.read({ subjectId: "viewer" });
   assert.equal(result.items.length, 1);
-  assert.match(result.items[0]?.sourceItemId ?? "", /public/u);
+  assert.match(result.items[0]?.provenance.opaqueSourceId ?? "", /public/u);
 });
 
 test("supports bounded pagination and resumes within a page without replaying emitted records", async () => {
@@ -147,7 +148,10 @@ test("supports bounded pagination and resumes within a page without replaying em
   assert.ok(first.cursor);
   const second = await adapter.read({ subjectId: "viewer", limit: 2, cursor: first.cursor });
   assert.equal(second.items.length, 2);
-  assert.equal(new Set([...first.items, ...second.items].map((item) => item.sourceItemId)).size, 3);
+  assert.equal(
+    new Set([...first.items, ...second.items].map((item) => item.provenance.opaqueSourceId)).size,
+    3
+  );
 });
 
 test("rejects actor, collection, activity, origin, cycle, and cursor boundary violations", async () => {
