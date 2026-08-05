@@ -162,7 +162,7 @@ export function evaluateRecommendationPublicSignalPolicy(
     processingBoundary: input.privacyBoundary
   });
 
-  if (authorityEvaluation.decision === "deny") {
+  if (authorityEvaluation.decision === "deny" && effect === "affinity") {
     return evaluation("deny", "signal.deny.storage_authority", effect, storageAuthority);
   }
 
@@ -188,6 +188,7 @@ export function evaluateRecommendationPublicSignalPolicy(
       return evaluation("deny", "signal.deny.private_affinity", effect, storageAuthority);
     }
     if (
+      authorityEvaluation.decision === "deny" ||
       storageAuthority !== "device_owned" ||
       input.privacyBoundary !== "local_only" ||
       input.consent.serverSideProcessing
@@ -195,6 +196,10 @@ export function evaluateRecommendationPublicSignalPolicy(
       return evaluation("deny", "signal.deny.remote_private_filter", effect, storageAuthority);
     }
     return evaluation("allow", "signal.allow.local_private_filter", effect, storageAuthority);
+  }
+
+  if (authorityEvaluation.decision === "deny") {
+    return evaluation("deny", "signal.deny.storage_authority", effect, storageAuthority);
   }
 
   return evaluation("deny", "signal.deny.non_public_provider_evidence", effect, storageAuthority);
