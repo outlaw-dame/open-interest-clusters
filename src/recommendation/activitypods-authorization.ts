@@ -168,25 +168,28 @@ function normalizeIdentity(input: RecommendationActivityPodsApplicationIdentityI
   return { applicationActorUri, ownerActorUri, ownerWebId };
 }
 
-function normalizeNow(options: RecommendationActivityPodsGrantValidationOptions): string | undefined {
+function normalizeNow(options: RecommendationActivityPodsGrantValidationOptions): string {
   if (!isPlainRecord(options)) throw new TypeError("Invalid ActivityPods grant validation options.");
-  return optionalTimestamp(options.now, "grant validation time");
+  return options.now === undefined
+    ? new Date().toISOString()
+    : timestamp(options.now, "grant validation time");
 }
 
 function assertTemporalValidity(
   checkedAt: string,
   expiresAt: string | undefined,
   revokedAt: string | undefined,
-  now: string | undefined
+  now: string
 ): void {
   if (revokedAt !== undefined) throw new TypeError("ActivityPods grant has been revoked.");
   const checkedAtMs = Date.parse(checkedAt);
+  const nowMs = Date.parse(now);
   if (expiresAt !== undefined) {
     const expiresAtMs = Date.parse(expiresAt);
     if (expiresAtMs <= checkedAtMs) throw new TypeError("ActivityPods grant expiry must follow its check time.");
-    if (now !== undefined && expiresAtMs <= Date.parse(now)) throw new TypeError("ActivityPods grant has expired.");
+    if (expiresAtMs <= nowMs) throw new TypeError("ActivityPods grant has expired.");
   }
-  if (now !== undefined && checkedAtMs > Date.parse(now)) {
+  if (checkedAtMs > nowMs) {
     throw new TypeError("ActivityPods grant check time is in the future.");
   }
 }
