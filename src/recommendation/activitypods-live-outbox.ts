@@ -597,10 +597,6 @@ export async function watchRecommendationActivityPodsOutbox(
   let truncated = false;
 
   for await (const rawFrame of stream) {
-    if (frames >= maximumFrames || mutations.length >= maximumMutations) {
-      truncated = true;
-      break;
-    }
     if (input.signal?.aborted === true) throw new Error("ActivityPods outbox watcher aborted.");
     const currentGrant = normalizeRecommendationActivityPodsOutboxGrant(await input.authorize(authorizationRequest));
     assertGrantBinding(currentGrant, input, actor);
@@ -613,11 +609,19 @@ export async function watchRecommendationActivityPodsOutbox(
     const mutation = normalizeNotificationMutation(frame.body, frame.observedAt, actor);
     if (seen.has(mutation.dedupeKey)) {
       duplicates += 1;
+      if (frames >= maximumFrames) {
+        truncated = true;
+        break;
+      }
       continue;
     }
     seen.add(mutation.dedupeKey);
     mutations.push(mutation);
     await input.onMutation?.(mutation);
+    if (frames >= maximumFrames || mutations.length >= maximumMutations) {
+      truncated = true;
+      break;
+    }
   }
 
   return Object.freeze({
