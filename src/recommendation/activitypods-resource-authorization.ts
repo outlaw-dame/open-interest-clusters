@@ -57,6 +57,7 @@ export interface RecommendationActivityPodsResourceGrantValidationOptions {
 const MAX_IDENTIFIER_LENGTH = 2_048;
 const ACCESS_MODE_SET = new Set<string>(RECOMMENDATION_SOLID_ACCESS_MODES);
 const OPERATION_SET = new Set<string>(RECOMMENDATION_ACTIVITYPODS_RESOURCE_OPERATIONS);
+const LEAP_SECOND_PATTERN = /T\d{2}:\d{2}:60(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -73,6 +74,9 @@ function string(value: unknown, label: string): string {
 function time(value: unknown, label: string): string {
   const output = string(value, label);
   normalizeRecommendationSourceAdapterReadRequest({ subjectId: "activitypods-resource-grant", since: output });
+  if (LEAP_SECOND_PATTERN.test(output) || !Number.isFinite(Date.parse(output))) {
+    throw new TypeError(`Invalid ActivityPods ${label}.`);
+  }
   return output;
 }
 
@@ -143,11 +147,12 @@ function validateTimes(
   if (revokedAt !== undefined) throw new TypeError("ActivityPods resource grant has been revoked.");
   const now = time(options.now ?? new Date().toISOString(), "resource grant validation time");
   const checked = Date.parse(checkedAt);
-  if (checked > Date.parse(now)) throw new TypeError("ActivityPods resource grant check time is in the future.");
+  const nowMillis = Date.parse(now);
+  if (checked > nowMillis) throw new TypeError("ActivityPods resource grant check time is in the future.");
   if (expiresAt !== undefined) {
     const expires = Date.parse(expiresAt);
     if (expires <= checked) throw new TypeError("ActivityPods resource grant expiry must follow its check time.");
-    if (expires <= Date.parse(now)) throw new TypeError("ActivityPods resource grant has expired.");
+    if (expires <= nowMillis) throw new TypeError("ActivityPods resource grant has expired.");
   }
 }
 
