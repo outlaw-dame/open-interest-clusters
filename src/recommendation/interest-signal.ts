@@ -323,7 +323,6 @@ export function createRecommendationInterestSignalFromSource(
   const source = normalizeRecommendationSourceItem(input.source);
   const consent = input.consentEvaluation.auditEvent;
   const signalInput: RecommendationInterestSignalInput = {
-    source: undefined as never,
     target: input.target,
     action: input.action,
     strength: input.strength,
@@ -331,7 +330,7 @@ export function createRecommendationInterestSignalFromSource(
     dataUse: input.dataUse,
     evidence: sourceEvidence(source),
     consent
-  } as RecommendationInterestSignalInput;
+  };
 
   if (input.polarity !== undefined) signalInput.polarity = input.polarity;
   if (input.privacyBoundary !== undefined) signalInput.privacyBoundary = input.privacyBoundary;
