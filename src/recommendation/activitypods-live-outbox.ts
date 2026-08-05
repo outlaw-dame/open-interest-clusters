@@ -384,9 +384,15 @@ function mapPublicActivityPodsResult(result: RecommendationSourceAdapterReadResu
     kind: item.kind,
     context: createActivityPodsSourceContext({
       resourceScope: item.context.sourceVisibility === "unlisted" ? "unlisted" : "public",
-      containsThirdPartyData: item.context.containsThirdPartyData,
-      serverSideProcessing: item.context.serverSideProcessing,
-      providerPolicyAllowsProcessing: item.context.providerPolicyAllowsProcessing
+      ...(item.context.containsThirdPartyData === undefined
+        ? {}
+        : { containsThirdPartyData: item.context.containsThirdPartyData }),
+      ...(item.context.serverSideProcessing === undefined
+        ? {}
+        : { serverSideProcessing: item.context.serverSideProcessing }),
+      ...(item.context.providerPolicyAllowsProcessing === undefined
+        ? {}
+        : { providerPolicyAllowsProcessing: item.context.providerPolicyAllowsProcessing })
     }),
     provenance: item.provenance
   }));
