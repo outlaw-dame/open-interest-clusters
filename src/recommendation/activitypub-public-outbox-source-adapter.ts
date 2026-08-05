@@ -58,14 +58,15 @@ export type RecommendationActivityPubPublicOutboxSourceAdapter = Omit<Recommenda
 };
 
 const MAX_URL_LENGTH = 4_096;
-const MAX_CURSOR_LENGTH = 8_192;
+const MAX_CURSOR_LENGTH = 1_024;
 const DEFAULT_MAX_ACTIVITIES = 100;
 const MAX_ACTIVITIES = 500;
 const DEFAULT_MAX_PAGES = 8;
 const MAX_PAGES = 32;
 const DEFAULT_MAX_ITEMS_PER_PAGE = 200;
 const MAX_ITEMS_PER_PAGE = 500;
-const CURSOR_PREFIX = "activitypub-outbox:v1:";
+const CURSOR_PREFIX = "activitypub-outbox:v2:";
+const LEGACY_CURSOR_PREFIX = "activitypub-outbox:v1:";
 const PUBLIC_RECIPIENTS = new Set<string>([
   "https://www.w3.org/ns/activitystreams#Public",
   "as:Public",
@@ -77,6 +78,7 @@ const COLLECTION_TYPES = new Set<string>([
   "CollectionPage",
   "OrderedCollectionPage"
 ]);
+const COLLECTION_PAGE_TYPES = new Set<string>(["CollectionPage", "OrderedCollectionPage"]);
 const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
 const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
 const PUBLIC_ACCESS_BASES = new Set<RecommendationAccessBasis>([
@@ -208,7 +210,10 @@ function response(value: unknown): RecommendationActivityPubOutboxTransportRespo
 
 function idFromLink(value: unknown, label: string): string {
   if (typeof value === "string") return boundedString(value, MAX_URL_LENGTH, label);
-  if (isPlainRecord(value) && typeof value.id === "string") return boundedString(value.id, MAX_URL_LENGTH, label);
+  if (isPlainRecord(value)) {
+    if (typeof value.id === "string") return boundedString(value.id, MAX_URL_LENGTH, label);
+    if (typeof value.href === "string") return boundedString(value.href, MAX_URL_LENGTH, label);
+  }
   throw new TypeError(`Invalid ActivityPub outbox ${label}.`);
 }
 
@@ -218,10 +223,12 @@ function typeValues(value: unknown): readonly string[] {
   return [];
 }
 
-function requireCollection(value: Record<string, unknown>): void {
-  if (!typeValues(value.type).some((type) => COLLECTION_TYPES.has(type))) {
+function collectionPage(value: Record<string, unknown>): boolean {
+  const types = typeValues(value.type);
+  if (!types.some((type) => COLLECTION_TYPES.has(type))) {
     throw new TypeError("Invalid ActivityPub outbox collection type.");
   }
+  return types.some((type) => COLLECTION_PAGE_TYPES.has(type));
 }
 
 function collectionItems(value: Record<string, unknown>, maximum: number): readonly Record<string, unknown>[] {
@@ -254,9 +261,33 @@ function activityActor(activity: Record<string, unknown>): string {
   return idFromLink(activity.actor, "activity actor");
 }
 
-function nextLink(value: Record<string, unknown>, origin: string): string | undefined {
-  if (value.next === undefined || value.next === null) return undefined;
-  return normalizePublicUrl(idFromLink(value.next, "next page"), "next page", origin).toString();
+function collectionLink(
+  value: unknown,
+  label: string,
+  origin: string
+): { url: string; inline?: Record<string, unknown> } {
+  if (isPlainRecord(value) && typeValues(value.type).some((type) => COLLECTION_PAGE_TYPES.has(type))) {
+    const url = normalizePublicUrl(idFromLink(value, label), label, origin).toString();
+    return { url, inline: value };
+  }
+  return {
+    url: normalizePublicUrl(idFromLink(value, label), label, origin).toString()
+  };
+}
+
+function optionalCollectionLink(
+  value: unknown,
+  label: string,
+  origin: string
+): { url: string; inline?: Record<string, unknown> } | undefined {
+  if (value === undefined || value === null) return undefined;
+  return collectionLink(value, label, origin);
+}
+
+function validatePagePartOf(value: Record<string, unknown>, outboxUrl: string, origin: string): void {
+  if (value.partOf === undefined || value.partOf === null) return;
+  const partOf = normalizePublicUrl(idFromLink(value.partOf, "page partOf"), "page partOf", origin).toString();
+  if (partOf !== outboxUrl) throw new TypeError("ActivityPub outbox page collection mismatch.");
 }
 
 interface CursorState {
@@ -264,18 +295,20 @@ interface CursorState {
   offset: number;
 }
 
-function encodeCursor(state: CursorState): string {
-  const cursor = `${CURSOR_PREFIX}${encodeURIComponent(JSON.stringify(state))}`;
-  if (cursor.length > MAX_CURSOR_LENGTH) throw new TypeError("ActivityPub outbox cursor exceeds the maximum length.");
+function encodeCursor(state: CursorState, origin: string): string {
+  const pageUrl = normalizePublicUrl(state.pageUrl, "cursor page URL", origin);
+  const relativePageUrl = `${pageUrl.pathname}${pageUrl.search}`;
+  const cursor = `${CURSOR_PREFIX}${state.offset}:${relativePageUrl}`;
+  if (cursor.length > MAX_CURSOR_LENGTH) {
+    throw new TypeError("ActivityPub outbox pagination URL exceeds the shared cursor boundary.");
+  }
   return cursor;
 }
 
-function decodeCursor(value: unknown, origin: string): CursorState {
-  const cursor = boundedString(value, MAX_CURSOR_LENGTH, "cursor");
-  if (!cursor.startsWith(CURSOR_PREFIX)) throw new TypeError("Invalid ActivityPub outbox cursor.");
+function decodeLegacyCursor(value: string, origin: string): CursorState {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(decodeURIComponent(cursor.slice(CURSOR_PREFIX.length)));
+    parsed = JSON.parse(decodeURIComponent(value.slice(LEGACY_CURSOR_PREFIX.length)));
   } catch {
     throw new TypeError("Invalid ActivityPub outbox cursor.");
   }
@@ -288,6 +321,29 @@ function decodeCursor(value: unknown, origin: string): CursorState {
   };
 }
 
+function decodeCursor(value: unknown, origin: string): CursorState {
+  const cursor = boundedString(value, MAX_CURSOR_LENGTH, "cursor");
+  if (cursor.startsWith(LEGACY_CURSOR_PREFIX)) return decodeLegacyCursor(cursor, origin);
+  if (!cursor.startsWith(CURSOR_PREFIX)) throw new TypeError("Invalid ActivityPub outbox cursor.");
+  const state = cursor.slice(CURSOR_PREFIX.length);
+  const separator = state.indexOf(":");
+  if (separator < 1 || separator === state.length - 1) throw new TypeError("Invalid ActivityPub outbox cursor.");
+  const rawOffset = state.slice(0, separator);
+  if (!/^(?:0|[1-9]\d*)$/u.test(rawOffset)) throw new TypeError("Invalid ActivityPub outbox cursor.");
+  const offset = Number.parseInt(rawOffset, 10);
+  if (!Number.isSafeInteger(offset)) throw new TypeError("Invalid ActivityPub outbox cursor.");
+  let pageUrl: URL;
+  try {
+    pageUrl = new URL(state.slice(separator + 1), origin);
+  } catch {
+    throw new TypeError("Invalid ActivityPub outbox cursor.");
+  }
+  return {
+    pageUrl: normalizePublicUrl(pageUrl.toString(), "cursor page URL", origin).toString(),
+    offset
+  };
+}
+
 function actorDocument(value: Record<string, unknown>, actorUrl: string, origin: string): string {
   const id = normalizePublicUrl(value.id, "actor ID", origin).toString();
   if (id !== actorUrl) throw new TypeError("ActivityPub actor identity mismatch.");
@@ -297,14 +353,34 @@ function actorDocument(value: Record<string, unknown>, actorUrl: string, origin:
 export function createRecommendationActivityPubPublicOutboxSourceAdapter(
   input: RecommendationActivityPubPublicOutboxSourceAdapterInput
 ): RecommendationActivityPubPublicOutboxSourceAdapter {
-  if (!isPlainRecord(input) || !isPlainRecord(input.transport) || typeof input.transport.get !== "function" || typeof input.authorize !== "function") {
+  if (
+    !isPlainRecord(input) ||
+    !isPlainRecord(input.transport) ||
+    typeof input.transport.get !== "function" ||
+    typeof input.authorize !== "function"
+  ) {
     throw new TypeError("Invalid ActivityPub public outbox source adapter input.");
   }
   const actorUrl = normalizePublicUrl(input.actorUrl, "actor URL").toString();
   const origin = new URL(actorUrl).origin;
-  const maximumActivities = normalizePositiveInteger(input.maxActivitiesPerRead, DEFAULT_MAX_ACTIVITIES, MAX_ACTIVITIES, "maximum activities per read");
-  const maximumPages = normalizePositiveInteger(input.maxPagesPerRead, DEFAULT_MAX_PAGES, MAX_PAGES, "maximum pages per read");
-  const maximumItemsPerPage = normalizePositiveInteger(input.maxItemsPerPage, DEFAULT_MAX_ITEMS_PER_PAGE, MAX_ITEMS_PER_PAGE, "maximum items per page");
+  const maximumActivities = normalizePositiveInteger(
+    input.maxActivitiesPerRead,
+    DEFAULT_MAX_ACTIVITIES,
+    MAX_ACTIVITIES,
+    "maximum activities per read"
+  );
+  const maximumPages = normalizePositiveInteger(
+    input.maxPagesPerRead,
+    DEFAULT_MAX_PAGES,
+    MAX_PAGES,
+    "maximum pages per read"
+  );
+  const maximumItemsPerPage = normalizePositiveInteger(
+    input.maxItemsPerPage,
+    DEFAULT_MAX_ITEMS_PER_PAGE,
+    MAX_ITEMS_PER_PAGE,
+    "maximum items per page"
+  );
 
   return createActivityPubProviderActivitySourceAdapter({
     ...(input.adapter ?? {}),
@@ -325,8 +401,12 @@ export function createRecommendationActivityPubPublicOutboxSourceAdapter(
         ...(input.signal === undefined ? {} : { signal: input.signal })
       }));
       const outboxUrl = actorDocument(actorResponse.body, actorUrl, origin);
-      const cursorState = request.cursor === undefined ? { pageUrl: outboxUrl, offset: 0 } : decodeCursor(request.cursor, origin);
-      const requestedLimit = request.limit === undefined ? maximumActivities : Math.min(request.limit, maximumActivities);
+      const cursorState = request.cursor === undefined
+        ? { pageUrl: outboxUrl, offset: 0 }
+        : decodeCursor(request.cursor, origin);
+      const requestedLimit = request.limit === undefined
+        ? maximumActivities
+        : Math.min(request.limit, maximumActivities);
       const visited = new Set<string>();
       const records: Array<{
         rawActivity: Record<string, unknown>;
@@ -341,20 +421,53 @@ export function createRecommendationActivityPubPublicOutboxSourceAdapter(
       let offset = cursorState.offset;
       let pages = 0;
       let nextCursor: string | undefined;
+      let inlinePage: {
+        url: string;
+        body: Record<string, unknown>;
+        observedAt: string;
+      } | undefined;
 
       while (pageUrl !== undefined && pages < maximumPages && records.length < requestedLimit) {
         if (visited.has(pageUrl)) throw new TypeError("ActivityPub outbox pagination cycle detected.");
         visited.add(pageUrl);
-        pages += 1;
-        const pageResponse = response(await input.transport.get({
-          url: pageUrl,
-          ...(input.signal === undefined ? {} : { signal: input.signal })
-        }));
-        requireCollection(pageResponse.body);
+
+        const pageResponse = inlinePage !== undefined && inlinePage.url === pageUrl
+          ? { body: inlinePage.body, observedAt: inlinePage.observedAt }
+          : response(await input.transport.get({
+              url: pageUrl,
+              ...(input.signal === undefined ? {} : { signal: input.signal })
+            }));
+        inlinePage = undefined;
+        const isPage = collectionPage(pageResponse.body);
         if (pageResponse.body.id !== undefined) {
-          const pageId = normalizePublicUrl(idFromLink(pageResponse.body.id, "collection ID"), "collection ID", origin).toString();
+          const pageId = normalizePublicUrl(
+            idFromLink(pageResponse.body.id, "collection ID"),
+            "collection ID",
+            origin
+          ).toString();
           if (pageId !== pageUrl) throw new TypeError("ActivityPub outbox collection identity mismatch.");
         }
+
+        if (!isPage && pageUrl === outboxUrl && pageResponse.body.first !== undefined) {
+          if (offset !== 0) throw new TypeError("Invalid ActivityPub outbox cursor offset.");
+          const first = collectionLink(pageResponse.body.first, "first page", origin);
+          pageUrl = first.url;
+          if (first.inline !== undefined) {
+            validatePagePartOf(first.inline, outboxUrl, origin);
+            inlinePage = {
+              url: first.url,
+              body: first.inline,
+              observedAt: pageResponse.observedAt
+            };
+          }
+          continue;
+        }
+        if (!isPage && pageUrl !== outboxUrl) {
+          throw new TypeError("ActivityPub outbox pagination resource must be a collection page.");
+        }
+        if (isPage) validatePagePartOf(pageResponse.body, outboxUrl, origin);
+        pages += 1;
+
         const items = collectionItems(pageResponse.body, maximumItemsPerPage);
         if (offset > items.length) throw new TypeError("Invalid ActivityPub outbox cursor offset.");
 
@@ -375,21 +488,31 @@ export function createRecommendationActivityPubPublicOutboxSourceAdapter(
           }
           if (records.length >= requestedLimit) {
             const followingOffset = index + 1;
-            if (followingOffset < items.length) nextCursor = encodeCursor({ pageUrl, offset: followingOffset });
-            else {
-              const next = nextLink(pageResponse.body, origin);
-              if (next !== undefined) nextCursor = encodeCursor({ pageUrl: next, offset: 0 });
+            if (followingOffset < items.length) {
+              nextCursor = encodeCursor({ pageUrl, offset: followingOffset }, origin);
+            } else {
+              const next = optionalCollectionLink(pageResponse.body.next, "next page", origin);
+              if (next !== undefined) nextCursor = encodeCursor({ pageUrl: next.url, offset: 0 }, origin);
             }
             break;
           }
         }
         if (records.length >= requestedLimit) break;
         offset = 0;
-        pageUrl = nextLink(pageResponse.body, origin);
+        const next = optionalCollectionLink(pageResponse.body.next, "next page", origin);
+        pageUrl = next?.url;
+        if (next?.inline !== undefined) {
+          validatePagePartOf(next.inline, outboxUrl, origin);
+          inlinePage = {
+            url: next.url,
+            body: next.inline,
+            observedAt: pageResponse.observedAt
+          };
+        }
       }
 
       if (records.length < requestedLimit && pageUrl !== undefined && pages >= maximumPages) {
-        nextCursor = encodeCursor({ pageUrl, offset });
+        nextCursor = encodeCursor({ pageUrl, offset }, origin);
       }
       const result: {
         records: readonly typeof records[number][];
