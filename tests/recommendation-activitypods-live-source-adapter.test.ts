@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { RecommendationActivityPodsBoxGrantEvidenceInput } from "../src/recommendation/activitypods-authorization.js";
 import {
   createRecommendationActivityPodsLiveSourceAdapter,
+  type RecommendationActivityPodsLiveNotificationInput,
   type RecommendationActivityPodsLiveTransportRequest
 } from "../src/recommendation/activitypods-live-source-adapter.js";
 
@@ -12,7 +14,10 @@ const OUTBOX = "https://pod.example/alice/outbox";
 const INBOX = "https://pod.example/alice/inbox";
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 
-function grant(boxType: "inbox" | "outbox", subjectId = "subject-1") {
+function grant(
+  boxType: "inbox" | "outbox",
+  subjectId = "subject-1"
+): RecommendationActivityPodsBoxGrantEvidenceInput {
   return {
     subjectId,
     applicationActorUri: APP,
@@ -20,13 +25,13 @@ function grant(boxType: "inbox" | "outbox", subjectId = "subject-1") {
     ownerWebId: OWNER,
     boxType,
     boxUri: boxType === "outbox" ? OUTBOX : INBOX,
-    rights: [boxType === "outbox" ? "apods:ReadOutbox" : "apods:ReadInbox"] as const,
+    rights: boxType === "outbox" ? ["apods:ReadOutbox"] : ["apods:ReadInbox"],
     checkedAt: NOW,
     providerPolicyAllowsProcessing: true
   };
 }
 
-function activity(id: string, extra: Record<string, unknown> = {}) {
+function activity(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id,
     type: "Create",
@@ -47,8 +52,8 @@ function activity(id: string, extra: Record<string, unknown> = {}) {
 function notification(
   id: string,
   dereferencedActivity: unknown,
-  extra: Record<string, unknown> = {}
-) {
+  extra: Partial<RecommendationActivityPodsLiveNotificationInput> = {}
+): RecommendationActivityPodsLiveNotificationInput {
   return {
     id,
     type: "Add",
@@ -79,7 +84,7 @@ test("validates the ActivityPods grant before reading notifications", async () =
     }
   });
 
-  await assert.rejects(adapter.read({ subjectId: "subject-1" }), /lacks apods:ReadOutbox/u);
+  await assert.rejects(adapter.readChanges({ subjectId: "subject-1" }), /lacks apods:ReadOutbox/u);
   assert.equal(calls, 0);
 });
 
@@ -275,7 +280,7 @@ test("fails closed on notification owner, target, activity actor, and cursor mis
         })
       }
     });
-    await assert.rejects(adapter.read({ subjectId: "subject-1" }), /binding mismatch/u);
+    await assert.rejects(adapter.readChanges({ subjectId: "subject-1" }), /binding mismatch/u);
   }
 
   const actorMismatch = createRecommendationActivityPodsLiveSourceAdapter({
@@ -296,7 +301,7 @@ test("fails closed on notification owner, target, activity actor, and cursor mis
       })
     }
   });
-  await assert.rejects(actorMismatch.read({ subjectId: "subject-1" }), /activity actor mismatch/u);
+  await assert.rejects(actorMismatch.readChanges({ subjectId: "subject-1" }), /activity actor mismatch/u);
 
   const invalidCursor = createRecommendationActivityPodsLiveSourceAdapter({
     ownerActorUri: OWNER,
@@ -307,5 +312,5 @@ test("fails closed on notification owner, target, activity actor, and cursor mis
     authorize: (request) => grant("outbox", request.subjectId),
     transport: { read: () => ({ notifications: [], cursor: "x".repeat(1_025) }) }
   });
-  await assert.rejects(invalidCursor.read({ subjectId: "subject-1" }), /cursor/u);
+  await assert.rejects(invalidCursor.readChanges({ subjectId: "subject-1" }), /cursor/u);
 });
