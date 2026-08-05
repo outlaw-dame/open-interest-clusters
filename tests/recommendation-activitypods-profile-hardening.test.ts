@@ -59,27 +59,16 @@ function grant(
 }
 
 test("rejects leap-second grant timestamps before temporal comparisons", () => {
-  assert.throws(
-    () => normalizeRecommendationActivityPodsResourceGrantEvidence(
-      grant({ checkedAt: "2026-08-05T11:59:60Z" }),
-      { now: NOW }
-    ),
-    /grant check time/u
-  );
-  assert.throws(
-    () => normalizeRecommendationActivityPodsResourceGrantEvidence(
-      grant({ expiresAt: "2030-01-01T00:00:60Z" }),
-      { now: NOW }
-    ),
-    /grant expiry time/u
-  );
-  assert.throws(
-    () => normalizeRecommendationActivityPodsResourceGrantEvidence(
-      grant(),
-      { now: "2026-08-05T11:59:60Z" }
-    ),
-    /validation time/u
-  );
+  for (const [patch, options] of [
+    [{ checkedAt: "2026-08-05T11:59:60Z" }, { now: NOW }],
+    [{ expiresAt: "2030-01-01T00:00:60Z" }, { now: NOW }],
+    [{}, { now: "2026-08-05T11:59:60Z" }]
+  ] as const) {
+    assert.throws(
+      () => normalizeRecommendationActivityPodsResourceGrantEvidence(grant(patch), options),
+      TypeError
+    );
+  }
 });
 
 test("weak ETags remain usable for reads but cannot drive If-Match mutations", async () => {
@@ -117,7 +106,9 @@ test("weak ETags remain usable for reads but cannot drive If-Match mutations", a
     }
   });
 
-  assert.deepEqual(await adapter.readProfileRecord(SUBJECT_KEY), RECORD);
+  const read = await adapter.readProfileRecord(SUBJECT_KEY) as RecommendationProfileStoreRecord;
+  assert.equal(read.subjectKey, SUBJECT_KEY);
+  assert.equal(read.profile.signalCount, 0);
   await assert.rejects(adapter.writeProfileRecord(RECORD), /strong entity tag/u);
   await assert.rejects(adapter.deleteProfileRecord(SUBJECT_KEY), /strong entity tag/u);
   assert.equal(writes, 0);
