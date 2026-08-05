@@ -17,6 +17,7 @@ export const RECOMMENDATION_PUBLIC_SIGNAL_POLICY_REASONS = [
   "signal.allow.explicit_public",
   "signal.allow.atproto_public_repo",
   "signal.allow.local_owner",
+  "signal.allow.user_controlled_remote",
   "signal.allow.local_private_filter",
   "signal.deny.private_affinity",
   "signal.deny.remote_private_filter",
@@ -96,6 +97,20 @@ function isLocalOwnerEvidence(input: RecommendationPublicSignalPolicyInput): boo
   );
 }
 
+function isUserControlledRemoteEvidence(input: RecommendationPublicSignalPolicyInput): boolean {
+  return (
+    input.evidence.protocol === "activitypods" &&
+    input.evidence.sourceVisibility === "acl_controlled" &&
+    input.evidence.accessBasis === "solid_acl_control" &&
+    input.evidence.trustBoundary === "user_owned" &&
+    input.privacyBoundary === "server_allowed" &&
+    input.consent.containsPrivateData === true &&
+    input.consent.containsThirdPartyData === false &&
+    input.consent.serverSideProcessing === true &&
+    (input.dataUse === "local_personalization" || input.dataUse === "ranking")
+  );
+}
+
 export function evaluateRecommendationPublicSignalPolicy(
   input: RecommendationPublicSignalPolicyInput
 ): RecommendationPublicSignalPolicyEvaluation {
@@ -109,6 +124,9 @@ export function evaluateRecommendationPublicSignalPolicy(
   }
   if (isLocalOwnerEvidence(input)) {
     return evaluation("allow", "signal.allow.local_owner", effect);
+  }
+  if (isUserControlledRemoteEvidence(input)) {
+    return evaluation("allow", "signal.allow.user_controlled_remote", effect);
   }
 
   if (input.evidence.protocol === "app_local") {
