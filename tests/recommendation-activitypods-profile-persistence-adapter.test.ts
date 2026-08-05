@@ -34,27 +34,27 @@ const RECORD: RecommendationProfileStoreRecord = {
     signalCount: 3,
     entries: [
       {
-        target: { kind: "topic", key: "lower-score" },
+        target: { kind: "keyword", key: "lower-score" },
         score: 0.2,
         confidence: 0.6,
         signalCount: 1,
         positiveSignalCount: 1,
         negativeSignalCount: 0,
         neutralSignalCount: 0,
-        privacyBoundaries: ["public", "public"],
+        privacyBoundaries: ["server_allowed", "server_allowed"],
         protocols: ["activitypods", "activitypub", "activitypods"],
         sourceVisibilities: ["public", "public"],
         updatedAt: NOW
       },
       {
-        target: { kind: "topic", key: "higher-score" },
+        target: { kind: "keyword", key: "higher-score" },
         score: 0.9,
         confidence: 0.8,
         signalCount: 2,
         positiveSignalCount: 2,
         negativeSignalCount: 0,
         neutralSignalCount: 0,
-        privacyBoundaries: ["public"],
+        privacyBoundaries: ["server_allowed"],
         protocols: ["activitypods"],
         sourceVisibilities: ["public"],
         updatedAt: NOW
