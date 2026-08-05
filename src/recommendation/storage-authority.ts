@@ -28,6 +28,8 @@ export type RecommendationProcessingBoundary =
 export interface RecommendationStorageAuthorityEvaluationInput {
   authority: RecommendationStorageAuthority;
   processingBoundary: RecommendationProcessingBoundary;
+  /** True when the state identifies or describes an individual subject. */
+  subjectLevel?: boolean;
 }
 
 export interface RecommendationStorageAuthorityEvaluation {
@@ -68,7 +70,8 @@ export function evaluateRecommendationStorageAuthority(
   if (
     input === null || typeof input !== "object" ||
     !isRecommendationStorageAuthority(input.authority) ||
-    !isRecommendationProcessingBoundary(input.processingBoundary)
+    !isRecommendationProcessingBoundary(input.processingBoundary) ||
+    (input.subjectLevel !== undefined && typeof input.subjectLevel !== "boolean")
   ) {
     throw new TypeError("Invalid recommendation storage authority evaluation input.");
   }
@@ -92,7 +95,11 @@ export function evaluateRecommendationStorageAuthority(
     return Object.freeze({ decision: "deny", reason: "storage.deny.authority_boundary_mismatch" });
   }
 
-  return input.authority === "shared_operator"
-    ? Object.freeze({ decision: "allow", reason: "storage.allow.aggregate_only" })
-    : Object.freeze({ decision: "deny", reason: "storage.deny.authority_boundary_mismatch" });
+  if (input.authority !== "shared_operator") {
+    return Object.freeze({ decision: "deny", reason: "storage.deny.authority_boundary_mismatch" });
+  }
+  if (input.subjectLevel === true) {
+    return Object.freeze({ decision: "deny", reason: "storage.deny.shared_operator" });
+  }
+  return Object.freeze({ decision: "allow", reason: "storage.allow.aggregate_only" });
 }
