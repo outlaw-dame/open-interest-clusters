@@ -23,7 +23,7 @@ function boxGrant() {
     boxUri: OUTBOX,
     rights: ["apods:ReadOutbox"] as const,
     checkedAt: "2026-08-05T01:59:00Z",
-    expiresAt: "2026-08-05T03:00:00Z",
+    expiresAt: "2030-01-01T00:00:00Z",
     providerPolicyAllowsProcessing: true
   };
 }
@@ -37,7 +37,7 @@ function resourceGrant() {
     resourceUri: PROFILE,
     accessModes: ["read", "write"] as const,
     checkedAt: "2026-08-05T01:59:00Z",
-    expiresAt: "2026-08-05T03:00:00Z",
+    expiresAt: "2030-01-01T00:00:00Z",
     providerPolicyAllowsProcessing: true
   };
 }
