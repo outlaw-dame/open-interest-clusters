@@ -1,226 +1,146 @@
 # Canonical Project Status
 
-This document is the authoritative summary of the current repository state. It distinguishes implemented library capabilities from contract-only integrations and from work still required for a complete production recommendation system.
+This document is the authoritative summary of the current repository state.
 
-Last reconciled against `main` after PR #63.
+Last reconciled against `main` after PR #94 on 2026-08-04.
 
-## Project mission
+## Mission and boundaries
 
-Open Interest Clusters is a portable, privacy-preserving recommendation and semantic-interest substrate. It is designed to be embedded by applications and servers across ActivityPub, ATProto, ActivityPods/Solid, and local-first environments without requiring one protocol, database, vector provider, stream provider, runtime, or application framework.
+Open Interest Clusters is a portable, privacy-preserving recommendation and semantic-interest substrate for ActivityPub, ATProto, ActivityPods/Solid, local-first applications, and provider-specific integrations.
 
-The core package must remain:
+The core remains protocol-neutral, runtime-neutral, storage-neutral, and deny-by-default. Provider transports, credentials, retry policy, HTTP signatures, OAuth, persistence engines, and deployment frameworks remain dependency-injected or external.
 
-- protocol-neutral;
-- runtime-neutral;
-- storage-neutral;
-- ANN-provider-neutral;
-- stream-provider-neutral;
-- privacy-respecting and deny-by-default for sensitive processing.
+### Recommendation-data privacy policy
 
-ActivityPods is the preferred canonical-event architecture for our deployments, but adopting ActivityPods or supporting every protocol is not a requirement for using the core package.
+Project-owned provider integrations and deployment guidance permit interest inference from:
+
+- explicitly public posts;
+- explicitly public account metadata;
+- explicitly public topic, hashtag, collection, and provider metadata;
+- local user selections or feedback when the user explicitly opts in to the applicable local processing.
+
+Authenticated access is not, by itself, permission to use private data for interest inference. Followed hashtags, private timelines, follower-only posts, direct messages, and equivalent viewer-private state are not intended recommendation-interest signals.
+
+This is not yet a repository-wide enforced invariant. The generic consent evaluator can authorize private-data ranking when a caller explicitly configures that use, and generic signal derivation currently trusts an allowed consent decision. Until a shared public-only derivation guard is implemented, integrations must prevent private source items from entering recommendation-interest derivation.
+
+The narrow private-data exception in project-owned recommendation flows is moderation and safety preferences. Blocks, mutes, labeler subscriptions, and similar settings may filter, suppress, or explain candidates, but must not be converted into positive interest evidence.
 
 ## Current maturity
-
-The repository is a substantial recommendation-engine library, not an early schema-only project. Most major primitives exist, but they are not yet composed into a turnkey production service.
-
-Approximate maturity by area:
 
 | Area | Status |
 | --- | --- |
 | Dataset, schema, normalization, catalog | Mature library capability |
-| Consent, privacy, deletion contracts | Mature library capability |
-| ActivityPub and ATProto normalization | Strong contract-level capability |
-| Provider record mapping and authorization | Strong contract-level capability |
-| ATProto label ingestion and state merge | Implemented |
-| Labeler subscription evidence policy | Implemented |
-| Interest signal model and generic derivation | Implemented |
-| Label-to-interest evidence bridge | Implemented, semantically limited |
-| Profile store and hardened persistence | Implemented |
-| Embedding lifecycle and invalidation | Implemented |
-| Entity, graph, ANN, scoring, bandit, serving | Implemented primitives |
-| End-to-end engine orchestration | Incomplete |
-| Live protocol/provider clients | Not implemented in core |
-| Label semantic classification | Incomplete |
-| Idempotent signal ledger and retractions | Incomplete |
+| Consent, privacy, deletion contracts | Mature library capability; public-only inference is not yet globally enforced in generic derivation |
+| Interest signals and profile primitives | Implemented |
+| Embedding, ANN, graph, scoring, serving | Implemented primitives |
+| End-to-end orchestration | Implemented reusable orchestration layer, still not a turnkey service |
+| ATProto label semantics | Classification and effect policy implemented conservatively |
+| Idempotency, replay, and retraction | Implemented core ledger/retraction primitives; broader integration remains |
+| ActivityPub live integration | Mastodon timeline and curated-account provider adapters implemented |
+| ATProto live integration | Repository/API, `queryLabels`, and `subscribeLabels` slices implemented |
+| ActivityPods/Solid integration | Contract and adapter work exists; complete live deployment path remains incomplete |
+| Public discovery sources | Curated account sets, legacy follow packs, public featured hashtags, public trends, and opt-in provider policies implemented |
 | Deployable operator service | Not implemented |
 
-## Implemented capabilities
+## Implemented provider and protocol slices
 
-### Dataset and catalog
+### ActivityPub and Mastodon-compatible sources
 
-- Strict interest-cluster JSON Schema and starter global dataset.
-- Unicode and hashtag normalization.
-- Immutable local and remote dataset loading.
-- ETag-aware remote loading with bounded retry policy.
-- Catalog indexes for topics, tags, tokens, and entities.
-- Local entity resolution and sensitive-topic boundaries.
-- Onboarding selection, profile seeding, and optional follow-plan generation.
+- Generic ActivityPub activity normalization.
+- Mastodon public, home, and list timeline provider adapter.
+- Authorization validation before transport.
+- Same-origin, endpoint-confined pagination cursors.
+- Public/private capability separation.
+- Curated account-set ingestion for Mastodon Collections, Loops Starter Kits, and explicit Pixelfed documents.
+- Legacy Fediverse follow-pack ingestion with moved-account resolution, activity recency, discoverability, opt-out, block, mute, provider-policy, and identity-binding checks.
+- Public account featured hashtags and public instance trending hashtags.
 
-### Consent, privacy, and deletion
+Home and list timeline readers exist as provider adapters because applications may need normalized reads for non-recommendation workflows. Project policy forbids using their private contents as recommendation-interest evidence, but the generic derivation APIs do not yet enforce that prohibition automatically.
 
-- Deny-by-default consent decisions.
-- Explicit data-use categories.
-- Private-data, third-party-data, and server-side-processing controls.
-- Privacy-safe consent audit events.
-- Consent revocation and derived-data deletion intents.
-- Local-only profile behavior by default.
-- Hardened persistence boundaries and privacy-safe persistence errors.
-- Profile deletion and embedding invalidation paths.
+### ATProto sources
 
-### Protocol source boundaries
+- Repository record and provider API normalization.
+- Strict DID, handle, NSID, record-key, AT URI, cursor, and record validation.
+- Live `queryLabels` ingestion.
+- Live `subscribeLabels` ingestion with bounded frame, label, signature, sequence, and checkpoint handling.
+- Labeler DID verification, subscription evidence, expiration, negation tombstones, stale-state protection, and provenance.
 
-- Generic recommendation source adapter contracts.
-- Strict source identifiers, cursors, timestamps, and batch bounds.
-- ActivityPub and ATProto source normalization.
-- Provider-facing authorization evidence for ActivityPub, ActivityPods/Solid ACL evidence, and ATProto public repositories.
-- Mastodon-shaped, generic ActivityPub, and ATProto provider-record mappers.
-- Conservative provider-policy merging and source eligibility checks.
-- Strict ATProto DID, handle, NSID, record-key, and AT URI validation.
+### Public discovery and provider policy
 
-These are contract-level and pure mapping capabilities. The package does not bundle live Mastodon, GoToSocial, ActivityPods, Bluesky AppView, PDS, relay, or firehose clients.
+- Curated public account sets and legacy follow packs remain curator evidence, not automatic viewer endorsement.
+- Public account featured hashtags are strong explicit curator metadata.
+- Public instance trends are weak contextual evidence and must not become durable preference without corroboration.
+- Garden Fence domain suspensions are an opt-in provider/operator policy source, disabled by default.
+- Provider-policy reasons remain audit/filter evidence and are never positive interest signals.
 
-### ATProto labels and labeler evidence
+## Core privacy and safety behavior
 
-- Dedicated label normalization outside repository-record mapping.
-- Labeler DID, target URI/CID, value, negation, timestamps, expiration, signature, version, and provenance preservation.
-- Tombstone-safe state merging and out-of-order resurrection protection.
-- User-scoped labeler subscription evidence.
-- Consent, subscription, target, expiration, and negation policy checks.
-- Conservative conversion of accepted label evidence into neutral, local-only interest evidence.
+- Ambiguous authorization or consent fails closed.
+- Project-owned integrations reject or exclude private recommendation-interest inputs.
+- Generic derivation callers must enforce the public-only project policy until a shared guard exists.
+- Moderation settings affect eligibility and filtering only in project-owned recommendation flows.
+- Source records, URLs, identifiers, timestamps, cursors, limits, and signatures are bounded and runtime-validated.
+- Local-network, credential-bearing, malformed, cross-origin, and endpoint-confused URLs are rejected where applicable.
+- Provider-specific semantics remain outside generic scoring contracts.
+- Unknown or moderation-oriented labels do not silently become positive interests.
+- Replay, stale-state, negation, and tombstone behavior is handled conservatively.
 
-Important limitation: accepted labels are not yet semantically classified. A label may represent a topic, moderation decision, safety constraint, identity, community, content format, game, or unknown provider-specific meaning. Unknown labels must not automatically become positive interests.
+## Remaining high-priority work
 
-### Interest profiles and persistence
+1. **Generic ActivityPub actor/outbox ingestion**
+   - Support ActivityStreams `Collection`, `OrderedCollection`, and page forms without assuming Mastodon APIs.
+   - Bind outboxes to resolved actor identity.
+   - Add bounded traversal, cycle detection, strict URL policy, and explicit public-only recommendation use.
 
-- Normalized interest signals with target, action, polarity, strength, confidence, data use, privacy boundary, evidence, consent, and expiration.
-- In-memory profile aggregation with score, confidence, signal counts, provenance summaries, expiration pruning, entry bounds, and deletion.
-- Pseudonymous subject-key generation.
-- Hardened profile record parsing, persistence, verification, cleanup, and deletion adapters.
+2. **ActivityPods/Solid live deployment slice**
+   - Implement user-controlled Pod reads and writes behind Solid authorization evidence.
+   - Keep private personalization local or Pod-controlled by default.
+   - Preserve interoperability for providers that extend ActivityPub without adopting ATProto.
 
-Important limitation: profile ingestion is additive and does not yet provide a general idempotent event ledger. Replayed or duplicated source events can be counted more than once unless the caller deduplicates them.
+3. **Repository-wide public-only derivation guard**
+   - Prevent private or authenticated-only provider records from becoming recommendation-interest signals.
+   - Preserve explicitly opted-in local selections and local feedback.
+   - Keep moderation and safety settings available for filtering without converting them into affinity evidence.
 
-### Embeddings, retrieval, ranking, and serving
+4. **Retraction integration across profiles and embeddings**
+   - Ensure source deletion, label negation, consent revocation, and provider-policy changes remove derived contributions consistently.
 
-- Embedding provider and lifecycle contracts.
-- Model manifests, dimensions, metrics, artifact integrity, profile fingerprints, expiration, invalidation, and staleness evaluation.
-- In-memory ANN and capability-aware ANN orchestration.
-- pgvector and PGlite-oriented adapters and resilience helpers.
-- Entity extraction and mapping.
-- Co-occurrence graph, Louvain/community mapping, pruning, serialization, and replay.
-- Deterministic, entity, graph, embedding, and bandit score components.
-- Local preference, semantic profile, decay, feedback, and explanation helpers.
-- Bounded, deduplicated candidate serving with exclusions and optional explanations.
+5. **Reference persistence adapters**
+   - IndexedDB/SQLite local-first path.
+   - Solid Pod path.
+   - Durable Postgres/pgvector path.
 
-Important limitation: there is no single public engine operation that composes all of these layers into a complete request workflow.
+6. **Operational hardening**
+   - Privacy-safe health and freshness reporting.
+   - Property, fuzz, replay, concurrency, cancellation, and recovery tests.
+   - Benchmarks, package examples, release automation, and compatibility policy.
 
-## Contract-only or external responsibilities
+7. **Turnkey service composition**
+   - Optional operator HTTP API and workers built around the reusable core, without making centralized operation mandatory.
 
-The following responsibilities intentionally remain outside the core or behind adapters:
+## Correct next execution order
 
-- OAuth and provider authentication;
-- live ActivityPub/Mastodon/GoToSocial fetching;
-- ActivityPods/Solid Pod reads, ACL resolution, and storage;
-- Bluesky AppView and PDS API clients;
-- ATProto repository subscription, relay/firehose ingestion, `queryLabels`, and `subscribeLabels` clients;
-- IndexedDB, SQLite, encrypted mobile storage, and production Postgres persistence implementations;
-- production embedding model runtimes;
-- Kafka/Redpanda workers;
-- operator HTTP APIs, dashboards, health endpoints, and deployment charts.
+1. Keep README and architecture/status documentation synchronized with merged behavior.
+2. Add generic public ActivityPub actor/outbox ingestion.
+3. Add the ActivityPods/Solid live deployment slice.
+4. Add the repository-wide public-only derivation guard.
+5. Integrate retractions through profile and embedding state.
+6. Add reference local-first and durable persistence paths.
+7. Add observability, adversarial testing, performance budgets, and release tooling.
 
-## Critical semantic gap
-
-The next feature work must address label semantics before automatically applying label-derived evidence to user profiles.
-
-Required semantic categories should include at least:
-
-- topic interest;
-- moderation;
-- safety;
-- identity;
-- community;
-- content format;
-- game or playful classification;
-- eligibility/filtering;
-- unknown.
-
-Default behavior must be conservative:
-
-- unknown label: retain as auditable evidence, no automatic ranking effect;
-- moderation label: moderation/filter evidence, not positive interest;
-- safety label: policy or eligibility evidence;
-- topic label: eligible for positive-interest derivation;
-- identity/community/game labels: optional, low-weight, explicitly governed affinity evidence.
-
-## Correct execution order
-
-### Phase 1 — Repository reconciliation and canonical documentation
-
-- Maintain this document as the source of truth.
-- Update README, privacy model, dependency map, and hardening plan.
-- Remove stale claims and completed roadmap items.
-- Track remaining work in issues or an authoritative roadmap.
-
-### Phase 2 — Label semantic classification
-
-- Add semantic-kind contracts and metadata inputs.
-- Preserve unknown labels without assigning interest meaning.
-- Support labeler-declared metadata, host-provided metadata, local catalog matches, and explicit mappings.
-
-### Phase 3 — Signal-effect policy
-
-- Map semantic kinds to positive interest, negative interest, moderation, safety, eligibility, presentation preference, or audit-only effects.
-- Keep policy pluggable and privacy-safe.
-
-### Phase 4 — Idempotent signal ledger and retractions
-
-- Stable signal IDs and source event IDs.
-- Deduplication and replay safety.
-- Ordering, tombstones, expiration, and label-negation retractions.
-- Deterministic retry and crash-recovery behavior.
-
-### Phase 5 — Profile application orchestration
-
-- Compose label policy, semantic classification, effect policy, idempotent application, retraction, expiration, and profile updates.
-
-### Phase 6 — Labeler discovery and recommendation
-
-- Labeler metadata profiles and semantic compatibility.
-- Local-first labeler suggestions.
-- Optional privacy-safe aggregate co-subscription evidence.
-- Diversity, blocks, mutes, availability, and explanations.
-
-### Phase 7 — End-to-end engine orchestration
-
-Compose source authorization, normalization, consent, eligibility, signal derivation, profile state, embedding freshness, retrieval, scoring, local reranking, explanations, and serving through dependency-injected contracts.
-
-### Phase 8 — Live protocol integration slices
-
-Implement independent ActivityPub, ActivityPods/Solid, ATProto repository/API, `queryLabels`, and `subscribeLabels` adapters without bypassing the core contracts.
-
-### Phase 9 — Reference persistence and runtime adapters
-
-Provide tested examples for IndexedDB, SQLite, Solid storage, Postgres, pgvector, local filesystem snapshots, and optional Kafka-compatible processing.
-
-### Phase 10 — Operational hardening and release
-
-- Privacy-safe observability and health snapshots.
-- Freshness policy and fallback reporting.
-- Property, fuzz, replay, concurrency, and crash-recovery testing.
-- Performance budgets and security scanning.
-- Stable package documentation, versioning, examples, and release automation.
+A repository-driven dependency or security finding may change this order, but that change must be documented before implementation.
 
 ## Definition of production completeness
 
-The project should not be described as a complete production recommendation system until it has:
+The project should not be described as a complete hosted recommendation service until it has:
 
-- semantic label handling;
-- idempotent and retractable signal application;
-- end-to-end orchestration;
-- at least one live ActivityPub or ATProto integration slice;
-- at least one local-first persistence path;
-- at least one durable server deployment path;
-- privacy-safe observability and health behavior;
-- integration, replay, concurrency, and recovery tests;
+- generic ActivityPub and ActivityPods/Solid live paths;
+- repository-wide enforcement of the public-only recommendation-interest policy;
+- end-to-end deletion and retraction propagation;
+- at least one tested local-first persistence implementation;
+- at least one tested durable server implementation;
+- privacy-safe operational health behavior;
+- replay, concurrency, cancellation, and crash-recovery coverage;
 - accurate operator and integrator documentation.
 
-Until then, it should be described as a strong, reusable recommendation-engine substrate with mature primitives and incomplete production composition.
+Today it is a substantial, reusable recommendation-engine library with multiple live provider integrations, strong privacy contracts, and incomplete production deployment composition.
