@@ -141,11 +141,23 @@ test("authorization is checked before every profile transport operation", async 
 });
 
 test("fails closed when a grant is for another subject, application, owner, or resource", async () => {
-  const variants = [
-    { subjectId: "other-subject" },
-    { applicationActorUri: "https://other-app.example/application" },
-    { ownerActorUri: "https://pod.example/bob", ownerWebId: "https://pod.example/bob" },
-    { resourceUri: "https://pod.example/alice/data/other.jsonld" }
+  const variants: Array<{
+    grantPatch: Record<string, unknown>;
+    expectedError: RegExp;
+  }> = [
+    { grantPatch: { subjectId: "other-subject" }, expectedError: /grant does not match/u },
+    {
+      grantPatch: { applicationActorUri: "https://other-app.example/application" },
+      expectedError: /grant does not match/u
+    },
+    {
+      grantPatch: { ownerActorUri: "https://pod.example/bob", ownerWebId: "https://pod.example/bob" },
+      expectedError: /owner Pod authority/u
+    },
+    {
+      grantPatch: { resourceUri: "https://pod.example/alice/data/other.jsonld" },
+      expectedError: /grant does not match/u
+    }
   ];
   for (const variant of variants) {
     let transportCalls = 0;
@@ -158,7 +170,7 @@ test("fails closed when a grant is for another subject, application, owner, or r
       profileContainerUri: CONTAINER,
       authorize: (_operation, resourceUri) => ({
         ...grant(resourceUri, ["read", "write"]),
-        ...variant
+        ...variant.grantPatch
       }),
       codec: { encode: (record) => record, decode: (document) => document },
       transport: {
@@ -174,7 +186,7 @@ test("fails closed when a grant is for another subject, application, owner, or r
         }
       }
     });
-    await assert.rejects(persistence.readProfileRecord(SUBJECT_KEY), /grant does not match/u);
+    await assert.rejects(persistence.readProfileRecord(SUBJECT_KEY), variant.expectedError);
     assert.equal(transportCalls, 0);
   }
 });
