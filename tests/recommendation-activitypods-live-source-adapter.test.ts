@@ -171,7 +171,7 @@ test("keeps private, blind-recipient, and application-control traffic out of int
   assert.deepEqual(ignored.sort(), ["control_activity", "not_explicitly_public", "not_explicitly_public"]);
 });
 
-test("inbox subscriptions are available for controlled workflows but never emit positive interests", async () => {
+test("inbox subscriptions never emit positive interests or recommendation retractions", async () => {
   const adapter = createRecommendationActivityPodsLiveSourceAdapter({
     ownerActorUri: OWNER,
     ownerWebId: OWNER,
@@ -181,19 +181,39 @@ test("inbox subscriptions are available for controlled workflows but never emit 
     authorize: (request) => grant("inbox", request.subjectId),
     transport: {
       read: () => ({
-        notifications: [{
-          ...notification("https://pod.example/notifications/inbox", activity("https://remote.example/activities/1")),
-          boxType: "inbox",
-          actorUri: OWNER,
-          targetUri: INBOX
-        }]
+        notifications: [
+          {
+            ...notification("https://pod.example/notifications/inbox", activity("https://remote.example/activities/1")),
+            boxType: "inbox",
+            actorUri: OWNER,
+            targetUri: INBOX
+          },
+          {
+            id: "https://pod.example/notifications/inbox-remove",
+            type: "Remove",
+            boxType: "inbox",
+            actorUri: OWNER,
+            targetUri: INBOX,
+            objectUri: "https://remote.example/activities/removed",
+            observedAt: NOW
+          },
+          {
+            id: "https://pod.example/notifications/inbox-delete",
+            type: "Delete",
+            boxType: "inbox",
+            actorUri: OWNER,
+            targetUri: INBOX,
+            objectUri: "https://remote.example/activities/deleted",
+            observedAt: NOW
+          }
+        ]
       })
     }
   });
 
   const result = await adapter.readChanges({ subjectId: "subject-1" });
   assert.equal(result.items.length, 0);
-  assert.equal(result.ignoredCount, 1);
+  assert.equal(result.ignoredCount, 3);
   assert.equal(result.retractions.length, 0);
 });
 
