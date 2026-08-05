@@ -487,30 +487,46 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
       ) {
         throw new TypeError("ActivityPods live notification owner or box binding mismatch.");
       }
+      if (boxType === "inbox") {
+        ignoredCount += 1;
+        notifyIgnored(input.onIgnored, {
+          boxType,
+          notificationType: notification.type,
+          reason: "inbox_not_interest_source"
+        });
+        continue;
+      }
       const retraction = retractionFromNotification(notification);
       if (retraction !== undefined) {
         retractions.push(retraction);
         continue;
       }
-      if (boxType === "inbox") {
-        ignoredCount += 1;
-        notifyIgnored(input.onIgnored, { boxType, notificationType: notification.type, reason: "inbox_not_interest_source" });
-        continue;
-      }
       if (!isPlainRecord(notification.dereferencedActivity)) {
         ignoredCount += 1;
-        notifyIgnored(input.onIgnored, { boxType, notificationType: notification.type, reason: "missing_activity" });
+        notifyIgnored(input.onIgnored, {
+          boxType,
+          notificationType: notification.type,
+          reason: "missing_activity"
+        });
         continue;
       }
       const activity = notification.dereferencedActivity;
       if (isControlActivity(activity)) {
         ignoredCount += 1;
-        notifyIgnored(input.onIgnored, { boxType, notificationType: notification.type, reason: "control_activity" });
+        notifyIgnored(input.onIgnored, {
+          boxType,
+          notificationType: notification.type,
+          reason: "control_activity"
+        });
         continue;
       }
       if (!supportedActivity(activity)) {
         ignoredCount += 1;
-        notifyIgnored(input.onIgnored, { boxType, notificationType: notification.type, reason: "unsupported_activity" });
+        notifyIgnored(input.onIgnored, {
+          boxType,
+          notificationType: notification.type,
+          reason: "unsupported_activity"
+        });
         continue;
       }
       const actorUri = activityActorUri(activity);
@@ -519,7 +535,11 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
       }
       if (!isExplicitlyPublic(activity)) {
         ignoredCount += 1;
-        notifyIgnored(input.onIgnored, { boxType, notificationType: notification.type, reason: "not_explicitly_public" });
+        notifyIgnored(input.onIgnored, {
+          boxType,
+          notificationType: notification.type,
+          reason: "not_explicitly_public"
+        });
         continue;
       }
       const item = publicActivityPodsItem(
