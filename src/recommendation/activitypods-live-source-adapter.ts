@@ -8,6 +8,7 @@ import { mapActivityPubProviderActivityToNormalizedEvent } from "./protocol-sour
 import {
   createActivityPubRecommendationSourceItem,
   RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES,
+  RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES,
   type RecommendationProtocolSourceNormalizerOptions
 } from "./protocol-source-normalizers.js";
 import {
@@ -134,6 +135,7 @@ const MAX_IDENTIFIER_LENGTH = 2_048;
 const MAX_CURSOR_LENGTH = 1_024;
 const NOTIFICATION_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPODS_NOTIFICATION_TYPES);
 const ACTIVITY_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_EVENT_TYPES);
+const OBJECT_TYPE_SET = new Set<string>(RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES);
 const CAPABILITIES: readonly RecommendationSourceAdapterCapability[] = Object.freeze([
   "read_public",
   "read_private_with_authorization",
@@ -264,6 +266,13 @@ function typeValues(value: unknown): readonly string[] {
   return [];
 }
 
+function firstKnownType(value: unknown, allowed: ReadonlySet<string>): string | undefined {
+  for (const type of typeValues(value)) {
+    if (allowed.has(type)) return type;
+  }
+  return undefined;
+}
+
 function typeSuffix(value: string): string {
   const hash = value.lastIndexOf("#");
   const slash = value.lastIndexOf("/");
@@ -277,6 +286,24 @@ function isControlActivity(activity: Record<string, unknown>): boolean {
   const object = isPlainRecord(activity.object) ? activity.object : undefined;
   const objectTypes = typeValues(object?.type).map(typeSuffix);
   return objectTypes.some((type) => CONTROL_TYPE_SUFFIXES.includes(type));
+}
+
+function mapperCompatibleActivity(activity: Record<string, unknown>): Record<string, unknown> | undefined {
+  const activityType = firstKnownType(activity.type, ACTIVITY_TYPE_SET);
+  if (activityType === undefined) return undefined;
+  const rawObject = activity.object;
+  let normalizedObject = rawObject;
+  if (isPlainRecord(rawObject) && rawObject.type !== undefined) {
+    const objectType = firstKnownType(rawObject.type, OBJECT_TYPE_SET);
+    if (objectType === undefined) return undefined;
+    if (rawObject.type !== objectType) normalizedObject = Object.freeze({ ...rawObject, type: objectType });
+  }
+  if (activity.type === activityType && normalizedObject === rawObject) return activity;
+  return Object.freeze({
+    ...activity,
+    type: activityType,
+    ...(normalizedObject === undefined ? {} : { object: normalizedObject })
+  });
 }
 
 function hasRecipient(value: unknown, recipients: ReadonlySet<string>): boolean {
@@ -323,10 +350,6 @@ function activityActorUri(activity: Record<string, unknown>): string | undefined
     if (typeof actor.href === "string") return httpsUrl(actor.href, "activity actor URI");
   }
   return undefined;
-}
-
-function supportedActivity(activity: Record<string, unknown>): boolean {
-  return typeValues(activity.type).some((type) => ACTIVITY_TYPE_SET.has(type));
 }
 
 function publicActivityPodsItem(
@@ -520,7 +543,8 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
         });
         continue;
       }
-      if (!supportedActivity(activity)) {
+      const normalizedActivity = mapperCompatibleActivity(activity);
+      if (normalizedActivity === undefined) {
         ignoredCount += 1;
         notifyIgnored(input.onIgnored, {
           boxType,
@@ -529,11 +553,11 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
         });
         continue;
       }
-      const actorUri = activityActorUri(activity);
+      const actorUri = activityActorUri(normalizedActivity);
       if (actorUri !== ownerActorUri) {
         throw new TypeError("ActivityPods live activity actor mismatch.");
       }
-      if (!isExplicitlyPublic(activity)) {
+      if (!isExplicitlyPublic(normalizedActivity)) {
         ignoredCount += 1;
         notifyIgnored(input.onIgnored, {
           boxType,
@@ -543,7 +567,7 @@ export function createRecommendationActivityPodsLiveSourceAdapter(
         continue;
       }
       const item = publicActivityPodsItem(
-        activity,
+        normalizedActivity,
         notification.observedAt,
         ownerActorUri,
         adapterId,
