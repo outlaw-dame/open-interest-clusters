@@ -88,6 +88,33 @@ test("rejects revoked, expired, future-dated, duplicate, unknown, and provider-d
   }
 });
 
+test("rejects leap-second grant timestamps that cannot be compared safely", () => {
+  assert.throws(
+    () => requireRecommendationActivityPodsResourceOperation(
+      grant({ checkedAt: "2026-08-05T11:59:60Z" }),
+      "read",
+      { now: NOW }
+    ),
+    /grant check time/u
+  );
+  assert.throws(
+    () => requireRecommendationActivityPodsResourceOperation(
+      grant({ expiresAt: "2026-12-31T23:59:60Z" }),
+      "read",
+      { now: NOW }
+    ),
+    /grant expiry time/u
+  );
+  assert.throws(
+    () => requireRecommendationActivityPodsResourceOperation(
+      grant(),
+      "read",
+      { now: "2026-08-05T11:59:60Z" }
+    ),
+    /grant validation time/u
+  );
+});
+
 test("read requires resource read, and conditional writes require resource read/write plus container write", () => {
   assert.doesNotThrow(() =>
     requireRecommendationActivityPodsResourceOperation(grant(), "read", { now: NOW })
