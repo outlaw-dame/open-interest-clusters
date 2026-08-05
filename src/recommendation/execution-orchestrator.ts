@@ -1,17 +1,7 @@
 import type { RecommendationExplanation } from "../local-preferences/explanations.js";
-import {
-  hybridScore,
-  type HybridScoreInput,
-  type HybridScoreResult
-} from "../scoring/hybrid.js";
-import {
-  rerankMultiObjective,
-  type MultiObjectiveWeights
-} from "../scoring/multi-objective.js";
-import {
-  serveCandidates,
-  type CandidateServingResponse
-} from "../serving/candidates.js";
+import { hybridScore, type HybridScoreInput, type HybridScoreResult } from "../scoring/hybrid.js";
+import { rerankMultiObjective, type MultiObjectiveWeights } from "../scoring/multi-objective.js";
+import { serveCandidates, type CandidateServingResponse } from "../serving/candidates.js";
 import type { RecommendationEngineOrchestrator } from "./engine-orchestrator.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
@@ -92,11 +82,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function boundedString(value: unknown, maximum: number, message: string): string {
   if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value !== value.trim() ||
-    value.length > maximum ||
-    hasUnsafeControlCharacter(value)
+    typeof value !== "string" || value.trim().length === 0 || value !== value.trim() ||
+    value.length > maximum || hasUnsafeControlCharacter(value)
   ) throw new TypeError(message);
   return value;
 }
@@ -104,10 +91,8 @@ function boundedString(value: unknown, maximum: number, message: string): string
 function positiveInteger(value: unknown, fallback: number): number {
   if (value === undefined) return fallback;
   if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < 1 ||
-    value > MAX_SCORED_CANDIDATES
+    typeof value !== "number" || !Number.isSafeInteger(value) ||
+    value < 1 || value > MAX_SCORED_CANDIDATES
   ) throw new TypeError("Invalid recommendation execution candidate limit.");
   return value;
 }
@@ -124,12 +109,16 @@ function normalizeRequest(value: RecommendationExecutionRequest): Recommendation
     requestId: boundedString(value.requestId, MAX_IDENTIFIER_LENGTH, "Invalid recommendation execution request ID.")
   };
   if (value.limit !== undefined) request.limit = positiveInteger(value.limit, 20);
-  if (value.minScore !== undefined) request.minScore = finiteNumber(value.minScore, "Invalid recommendation execution minimum score.");
+  if (value.minScore !== undefined) {
+    request.minScore = finiteNumber(value.minScore, "Invalid recommendation execution minimum score.");
+  }
   if (value.excludeClusterIds !== undefined) {
     if (!Array.isArray(value.excludeClusterIds)) throw new TypeError("Invalid recommendation execution exclusions.");
-    request.excludeClusterIds = Object.freeze(value.excludeClusterIds.map((clusterId) =>
+    const exclusions = value.excludeClusterIds.map((clusterId) =>
       boundedString(clusterId, MAX_IDENTIFIER_LENGTH, "Invalid recommendation execution excluded cluster ID.")
-    ));
+    );
+    Object.freeze(exclusions);
+    request.excludeClusterIds = exclusions;
   }
   return Object.freeze(request);
 }
@@ -141,14 +130,15 @@ function normalizeScoredCandidates(
   if (!Array.isArray(candidates)) throw new TypeError("Invalid recommendation execution scoring result.");
   if (candidates.length > maximum) throw new RangeError("Recommendation execution scored candidate limit exceeded.");
   const seen = new Set<string>();
-  const normalized = candidates.map((candidate) => {
+  const normalized: HybridScoreResult[] = [];
+  for (const candidate of candidates) {
     if (!isPlainRecord(candidate) || !isPlainRecord(candidate.components)) {
       throw new TypeError("Invalid recommendation execution scored candidate.");
     }
     const clusterId = boundedString(candidate.clusterId, MAX_IDENTIFIER_LENGTH, "Invalid recommendation execution cluster ID.");
     if (seen.has(clusterId)) throw new TypeError("Duplicate recommendation execution cluster ID.");
     seen.add(clusterId);
-    const components = Object.freeze({
+    const components: HybridScoreResult["components"] = {
       deterministic: finiteNumber(candidate.components.deterministic, "Invalid deterministic score component."),
       entity: finiteNumber(candidate.components.entity, "Invalid entity score component."),
       graph: finiteNumber(candidate.components.graph, "Invalid graph score component."),
@@ -156,14 +146,18 @@ function normalizeScoredCandidates(
       bandit: finiteNumber(candidate.components.bandit, "Invalid bandit score component."),
       contextual: finiteNumber(candidate.components.contextual, "Invalid contextual score component."),
       session: finiteNumber(candidate.components.session, "Invalid session score component.")
-    });
-    return Object.freeze({
+    };
+    Object.freeze(components);
+    const item: HybridScoreResult = {
       clusterId,
       score: finiteNumber(candidate.score, "Invalid recommendation execution candidate score."),
       components
-    });
-  });
-  return Object.freeze(normalized);
+    };
+    Object.freeze(item);
+    normalized.push(item);
+  }
+  Object.freeze(normalized);
+  return normalized;
 }
 
 function normalizeMetadata(
@@ -194,7 +188,9 @@ function normalizeExplanations(
   value: ReadonlyMap<string, RecommendationExplanation>,
   expected: ReadonlySet<string>
 ): ReadonlyMap<string, RecommendationExplanation> {
-  if (!(value instanceof Map)) throw new TypeError("Invalid recommendation explanation result.");
+  if (value === null || typeof value !== "object" || typeof value.entries !== "function") {
+    throw new TypeError("Invalid recommendation explanation result.");
+  }
   const output = new Map<string, RecommendationExplanation>();
   for (const [key, explanation] of value.entries()) {
     const clusterId = boundedString(key, MAX_IDENTIFIER_LENGTH, "Invalid recommendation explanation cluster ID.");
@@ -212,32 +208,38 @@ function normalizeExplanations(
         contribution: finiteNumber(component.contribution, "Invalid recommendation explanation contribution.")
       });
     });
-    output.set(clusterId, Object.freeze({
+    Object.freeze(components);
+    const normalized: RecommendationExplanation = {
       clusterId,
       summary,
-      components: Object.freeze(components),
-      confidence: Math.max(0, Math.min(1, finiteNumber(explanation.confidence, "Invalid recommendation explanation confidence.")))
-    }));
+      components,
+      confidence: Math.max(0, Math.min(1,
+        finiteNumber(explanation.confidence, "Invalid recommendation explanation confidence.")))
+    };
+    Object.freeze(normalized);
+    output.set(clusterId, normalized);
   }
   return output;
 }
 
 function freezeResponse(response: CandidateServingResponse): CandidateServingResponse {
-  return Object.freeze({
+  const candidates = response.candidates.map((candidate) => Object.freeze({ ...candidate }));
+  Object.freeze(candidates);
+  const frozen: CandidateServingResponse = {
     requestId: response.requestId,
     generatedAt: response.generatedAt,
-    candidates: Object.freeze(response.candidates.map((candidate) => Object.freeze({ ...candidate })))
-  });
+    candidates
+  };
+  Object.freeze(frozen);
+  return frozen;
 }
 
 export function createRecommendationExecutionOrchestrator(
   options: RecommendationExecutionOrchestratorOptions
 ): RecommendationExecutionOrchestrator {
   if (
-    !isPlainRecord(options) ||
-    !isPlainRecord(options.engine) ||
-    typeof options.engine.readProfile !== "function" ||
-    typeof options.buildScoringInput !== "function" ||
+    !isPlainRecord(options) || !isPlainRecord(options.engine) ||
+    typeof options.engine.readProfile !== "function" || typeof options.buildScoringInput !== "function" ||
     (options.resolveExplanations !== undefined && typeof options.resolveExplanations !== "function") ||
     (options.rerank !== undefined && !isPlainRecord(options.rerank))
   ) throw new TypeError("Invalid recommendation execution orchestrator options.");
@@ -251,7 +253,7 @@ export function createRecommendationExecutionOrchestrator(
     async execute(rawRequest: RecommendationExecutionRequest): Promise<RecommendationExecutionResult> {
       const request = normalizeRequest(rawRequest);
       const profile = await options.engine.readProfile(request.subjectId);
-      const context = Object.freeze({
+      const context: RecommendationExecutionContext = Object.freeze({
         subjectId: request.subjectId,
         requestId: request.requestId,
         profile
@@ -276,10 +278,17 @@ export function createRecommendationExecutionOrchestrator(
           return ranked;
         }), options.rerank?.weights);
         const adjustedById = new Map(adjusted.map((item) => [item.clusterId, item.adjustedScore]));
-        scored = Object.freeze(scored.map((candidate) => Object.freeze({
-          ...candidate,
-          score: adjustedById.get(candidate.clusterId) ?? candidate.score
-        })));
+        const reranked: HybridScoreResult[] = scored.map((candidate) => {
+          const item: HybridScoreResult = {
+            clusterId: candidate.clusterId,
+            score: adjustedById.get(candidate.clusterId) ?? candidate.score,
+            components: candidate.components
+          };
+          Object.freeze(item);
+          return item;
+        });
+        Object.freeze(reranked);
+        scored = reranked;
       }
 
       const explanations = options.resolveExplanations === undefined
@@ -294,15 +303,15 @@ export function createRecommendationExecutionOrchestrator(
       if (request.minScore !== undefined) servingRequest.minScore = request.minScore;
       if (request.excludeClusterIds !== undefined) servingRequest.excludeClusterIds = request.excludeClusterIds;
       const response = freezeResponse(serveCandidates(servingRequest));
-
-      return Object.freeze({
+      const result: RecommendationExecutionResult = {
         requestId: request.requestId,
         subjectId: request.subjectId,
         profileUpdatedAt: profile.updatedAt,
         profileSignalCount: profile.signalCount,
         scoredCandidateCount: scored.length,
         response
-      });
+      };
+      return Object.freeze(result);
     }
   });
 }
