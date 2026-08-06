@@ -1,5 +1,4 @@
 import type { RecommendationDerivedDataDeletionIntent } from "./consent.js";
-import { createRecommendationEmbeddingSourceFingerprint } from "./embedding-lifecycle.js";
 import type {
   RecommendationEngineDeletionResult,
   RecommendationEngineOrchestrator,
@@ -10,6 +9,7 @@ import type {
 import type { RecommendationProfileApplicationResult } from "./profile-application-orchestrator.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
+import { sha256Hex } from "../runtime/hash.js";
 
 export const RECOMMENDATION_DERIVED_STATE_TARGETS = [
   "embeddings",
@@ -26,6 +26,13 @@ export const RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS = [
 ] as const;
 export type RecommendationDerivedStateInvalidationReason =
   typeof RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS[number];
+
+export const RECOMMENDATION_DERIVED_STATE_TASK_PHASES = [
+  "engine_deletion_pending",
+  "derived_invalidation_pending"
+] as const;
+export type RecommendationDerivedStateTaskPhase =
+  typeof RECOMMENDATION_DERIVED_STATE_TASK_PHASES[number];
 
 export interface RecommendationDerivedStateInvalidationRequest {
   subjectId: string;
@@ -45,11 +52,19 @@ export interface RecommendationDerivedStateInvalidationTask {
   profileDigest: string;
   occurredAt: string;
   pendingTargets: readonly RecommendationDerivedStateTarget[];
+  phase?: RecommendationDerivedStateTaskPhase;
+  deletionIntent?: RecommendationDerivedDataDeletionIntent;
 }
 
 export interface RecommendationDerivedStateInvalidationTaskStore {
   load(subjectId: string): Promise<RecommendationDerivedStateInvalidationTask | undefined>;
   save(task: RecommendationDerivedStateInvalidationTask): Promise<void>;
+  delete(subjectId: string): Promise<void>;
+}
+
+export interface RecommendationDerivedStateCheckpointStore {
+  load(subjectId: string): Promise<string | undefined>;
+  save(subjectId: string, profileDigest: string): Promise<void>;
   delete(subjectId: string): Promise<void>;
 }
 
@@ -60,6 +75,7 @@ export interface RecommendationDerivedStateInvalidationOrchestratorOptions {
   >;
   invalidators: Readonly<Record<RecommendationDerivedStateTarget, RecommendationDerivedStateInvalidator>>;
   taskStore?: RecommendationDerivedStateInvalidationTaskStore;
+  checkpointStore?: RecommendationDerivedStateCheckpointStore;
   now?: () => string;
 }
 
@@ -104,6 +120,7 @@ export class RecommendationDerivedStateInvalidationPendingError extends Error {
 
 const TARGET_SET = new Set<string>(RECOMMENDATION_DERIVED_STATE_TARGETS);
 const REASON_SET = new Set<string>(RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS);
+const PHASE_SET = new Set<string>(RECOMMENDATION_DERIVED_STATE_TASK_PHASES);
 const MAX_SUBJECT_ID_LENGTH = 512;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/u;
 
@@ -113,17 +130,26 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function validateSubjectId(value: unknown): string {
   if (
-    typeof value !== "string" || value.trim().length === 0 || value !== value.trim() ||
-    value.length > MAX_SUBJECT_ID_LENGTH || hasUnsafeControlCharacter(value)
-  ) throw new TypeError("Invalid recommendation derived-state subject ID.");
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value !== value.trim() ||
+    value.length > MAX_SUBJECT_ID_LENGTH ||
+    hasUnsafeControlCharacter(value)
+  ) {
+    throw new TypeError("Invalid recommendation derived-state subject ID.");
+  }
   return value;
 }
 
 function validateTimestamp(value: unknown): string {
   if (
-    typeof value !== "string" || value.trim().length === 0 || value !== value.trim() ||
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value !== value.trim() ||
     !Number.isFinite(Date.parse(value))
-  ) throw new TypeError("Invalid recommendation derived-state timestamp.");
+  ) {
+    throw new TypeError("Invalid recommendation derived-state timestamp.");
+  }
   return value;
 }
 
@@ -148,18 +174,43 @@ function validateReason(value: unknown): RecommendationDerivedStateInvalidationR
   return value as RecommendationDerivedStateInvalidationReason;
 }
 
+function validatePhase(value: unknown): RecommendationDerivedStateTaskPhase {
+  if (typeof value !== "string" || !PHASE_SET.has(value)) {
+    throw new TypeError("Invalid recommendation derived-state task phase.");
+  }
+  return value as RecommendationDerivedStateTaskPhase;
+}
+
+function cloneDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): RecommendationDerivedDataDeletionIntent {
+  return Object.freeze({
+    subjectId: validateSubjectId(intent.subjectId),
+    requestedAt: validateTimestamp(intent.requestedAt),
+    scope: "recommendation_derived_data" as const,
+    targets: Object.freeze([...intent.targets])
+  });
+}
+
 function freezeTask(task: RecommendationDerivedStateInvalidationTask): RecommendationDerivedStateInvalidationTask {
   const targets = task.pendingTargets.map(validateTarget);
   if (new Set(targets).size !== targets.length) {
     throw new TypeError("Duplicate recommendation derived-state pending target.");
   }
-  return Object.freeze({
+  const phase = validatePhase(task.phase ?? "derived_invalidation_pending");
+  const normalized: RecommendationDerivedStateInvalidationTask = {
     subjectId: validateSubjectId(task.subjectId),
     reason: validateReason(task.reason),
     profileDigest: validateDigest(task.profileDigest),
     occurredAt: validateTimestamp(task.occurredAt),
-    pendingTargets: Object.freeze(targets)
-  });
+    pendingTargets: Object.freeze(targets),
+    phase
+  };
+  if (task.deletionIntent !== undefined) {
+    normalized.deletionIntent = cloneDeletionIntent(task.deletionIntent);
+  }
+  if (phase === "engine_deletion_pending" && normalized.deletionIntent === undefined) {
+    throw new TypeError("Recommendation deletion task requires a deletion intent.");
+  }
+  return Object.freeze(normalized);
 }
 
 function createInMemoryTaskStore(): RecommendationDerivedStateInvalidationTaskStore {
@@ -178,8 +229,46 @@ function createInMemoryTaskStore(): RecommendationDerivedStateInvalidationTaskSt
   });
 }
 
-function profileDigest(profile: RecommendationProfileSnapshot): string {
-  return createRecommendationEmbeddingSourceFingerprint(profile).profileDigest;
+function createInMemoryCheckpointStore(): RecommendationDerivedStateCheckpointStore {
+  const checkpoints = new Map<string, string>();
+  return Object.freeze({
+    async load(subjectId: string) {
+      return checkpoints.get(validateSubjectId(subjectId));
+    },
+    async save(subjectId: string, digest: string) {
+      checkpoints.set(validateSubjectId(subjectId), validateDigest(digest));
+    },
+    async delete(subjectId: string) {
+      checkpoints.delete(validateSubjectId(subjectId));
+    }
+  });
+}
+
+function semanticProfileDigest(profile: RecommendationProfileSnapshot): string {
+  const entries = [...profile.entries]
+    .map((entry) => ({
+      target: { kind: entry.target.kind, key: entry.target.key },
+      score: entry.score,
+      confidence: entry.confidence,
+      signalCount: entry.signalCount,
+      positiveSignalCount: entry.positiveSignalCount,
+      negativeSignalCount: entry.negativeSignalCount,
+      neutralSignalCount: entry.neutralSignalCount,
+      privacyBoundaries: [...entry.privacyBoundaries].sort(),
+      protocols: [...entry.protocols].sort(),
+      sourceVisibilities: [...entry.sourceVisibilities].sort(),
+      ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt })
+    }))
+    .sort((left, right) =>
+      `${left.target.kind}\u0000${left.target.key}`.localeCompare(
+        `${right.target.kind}\u0000${right.target.key}`
+      )
+    );
+  return sha256Hex(JSON.stringify({
+    schemaVersion: profile.schemaVersion,
+    signalCount: profile.signalCount,
+    entries
+  }));
 }
 
 function propagation(
@@ -215,13 +304,30 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
       throw new TypeError(`Invalid recommendation derived-state invalidator: ${target}.`);
     }
   }
+
   const taskStore = options.taskStore ?? createInMemoryTaskStore();
-  if (!isPlainRecord(taskStore) || typeof taskStore.load !== "function" ||
-      typeof taskStore.save !== "function" || typeof taskStore.delete !== "function") {
+  const checkpointStore = options.checkpointStore ?? createInMemoryCheckpointStore();
+  if (
+    !isPlainRecord(taskStore) ||
+    typeof taskStore.load !== "function" ||
+    typeof taskStore.save !== "function" ||
+    typeof taskStore.delete !== "function"
+  ) {
     throw new TypeError("Invalid recommendation derived-state task store.");
   }
+  if (
+    !isPlainRecord(checkpointStore) ||
+    typeof checkpointStore.load !== "function" ||
+    typeof checkpointStore.save !== "function" ||
+    typeof checkpointStore.delete !== "function"
+  ) {
+    throw new TypeError("Invalid recommendation derived-state checkpoint store.");
+  }
+
   const nowProvider = options.now ?? (() => new Date().toISOString());
-  if (typeof nowProvider !== "function") throw new TypeError("Invalid recommendation derived-state clock.");
+  if (typeof nowProvider !== "function") {
+    throw new TypeError("Invalid recommendation derived-state clock.");
+  }
   const tails = new Map<string, Promise<void>>();
 
   async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
@@ -229,7 +335,9 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
     const prior = tails.get(id) ?? Promise.resolve();
     const ready = prior.catch(() => undefined);
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const tail = ready.then(() => gate);
     tails.set(id, tail);
     await ready;
@@ -237,11 +345,16 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
       return await work();
     } finally {
       release();
-      if (tails.get(id) === tail) tails.delete(id);
+      if (tails.get(id) === tail) {
+        tails.delete(id);
+      }
     }
   }
 
-  async function drain(taskInput: RecommendationDerivedStateInvalidationTask): Promise<RecommendationDerivedStatePropagationResult> {
+  async function drainDerived(
+    taskInput: RecommendationDerivedStateInvalidationTask,
+    deletion: boolean
+  ): Promise<RecommendationDerivedStatePropagationResult> {
     let task = freezeTask(taskInput);
     const completed: RecommendationDerivedStateTarget[] = [];
     for (const target of [...task.pendingTargets]) {
@@ -257,44 +370,85 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
         throw new RecommendationDerivedStateInvalidationPendingError(task.pendingTargets);
       }
       completed.push(target);
-      task = freezeTask({ ...task, pendingTargets: task.pendingTargets.filter((item) => item !== target) });
-      if (task.pendingTargets.length > 0) await taskStore.save(task);
+      task = freezeTask({
+        ...task,
+        phase: "derived_invalidation_pending",
+        pendingTargets: task.pendingTargets.filter((item) => item !== target)
+      });
+      await taskStore.save(task);
+    }
+
+    if (deletion) {
+      await checkpointStore.delete(task.subjectId);
+    } else {
+      await checkpointStore.save(task.subjectId, task.profileDigest);
     }
     await taskStore.delete(task.subjectId);
     return propagation(true, task.profileDigest, completed, task.reason);
   }
 
-  async function schedule(
+  async function resumeTask(
+    taskInput: RecommendationDerivedStateInvalidationTask
+  ): Promise<{
+    propagation: RecommendationDerivedStatePropagationResult;
+    engineDeletion?: RecommendationEngineDeletionResult;
+  }> {
+    let task = freezeTask(taskInput);
+    let engineDeletion: RecommendationEngineDeletionResult | undefined;
+    if (task.phase === "engine_deletion_pending") {
+      engineDeletion = await options.engine.deleteSubject(task.deletionIntent!);
+      task = freezeTask({
+        ...task,
+        phase: "derived_invalidation_pending",
+        pendingTargets: RECOMMENDATION_DERIVED_STATE_TARGETS
+      });
+      await taskStore.save(task);
+    }
+    const result = await drainDerived(task, task.reason === "deletion_requested");
+    return engineDeletion === undefined
+      ? { propagation: result }
+      : { propagation: result, engineDeletion };
+  }
+
+  async function recoverPending(subjectId: string): Promise<RecommendationDerivedStatePropagationResult | undefined> {
+    const task = await taskStore.load(validateSubjectId(subjectId));
+    if (task === undefined) {
+      return undefined;
+    }
+    return (await resumeTask(task)).propagation;
+  }
+
+  async function ensureCurrentProfilePropagated(
     subjectId: string,
     profile: RecommendationProfileSnapshot,
     reason: RecommendationDerivedStateInvalidationReason,
     occurredAt: string
   ): Promise<RecommendationDerivedStatePropagationResult> {
+    const digest = semanticProfileDigest(profile);
+    const checkpoint = await checkpointStore.load(subjectId);
+    if (checkpoint !== undefined && validateDigest(checkpoint) === digest) {
+      return propagation(false, digest, []);
+    }
     const task = freezeTask({
       subjectId,
       reason,
-      profileDigest: profileDigest(profile),
+      profileDigest: digest,
       occurredAt,
+      phase: "derived_invalidation_pending",
       pendingTargets: RECOMMENDATION_DERIVED_STATE_TARGETS
     });
     await taskStore.save(task);
-    return drain(task);
+    return (await resumeTask(task)).propagation;
   }
 
   return Object.freeze({
     async process(input: RecommendationEngineProcessInput) {
       return runSerialized(input.subjectId, async () => {
-        const before = await options.engine.readProfile(input.subjectId);
-        const beforeDigest = profileDigest(before);
+        await recoverPending(input.subjectId);
         const engine = await options.engine.process(input);
-        const after = engine.application.profile;
-        const afterDigest = profileDigest(after);
-        if (beforeDigest === afterDigest) {
-          return Object.freeze({ engine, propagation: propagation(false, afterDigest, []) });
-        }
-        const result = await schedule(
+        const result = await ensureCurrentProfilePropagated(
           input.subjectId,
-          after,
+          engine.application.profile,
           processReason(input),
           validateTimestamp(input.now ?? nowProvider())
         );
@@ -304,14 +458,9 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
 
     async synchronize(input: RecommendationEngineSynchronizeInput) {
       return runSerialized(input.subjectId, async () => {
-        const before = await options.engine.readProfile(input.subjectId);
-        const beforeDigest = profileDigest(before);
+        await recoverPending(input.subjectId);
         const application = await options.engine.synchronize(input);
-        const afterDigest = profileDigest(application.profile);
-        if (beforeDigest === afterDigest) {
-          return Object.freeze({ application, propagation: propagation(false, afterDigest, []) });
-        }
-        const result = await schedule(
+        const result = await ensureCurrentProfilePropagated(
           input.subjectId,
           application.profile,
           "signal_expired",
@@ -324,30 +473,42 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
     async repair(rawSubjectId: string) {
       return runSerialized(rawSubjectId, async () => {
         const subjectId = validateSubjectId(rawSubjectId);
-        const task = await taskStore.load(subjectId);
-        if (task === undefined) {
-          const profile = await options.engine.readProfile(subjectId);
-          return propagation(false, profileDigest(profile), []);
+        const pending = await recoverPending(subjectId);
+        if (pending !== undefined) {
+          return pending;
         }
-        return drain(task);
+        const profile = await options.engine.readProfile(subjectId);
+        return ensureCurrentProfilePropagated(
+          subjectId,
+          profile,
+          "profile_changed",
+          validateTimestamp(nowProvider())
+        );
       });
     },
 
     async deleteSubject(intent: RecommendationDerivedDataDeletionIntent) {
       return runSerialized(intent.subjectId, async () => {
-        const occurredAt = validateTimestamp(intent.requestedAt);
-        const before = await options.engine.readProfile(intent.subjectId);
+        await recoverPending(intent.subjectId);
+        const profile = await options.engine.readProfile(intent.subjectId);
         const task = freezeTask({
           subjectId: intent.subjectId,
           reason: "deletion_requested",
-          profileDigest: profileDigest(before),
-          occurredAt,
-          pendingTargets: RECOMMENDATION_DERIVED_STATE_TARGETS
+          profileDigest: semanticProfileDigest(profile),
+          occurredAt: validateTimestamp(intent.requestedAt),
+          phase: "engine_deletion_pending",
+          deletionIntent: intent,
+          pendingTargets: []
         });
         await taskStore.save(task);
-        const engine = await options.engine.deleteSubject(intent);
-        const result = await drain(task);
-        return Object.freeze({ engine, propagation: result });
+        const resumed = await resumeTask(task);
+        if (resumed.engineDeletion === undefined) {
+          throw new Error("Recommendation deletion recovery did not execute the authoritative deletion.");
+        }
+        return Object.freeze({
+          engine: resumed.engineDeletion,
+          propagation: resumed.propagation
+        });
       });
     }
   });
