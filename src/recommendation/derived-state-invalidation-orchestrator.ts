@@ -123,6 +123,7 @@ const REASON_SET = new Set<string>(RECOMMENDATION_DERIVED_STATE_INVALIDATION_REA
 const PHASE_SET = new Set<string>(RECOMMENDATION_DERIVED_STATE_TASK_PHASES);
 const MAX_SUBJECT_ID_LENGTH = 512;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/u;
+const DELETION_TARGET_SET = new Set(["profile", "event_history"]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -182,11 +183,22 @@ function validatePhase(value: unknown): RecommendationDerivedStateTaskPhase {
 }
 
 function cloneDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): RecommendationDerivedDataDeletionIntent {
+  if (!isPlainRecord(intent) || intent.scope !== "recommendation_derived_data") {
+    throw new TypeError("Invalid recommendation deletion intent scope.");
+  }
+  if (
+    !Array.isArray(intent.targets) ||
+    intent.targets.length !== 2 ||
+    new Set(intent.targets).size !== 2 ||
+    intent.targets.some((target) => !DELETION_TARGET_SET.has(target))
+  ) {
+    throw new TypeError("Invalid recommendation deletion intent targets.");
+  }
   return Object.freeze({
     subjectId: validateSubjectId(intent.subjectId),
     requestedAt: validateTimestamp(intent.requestedAt),
-    scope: "recommendation_derived_data" as const,
-    targets: Object.freeze([...intent.targets])
+    scope: intent.scope,
+    targets: Object.freeze(["profile", "event_history"] as const)
   });
 }
 
@@ -196,8 +208,9 @@ function freezeTask(task: RecommendationDerivedStateInvalidationTask): Recommend
     throw new TypeError("Duplicate recommendation derived-state pending target.");
   }
   const phase = validatePhase(task.phase ?? "derived_invalidation_pending");
+  const subjectId = validateSubjectId(task.subjectId);
   const normalized: RecommendationDerivedStateInvalidationTask = {
-    subjectId: validateSubjectId(task.subjectId),
+    subjectId,
     reason: validateReason(task.reason),
     profileDigest: validateDigest(task.profileDigest),
     occurredAt: validateTimestamp(task.occurredAt),
@@ -205,7 +218,11 @@ function freezeTask(task: RecommendationDerivedStateInvalidationTask): Recommend
     phase
   };
   if (task.deletionIntent !== undefined) {
-    normalized.deletionIntent = cloneDeletionIntent(task.deletionIntent);
+    const deletionIntent = cloneDeletionIntent(task.deletionIntent);
+    if (deletionIntent.subjectId !== subjectId) {
+      throw new TypeError("Recommendation deletion task subject mismatch.");
+    }
+    normalized.deletionIntent = deletionIntent;
   }
   if (phase === "engine_deletion_pending" && normalized.deletionIntent === undefined) {
     throw new TypeError("Recommendation deletion task requires a deletion intent.");
@@ -411,9 +428,14 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
   }
 
   async function recoverPending(subjectId: string): Promise<RecommendationDerivedStatePropagationResult | undefined> {
-    const task = await taskStore.load(validateSubjectId(subjectId));
-    if (task === undefined) {
+    const requestedSubjectId = validateSubjectId(subjectId);
+    const loadedTask = await taskStore.load(requestedSubjectId);
+    if (loadedTask === undefined) {
       return undefined;
+    }
+    const task = freezeTask(loadedTask);
+    if (task.subjectId !== requestedSubjectId) {
+      throw new TypeError("Recommendation recovered task subject mismatch.");
     }
     return (await resumeTask(task)).propagation;
   }
