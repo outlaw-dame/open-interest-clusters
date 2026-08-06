@@ -87,7 +87,7 @@ test("user-controlled remote exception requires Solid control authority and user
         serverSideProcessing: true
       }
     })),
-    /signal\.deny\.storage_authority/u
+    /signal\.deny\.private_affinity/u
   );
 
   assert.throws(
@@ -101,11 +101,11 @@ test("user-controlled remote exception requires Solid control authority and user
         observedAt: OBSERVED_AT
       }
     })),
-    /signal\.deny\.storage_authority/u
+    /signal\.deny\.private_affinity/u
   );
 });
 
-test("generic application-managed server storage remains provider-owned and denied", () => {
+test("generic application-local evidence cannot use the remote processing boundary", () => {
   const input = activityPodSignal({
     evidence: {
       sourceItemKind: "collection",
@@ -140,12 +140,12 @@ test("generic application-managed server storage remains provider-owned and deni
 
   assert.deepEqual(evaluation, {
     decision: "deny",
-    reason: "signal.deny.storage_authority",
+    reason: "signal.deny.local_boundary_mismatch",
     effect: "affinity",
     storageAuthority: "provider_owned"
   });
   assert.throws(
     () => normalizeRecommendationInterestSignal(input),
-    /signal\.deny\.storage_authority/u
+    /signal\.deny\.local_boundary_mismatch/u
   );
 });
