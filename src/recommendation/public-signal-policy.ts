@@ -9,6 +9,11 @@ import type {
   RecommendationInterestTargetKind
 } from "./interest-signal.js";
 import type { RecommendationInterestEvidence } from "./interest-signal.js";
+import {
+  inferLegacyRecommendationStorageAuthority,
+  isRecommendationStorageAuthority,
+  type RecommendationStorageAuthority
+} from "./storage-authority.js";
 
 export const RECOMMENDATION_SIGNAL_EFFECT_KINDS = ["affinity", "filtering"] as const;
 export type RecommendationSignalEffectKind = typeof RECOMMENDATION_SIGNAL_EFFECT_KINDS[number];
@@ -17,6 +22,7 @@ export const RECOMMENDATION_PUBLIC_SIGNAL_POLICY_REASONS = [
   "signal.allow.explicit_public",
   "signal.allow.atproto_public_repo",
   "signal.allow.local_owner",
+  "signal.allow.user_controlled_remote",
   "signal.allow.local_private_filter",
   "signal.deny.private_affinity",
   "signal.deny.remote_private_filter",
@@ -32,6 +38,7 @@ export interface RecommendationPublicSignalPolicyInput {
   targetKind: RecommendationInterestTargetKind;
   dataUse: RecommendationDataUse;
   privacyBoundary: RecommendationInterestPrivacyBoundary;
+  storageAuthority?: RecommendationStorageAuthority;
   evidence: RecommendationInterestEvidence;
   consent: PrivacySafeRecommendationConsentEvent;
 }
@@ -40,6 +47,7 @@ export interface RecommendationPublicSignalPolicyEvaluation {
   decision: "allow" | "deny";
   reason: RecommendationPublicSignalPolicyReason;
   effect: RecommendationSignalEffectKind;
+  storageAuthority: RecommendationStorageAuthority;
 }
 
 const FILTER_ACTIONS = new Set<RecommendationInterestAction>([
@@ -59,12 +67,36 @@ function signalEffect(input: RecommendationPublicSignalPolicyInput): Recommendat
   return "affinity";
 }
 
+function resolvedStorageAuthority(
+  input: RecommendationPublicSignalPolicyInput
+): RecommendationStorageAuthority {
+  if (input.storageAuthority !== undefined) {
+    if (!isRecommendationStorageAuthority(input.storageAuthority)) {
+      throw new TypeError("Invalid recommendation signal storage authority.");
+    }
+    return input.storageAuthority;
+  }
+
+  if (
+    input.privacyBoundary === "server_allowed" &&
+    input.evidence.protocol === "activitypods" &&
+    input.evidence.sourceVisibility === "acl_controlled" &&
+    input.evidence.accessBasis === "solid_acl_control" &&
+    input.evidence.trustBoundary === "user_owned"
+  ) {
+    return "user_owned";
+  }
+
+  return inferLegacyRecommendationStorageAuthority(input.privacyBoundary);
+}
+
 function evaluation(
   decision: "allow" | "deny",
   reason: RecommendationPublicSignalPolicyReason,
-  effect: RecommendationSignalEffectKind
+  effect: RecommendationSignalEffectKind,
+  storageAuthority: RecommendationStorageAuthority
 ): RecommendationPublicSignalPolicyEvaluation {
-  return Object.freeze({ decision, reason, effect });
+  return Object.freeze({ decision, reason, effect, storageAuthority });
 }
 
 function isExplicitPublic(input: RecommendationPublicSignalPolicyInput): boolean {
@@ -84,8 +116,12 @@ function isAtprotoPublicRepository(input: RecommendationPublicSignalPolicyInput)
   );
 }
 
-function isLocalOwnerEvidence(input: RecommendationPublicSignalPolicyInput): boolean {
+function isLocalOwnerEvidence(
+  input: RecommendationPublicSignalPolicyInput,
+  storageAuthority: RecommendationStorageAuthority
+): boolean {
   return (
+    storageAuthority === "device_owned" &&
     input.evidence.protocol === "app_local" &&
     input.evidence.sourceVisibility === "local_only" &&
     input.evidence.accessBasis === "owner" &&
@@ -96,36 +132,62 @@ function isLocalOwnerEvidence(input: RecommendationPublicSignalPolicyInput): boo
   );
 }
 
+function isUserControlledRemoteEvidence(
+  input: RecommendationPublicSignalPolicyInput,
+  storageAuthority: RecommendationStorageAuthority
+): boolean {
+  return (
+    storageAuthority === "user_owned" &&
+    input.evidence.protocol === "activitypods" &&
+    input.evidence.sourceVisibility === "acl_controlled" &&
+    input.evidence.accessBasis === "solid_acl_control" &&
+    input.evidence.trustBoundary === "user_owned" &&
+    input.privacyBoundary === "server_allowed" &&
+    input.consent.containsPrivateData === true &&
+    input.consent.containsThirdPartyData === false &&
+    input.consent.serverSideProcessing === true &&
+    (input.dataUse === "local_personalization" || input.dataUse === "ranking")
+  );
+}
+
 export function evaluateRecommendationPublicSignalPolicy(
   input: RecommendationPublicSignalPolicyInput
 ): RecommendationPublicSignalPolicyEvaluation {
   const effect = signalEffect(input);
+  const storageAuthority = resolvedStorageAuthority(input);
 
   if (isExplicitPublic(input)) {
-    return evaluation("allow", "signal.allow.explicit_public", effect);
+    return evaluation("allow", "signal.allow.explicit_public", effect, storageAuthority);
   }
   if (isAtprotoPublicRepository(input)) {
-    return evaluation("allow", "signal.allow.atproto_public_repo", effect);
+    return evaluation("allow", "signal.allow.atproto_public_repo", effect, storageAuthority);
   }
-  if (isLocalOwnerEvidence(input)) {
-    return evaluation("allow", "signal.allow.local_owner", effect);
+  if (isLocalOwnerEvidence(input, storageAuthority)) {
+    return evaluation("allow", "signal.allow.local_owner", effect, storageAuthority);
+  }
+  if (isUserControlledRemoteEvidence(input, storageAuthority)) {
+    return evaluation("allow", "signal.allow.user_controlled_remote", effect, storageAuthority);
   }
 
   if (input.evidence.protocol === "app_local") {
-    return evaluation("deny", "signal.deny.local_boundary_mismatch", effect);
+    return evaluation("deny", "signal.deny.local_boundary_mismatch", effect, storageAuthority);
   }
 
   if (input.consent.containsPrivateData === true) {
     if (effect === "affinity") {
-      return evaluation("deny", "signal.deny.private_affinity", effect);
+      return evaluation("deny", "signal.deny.private_affinity", effect, storageAuthority);
     }
-    if (input.privacyBoundary !== "local_only" || input.consent.serverSideProcessing) {
-      return evaluation("deny", "signal.deny.remote_private_filter", effect);
+    if (
+      storageAuthority !== "device_owned" ||
+      input.privacyBoundary !== "local_only" ||
+      input.consent.serverSideProcessing
+    ) {
+      return evaluation("deny", "signal.deny.remote_private_filter", effect, storageAuthority);
     }
-    return evaluation("allow", "signal.allow.local_private_filter", effect);
+    return evaluation("allow", "signal.allow.local_private_filter", effect, storageAuthority);
   }
 
-  return evaluation("deny", "signal.deny.non_public_provider_evidence", effect);
+  return evaluation("deny", "signal.deny.non_public_provider_evidence", effect, storageAuthority);
 }
 
 export function requireRecommendationPublicSignalPolicy(

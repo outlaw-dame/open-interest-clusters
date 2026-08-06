@@ -7,7 +7,7 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 ## Design principles
 
 - **Privacy and consent first:** ambiguous authorization or consent fails closed.
-- **Public-only recommendation policy:** project-owned provider integrations and deployment guidance restrict interest inference to explicitly public posts and public account/topic metadata. The generic consent and signal APIs still support explicitly authorized private-data processing, so integrators must not route private timeline content into recommendation-interest derivation until a repository-wide public-only derivation guard is implemented.
+- **Public or user-controlled recommendation policy:** affinity inference is restricted to explicitly public evidence, ATProto public repositories, explicit user-owned local evidence, or narrowly authorized ActivityPods/Solid Pod evidence under the user's ACL control. Generic application-managed server storage and provider-private activity are not eligible affinity sources.
 - **Moderation is filtering-only:** blocks, mutes, labeler subscriptions, and similar private settings may suppress or explain candidates but must not become positive interest signals.
 - **Local-first personalization:** selected interests, feedback, profiles, semantic vectors, reranking, and explanations can remain on-device or in user-controlled storage.
 - **Protocol-neutral core:** ActivityPub, ATProto, ActivityPods/Solid, and provider-specific records are normalized before entering generic recommendation logic.
@@ -23,6 +23,7 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 - Consent, authorization, eligibility, deletion, and privacy-safe reason contracts.
 - Interest signals, profile aggregation, persistence boundaries, embedding lifecycle, ANN, graph intelligence, hybrid scoring, bandits, explanations, and bounded candidate serving.
 - Reusable end-to-end orchestration primitives.
+- A shared normalized-signal guard enforcing the public or user-controlled affinity boundary across direct construction, derivation, ledger replay, profile ingestion, and orchestration.
 
 ### ActivityPub and Mastodon-compatible integration
 
@@ -34,7 +35,7 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 - Legacy Fediverse follow packs with moved-account resolution, activity recency, discoverability, noindex/opt-out, block, mute, provider-policy, and identity-binding checks.
 - Public account featured hashtags and public instance trending hashtags.
 
-Private timeline adapters exist for normalized application reads. Project policy forbids using their contents as recommendation-interest evidence, but that prohibition is not yet enforced by every generic derivation API and therefore remains an integrator responsibility.
+Private timeline adapters may support normalized application reads, but their contents cannot become recommendation-interest affinity evidence. Private moderation and safety state may affect local filtering only.
 
 ### ATProto integration
 
@@ -51,6 +52,7 @@ Private timeline adapters exist for normalized application reads. Project policy
 - Public trends are weak contextual signals and require corroboration before durable preference.
 - Garden Fence domain suspensions are an opt-in operator/provider policy source, disabled by default.
 - Policy reasons are audit/filter evidence only, never positive interests.
+- User-controlled ActivityPods/Solid Pod state may support affinity only with explicit consent, `solid_acl_control`, `user_owned` provenance, no third-party private data, and the narrowly bounded remote-storage path.
 
 ## Architecture
 
@@ -82,10 +84,7 @@ ActivityPods is a preferred canonical-event architecture for deployments that ad
 
 ## Current limitations
 
-- A repository-wide guard preventing private source items from entering recommendation-interest derivation is not yet implemented; current public-only enforcement is provider- and deployment-policy-specific.
-- Generic ActivityPub actor/outbox traversal is not yet implemented.
-- A complete live ActivityPods/Solid deployment path is not yet implemented.
-- Retraction propagation through every profile and embedding path still needs broader integration.
+- Retraction propagation through every profile, embedding, candidate-cache, and explanation path still needs broader integration.
 - Reference IndexedDB, SQLite, Solid Pod, and production Postgres persistence paths remain incomplete.
 - No turnkey operator HTTP API, worker daemon, dashboard, or deployment chart is bundled.
 - Privacy-safe observability, freshness reporting, adversarial testing, benchmarks, and release tooling need expansion.
@@ -94,12 +93,9 @@ ActivityPods is a preferred canonical-event architecture for deployments that ad
 ## Near-term roadmap
 
 1. Keep canonical status and architecture documentation synchronized with merged behavior.
-2. Add generic public ActivityPub actor/outbox ingestion with bounded traversal, cycle detection, actor binding, strict URL policy, and public-only recommendation use.
-3. Add the ActivityPods/Solid live deployment slice while preserving user-controlled storage and opt-in processing.
-4. Add a repository-wide derivation guard for the public-only interest policy, without preventing explicitly local user-selected interests and feedback.
-5. Integrate source deletion, label negation, consent revocation, and provider-policy changes through profiles and embeddings.
-6. Add tested local-first and durable persistence reference paths.
-7. Add privacy-safe observability, fuzz/replay/concurrency/recovery tests, benchmarks, examples, and release tooling.
+2. Integrate source deletion, label negation, consent revocation, and provider-policy changes through profiles, embeddings, candidate caches, and explanations.
+3. Add tested local-first and durable persistence reference paths while preserving the user-controlled Pod exception and denying generic application-managed personalization storage.
+4. Add privacy-safe observability, fuzz/replay/concurrency/recovery tests, benchmarks, examples, and release tooling.
 
 See [`docs/canonical-status.md`](docs/canonical-status.md) for the authoritative current state and execution order.
 
@@ -140,8 +136,10 @@ Additional exports:
 Changes must preserve these invariants:
 
 - ambiguous authorization and consent fail closed;
-- project-owned integrations must not use private data for recommendation-interest inference;
-- generic derivation callers must independently enforce the public-only project policy until a shared guard exists;
+- provider-private data must not become recommendation affinity;
+- user-owned local evidence may remain local-first;
+- user-controlled ActivityPods/Solid Pod evidence may use the remote path only with explicit ACL control, `user_owned` provenance, and no third-party private data;
+- generic application-managed server storage is not an affinity exception;
 - moderation preferences affect eligibility/filtering only;
 - raw subject identifiers do not appear in profile snapshots, audit payloads, errors, or telemetry;
 - URLs, identifiers, timestamps, cursors, signatures, and provider records are validated and bounded;

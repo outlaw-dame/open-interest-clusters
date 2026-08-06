@@ -16,6 +16,13 @@ import {
   normalizeRecommendationProfileStoreRecord
 } from "./profile-store-persistence-record.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
+import {
+  evaluateRecommendationStorageAuthority,
+  isRecommendationProcessingBoundary,
+  isRecommendationStorageAuthority,
+  type RecommendationProcessingBoundary,
+  type RecommendationStorageAuthority
+} from "./storage-authority.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -57,11 +64,53 @@ function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIn
   assertTimestamp(intent.requestedAt);
 }
 
+function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWriteInput): {
+  storageAuthority: RecommendationStorageAuthority;
+  processingBoundary: RecommendationProcessingBoundary;
+} {
+  const hasAuthority = input.storageAuthority !== undefined;
+  const hasBoundary = input.processingBoundary !== undefined;
+  if (hasAuthority !== hasBoundary) {
+    throw new TypeError(
+      "Recommendation profile storage authority and processing boundary must be supplied together."
+    );
+  }
+
+  if (!hasAuthority && !hasBoundary) {
+    return Object.freeze({
+      storageAuthority: "device_owned",
+      processingBoundary: "local_only"
+    });
+  }
+
+  if (!isRecommendationStorageAuthority(input.storageAuthority)) {
+    throw new TypeError("Invalid recommendation profile storage authority.");
+  }
+  if (!isRecommendationProcessingBoundary(input.processingBoundary)) {
+    throw new TypeError("Invalid recommendation profile processing boundary.");
+  }
+
+  return Object.freeze({
+    storageAuthority: input.storageAuthority,
+    processingBoundary: input.processingBoundary
+  });
+}
+
 export async function writeRecommendationProfileStoreRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   input: RecommendationProfilePersistenceWriteInput
 ): Promise<RecommendationProfileStoreRecord> {
   assertPersistenceAdapter(adapter);
+  const authority = resolveProfileWriteAuthority(input);
+  const decision = evaluateRecommendationStorageAuthority({
+    authority: authority.storageAuthority,
+    processingBoundary: authority.processingBoundary,
+    subjectLevel: true
+  });
+  if (decision.decision === "deny") {
+    throw new TypeError(`Recommendation profile persistence denied: ${decision.reason}.`);
+  }
+
   const record = createRecommendationProfileStoreRecord(input);
   await adapter.writeProfileRecord(record);
   return record;

@@ -153,7 +153,7 @@ test("public-only policy rejects non-public provider evidence without a private 
   );
 });
 
-test("private moderation evidence is filtering-only and local-only", () => {
+test("private moderation evidence is filtering-only and device-owned", () => {
   const input = signalInput({
     target: { kind: "creator", key: "blocked-creator" },
     action: "block",
@@ -191,7 +191,8 @@ test("private moderation evidence is filtering-only and local-only", () => {
   assert.deepEqual(evaluation, {
     decision: "allow",
     reason: "signal.allow.local_private_filter",
-    effect: "filtering"
+    effect: "filtering",
+    storageAuthority: "device_owned"
   });
   assert.doesNotThrow(() => normalizeRecommendationInterestSignal(input));
 
