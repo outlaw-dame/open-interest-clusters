@@ -428,9 +428,14 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
   }
 
   async function recoverPending(subjectId: string): Promise<RecommendationDerivedStatePropagationResult | undefined> {
-    const task = await taskStore.load(validateSubjectId(subjectId));
-    if (task === undefined) {
+    const requestedSubjectId = validateSubjectId(subjectId);
+    const loadedTask = await taskStore.load(requestedSubjectId);
+    if (loadedTask === undefined) {
       return undefined;
+    }
+    const task = freezeTask(loadedTask);
+    if (task.subjectId !== requestedSubjectId) {
+      throw new TypeError("Recommendation recovered task subject mismatch.");
     }
     return (await resumeTask(task)).propagation;
   }
