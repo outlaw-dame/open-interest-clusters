@@ -93,3 +93,37 @@ test("repair rejects recovered deletion tasks whose intent subject differs from 
   await assert.rejects(orchestrator.repair("alice"), /task subject mismatch/u);
   assert.deepEqual(deletedSubjects, []);
 });
+
+test("repair rejects a self-consistent deletion task stored under another subject key", async () => {
+  const deletedSubjects: string[] = [];
+  const swappedTask: RecommendationDerivedStateInvalidationTask = {
+    subjectId: "bob",
+    reason: "deletion_requested",
+    profileDigest: "0".repeat(64),
+    occurredAt: NOW,
+    phase: "engine_deletion_pending",
+    deletionIntent: {
+      subjectId: "bob",
+      requestedAt: NOW,
+      scope: "recommendation_derived_data",
+      targets: ["profile", "event_history"]
+    },
+    pendingTargets: []
+  };
+  const taskStore: RecommendationDerivedStateInvalidationTaskStore = {
+    async load(subjectId) {
+      return subjectId === "alice" ? swappedTask : undefined;
+    },
+    async save() {},
+    async delete() {}
+  };
+  const orchestrator = createRecommendationDerivedStateInvalidationOrchestrator({
+    engine: engine(deletedSubjects),
+    invalidators: invalidators(),
+    taskStore,
+    now: () => NOW
+  });
+
+  await assert.rejects(orchestrator.repair("alice"), /recovered task subject mismatch/u);
+  assert.deepEqual(deletedSubjects, []);
+});
