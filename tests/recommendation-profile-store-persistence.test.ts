@@ -14,8 +14,22 @@ import {
   type RecommendationDerivedDataDeletionIntent,
   type RecommendationProfilePersistenceAdapter,
   type RecommendationProfileSnapshot,
-  type RecommendationProfileStoreRecord
+  type RecommendationProfileStoreRecord,
+  type RecommendationStateStorageAdapterManifest
 } from "../src/index.js";
+
+const LOCAL_PROFILE_STORAGE_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
+  adapterId: "test-local-profile-persistence",
+  domains: ["interest_profile"] as const,
+  authority: "device_owned",
+  processingBoundary: "local_only",
+  persistence: "persistent",
+  requiresNetwork: false,
+  supportsOffline: true,
+  userExportable: true,
+  userDeletable: true,
+  encryptedAtRest: false
+});
 
 function profileSnapshot(entries = [profileEntry("books.fiction")]): RecommendationProfileSnapshot {
   return {
@@ -44,6 +58,7 @@ function profileEntry(key: string, expiresAt?: string) {
 }
 
 class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
+  readonly storageManifest = LOCAL_PROFILE_STORAGE_MANIFEST;
   readonly records = new Map<string, unknown>();
   readonly deletedKeys: string[] = [];
 
