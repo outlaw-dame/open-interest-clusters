@@ -11,7 +11,7 @@ import {
 
 const LOCAL_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
   adapterId: "test-device-profile-store",
-  domains: Object.freeze(["interest_profile"]),
+  domains: ["interest_profile"] as const,
   authority: "device_owned",
   processingBoundary: "local_only",
   persistence: "persistent",
@@ -37,7 +37,20 @@ const PROVIDER_MANIFEST: RecommendationStateStorageAdapterManifest = Object.free
 
 class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
   readonly records = new Map<string, RecommendationProfileStoreRecord>();
-  constructor(readonly storageManifest?: RecommendationStateStorageAdapterManifest) {}
+  constructor(readonly storageManifest: RecommendationStateStorageAdapterManifest) {}
+  async readProfileRecord(subjectKey: string): Promise<RecommendationProfileStoreRecord | null> {
+    return this.records.get(subjectKey) ?? null;
+  }
+  async writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<void> {
+    this.records.set(record.subjectKey, record);
+  }
+  async deleteProfileRecord(subjectKey: string): Promise<void> {
+    this.records.delete(subjectKey);
+  }
+}
+
+class MissingManifestProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
+  readonly records = new Map<string, RecommendationProfileStoreRecord>();
   async readProfileRecord(subjectKey: string): Promise<RecommendationProfileStoreRecord | null> {
     return this.records.get(subjectKey) ?? null;
   }
@@ -66,8 +79,8 @@ function input() {
 }
 
 test("profile writes reject adapters without placement manifests before I/O", async () => {
-  const adapter = new MemoryProfilePersistenceAdapter();
-  await assert.rejects(writeRecommendationProfileStoreRecord(adapter, input()), /storage adapter manifest/u);
+  const adapter = new MissingManifestProfilePersistenceAdapter();
+  await assert.rejects(writeRecommendationProfileStoreRecord(adapter, input()), /requires a storage adapter manifest/u);
   assert.equal(adapter.records.size, 0);
 });
 
