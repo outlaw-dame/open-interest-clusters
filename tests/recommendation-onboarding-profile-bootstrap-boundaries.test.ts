@@ -10,12 +10,25 @@ import {
   type RecommendationConsentPolicy,
   type RecommendationDataUse,
   type RecommendationProfilePersistenceAdapter,
-  type RecommendationProfileStoreRecord
+  type RecommendationProfileStoreRecord,
+  type RecommendationStateStorageAdapterManifest
 } from "../src/index.js";
 
 const SUBJECT_ID = "bootstrap-boundary-user";
 const SELECTED_AT = "2026-05-22T00:00:00.000Z";
 const LOCAL_USES: readonly RecommendationDataUse[] = Object.freeze(["local_personalization"]);
+const LOCAL_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
+  adapterId: "test-onboarding-boundary-local-store",
+  domains: ["interest_profile"] as const,
+  authority: "device_owned",
+  processingBoundary: "local_only",
+  persistence: "persistent",
+  requiresNetwork: false,
+  supportsOffline: true,
+  userExportable: true,
+  userDeletable: true,
+  encryptedAtRest: false
+});
 
 function policy(): RecommendationConsentPolicy {
   return Object.freeze({
@@ -62,6 +75,7 @@ function boundaryCatalog(): RecommendationCatalog {
 }
 
 class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
+  readonly storageManifest = LOCAL_MANIFEST;
   readonly records = new Map<string, RecommendationProfileStoreRecord>();
 
   async readProfileRecord(subjectKey: string): Promise<unknown | null> {
@@ -78,6 +92,7 @@ class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenc
 }
 
 class FailingProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
+  readonly storageManifest = LOCAL_MANIFEST;
   async readProfileRecord(_subjectKey: string): Promise<unknown | null> {
     return null;
   }
