@@ -4,6 +4,7 @@ import type {
   RecommendationProcessingBoundary,
   RecommendationStorageAuthority
 } from "./storage-authority.js";
+import type { RecommendationStateStorageAdapterManifest } from "./state-placement-policy.js";
 
 export const RECOMMENDATION_PROFILE_STORE_RECORD_SCHEMA_VERSION = "recommendation-profile-store-record.v1" as const;
 export const DEFAULT_RECOMMENDATION_PROFILE_SUBJECT_KEY_NAMESPACE = "recommendation-profile.v1" as const;
@@ -11,7 +12,7 @@ export const DEFAULT_RECOMMENDATION_PROFILE_SUBJECT_KEY_NAMESPACE = "recommendat
 export interface RecommendationProfileSubjectKeyInput {
   subjectId: string;
   namespace?: string;
-  salt?: string;
+  salt?: string | undefined;
 }
 
 export interface RecommendationProfileStoreRecord {
@@ -34,6 +35,12 @@ export interface RecommendationProfileStoreRecordParseOptions {
 }
 
 export interface RecommendationProfilePersistenceAdapter {
+  /**
+   * Placement declaration for this adapter. It is optional only for source-level
+   * structural compatibility with pre-policy adapters; every public persistence
+   * entry point rejects an adapter that omits it before any I/O occurs.
+   */
+  readonly storageManifest?: RecommendationStateStorageAdapterManifest;
   readProfileRecord(subjectKey: string): Promise<unknown | null | undefined>;
   writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<void | RecommendationProfileStoreRecord>;
   deleteProfileRecord(subjectKey: string): Promise<void>;
@@ -45,22 +52,16 @@ export interface RecommendationProfilePersistenceReadInput extends Recommendatio
 }
 
 export interface RecommendationProfilePersistenceWriteInput extends RecommendationProfileStoreRecordInput {
-  /**
-   * Ownership of the destination that will persist this subject-level profile.
-   * Omitted legacy writes are treated as device-owned/local-only.
-   */
+  /** Optional assertion that must exactly match the adapter manifest. */
   storageAuthority?: RecommendationStorageAuthority;
-  /**
-   * Processing and disclosure boundary for the destination.
-   * Must be supplied together with storageAuthority for remote or aggregate writes.
-   */
+  /** Optional assertion that must exactly match the adapter manifest. */
   processingBoundary?: RecommendationProcessingBoundary;
 }
 
 export interface RecommendationProfilePersistenceDeleteInput {
   intent: RecommendationDerivedDataDeletionIntent;
   namespace?: string;
-  salt?: string;
+  salt?: string | undefined;
 }
 
 export * from "./profile-store-persistence-key.js";

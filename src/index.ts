@@ -33,6 +33,8 @@ export * from "./recommendation/activitypub-public-outbox-source-adapter.js";
 export * from "./recommendation/activitypods-live-outbox.js";
 export * from "./recommendation/activitypods-resource-authorization.js";
 export * from "./recommendation/activitypods-profile-persistence-adapter.js";
+export * from "./recommendation/activitypods-profile-persistence-placement.js";
+export { createRecommendationActivityPodsProfilePersistenceAdapterWithManifest as createRecommendationActivityPodsProfilePersistenceAdapter } from "./recommendation/activitypods-profile-persistence-placement.js";
 export * from "./recommendation/activitypub-curated-account-sets.js";
 export * from "./recommendation/account-recommendation-eligibility.js";
 export * from "./recommendation/legacy-fediverse-follow-packs.js";

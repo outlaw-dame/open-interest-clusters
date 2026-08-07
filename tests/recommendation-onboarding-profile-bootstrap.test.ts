@@ -13,12 +13,33 @@ import {
   type RecommendationProfilePersistenceAdapter,
   type RecommendationProfileSnapshot,
   type RecommendationProfileStore,
-  type RecommendationProfileStoreRecord
+  type RecommendationProfileStoreRecord,
+  type RecommendationStateStorageAdapterManifest
 } from "../src/index.js";
 
 const SUBJECT_ID = "bootstrap-user-123";
 const SELECTED_AT = "2026-05-22T00:00:00.000Z";
 const LOCAL_PERSONALIZATION_USES: readonly RecommendationDataUse[] = Object.freeze(["local_personalization"]);
+const LOCAL_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
+  adapterId: "test-onboarding-local-profile-store",
+  domains: ["interest_profile"] as const,
+  authority: "device_owned",
+  processingBoundary: "local_only",
+  persistence: "persistent",
+  requiresNetwork: false,
+  supportsOffline: true,
+  userExportable: true,
+  userDeletable: true,
+  encryptedAtRest: false
+});
+const POD_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
+  ...LOCAL_MANIFEST,
+  adapterId: "test-onboarding-user-pod-profile-store",
+  authority: "user_owned",
+  processingBoundary: "server_allowed",
+  requiresNetwork: true,
+  supportsOffline: false
+});
 
 function localPersonalizationPolicy(subjectId = SUBJECT_ID): RecommendationConsentPolicy {
   return Object.freeze({
@@ -54,6 +75,7 @@ function rejectingProfileStore(onIngest?: () => void): RecommendationProfileStor
 
 class MemoryProfilePersistenceAdapter implements RecommendationProfilePersistenceAdapter {
   readonly records = new Map<string, unknown>();
+  constructor(readonly storageManifest: RecommendationStateStorageAdapterManifest = LOCAL_MANIFEST) {}
 
   async readProfileRecord(subjectKey: string): Promise<unknown | null> {
     return this.records.get(subjectKey) ?? null;
@@ -165,9 +187,7 @@ test("onboarding bootstrap is deny-by-default and performs no ingestion or persi
       selectedTopicIds: ["gaming"],
       selectedAt: SELECTED_AT,
       policy: null,
-      profileStore: rejectingProfileStore(() => {
-        ingestCalled = true;
-      }),
+      profileStore: rejectingProfileStore(() => { ingestCalled = true; }),
       persistence: { adapter }
     }),
     (error: unknown) => error instanceof RecommendationConsentDeniedError && error.reason === "consent.deny.default"
@@ -191,9 +211,7 @@ test("onboarding bootstrap rejects revoked consent before profile persistence", 
         ...localPersonalizationPolicy(),
         revokedAt: "2026-05-22T00:01:00.000Z"
       }),
-      profileStore: rejectingProfileStore(() => {
-        ingestCalled = true;
-      }),
+      profileStore: rejectingProfileStore(() => { ingestCalled = true; }),
       persistence: { adapter }
     }),
     (error: unknown) => error instanceof RecommendationConsentDeniedError && error.reason === "consent.deny.revoked"
@@ -228,21 +246,19 @@ test("onboarding bootstrap persists only when a persistence adapter is provided"
   assert.equal(withPersistence.persistence?.verified, true);
 });
 
-test("onboarding bootstrap denies server profile target without server-side consent before ingestion", async () => {
-  const adapter = new MemoryProfilePersistenceAdapter();
+test("onboarding bootstrap denies remote storage without server-side consent before ingestion", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
   let ingestCalled = false;
 
   await assert.rejects(
     bootstrapRecommendationProfileFromOnboarding({
       subjectId: SUBJECT_ID,
-      storageTarget: "server_profile",
+      storageTarget: "user_pod",
       catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
       selectedTopicIds: ["gaming"],
       selectedAt: SELECTED_AT,
       policy: localPersonalizationPolicy(),
-      profileStore: rejectingProfileStore(() => {
-        ingestCalled = true;
-      }),
+      profileStore: rejectingProfileStore(() => { ingestCalled = true; }),
       persistence: { adapter }
     }),
     (error: unknown) => error instanceof RecommendationConsentDeniedError && error.reason === "consent.deny.server_processing_not_allowed"
@@ -252,11 +268,11 @@ test("onboarding bootstrap denies server profile target without server-side cons
   assert.equal(adapter.records.size, 0);
 });
 
-test("onboarding bootstrap can persist to server profile with explicit server-side consent", async () => {
-  const adapter = new MemoryProfilePersistenceAdapter();
+test("onboarding bootstrap can persist to a user-controlled Pod with explicit server-side consent", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
   const result = await bootstrapRecommendationProfileFromOnboarding({
     subjectId: SUBJECT_ID,
-    storageTarget: "server_profile",
+    storageTarget: "user_pod",
     catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
     selectedTopicIds: ["gaming"],
     selectedAt: SELECTED_AT,
@@ -264,10 +280,10 @@ test("onboarding bootstrap can persist to server profile with explicit server-si
     persistence: { adapter }
   });
 
-  assert.equal(result.storageTarget, "server_profile");
-  assert.equal(result.selection.storageTarget, "provider_storage");
+  assert.equal(result.storageTarget, "user_pod");
+  assert.equal(result.selection.storageTarget, "activitypods_pod");
   assert.equal(result.persisted, true);
-  assert.equal(result.persistence?.storageTarget, "server_profile");
+  assert.equal(result.persistence?.storageTarget, "user_pod");
   assert.equal(result.persistence?.verified, false);
   assert.equal(result.persistence?.verificationConsistency, "eventual");
   assert.equal(adapter.records.size, 1);

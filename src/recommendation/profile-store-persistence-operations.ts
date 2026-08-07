@@ -23,6 +23,10 @@ import {
   type RecommendationProcessingBoundary,
   type RecommendationStorageAuthority
 } from "./storage-authority.js";
+import {
+  assertRecommendationStateStorageManifest,
+  type RecommendationStateStorageAdapterManifest
+} from "./state-placement-policy.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -38,7 +42,9 @@ function assertTimestamp(value: unknown): void {
   }
 }
 
-function assertPersistenceAdapter(adapter: RecommendationProfilePersistenceAdapter): void {
+export function assertRecommendationProfilePersistenceAdapter(
+  adapter: RecommendationProfilePersistenceAdapter
+): RecommendationStateStorageAdapterManifest {
   if (
     !isObject(adapter) ||
     typeof adapter.readProfileRecord !== "function" ||
@@ -47,6 +53,15 @@ function assertPersistenceAdapter(adapter: RecommendationProfilePersistenceAdapt
   ) {
     throw new TypeError("Invalid recommendation profile persistence adapter.");
   }
+  if (adapter.storageManifest === undefined) {
+    throw new TypeError("Recommendation profile persistence adapter requires a storage adapter manifest.");
+  }
+
+  const manifest = assertRecommendationStateStorageManifest(adapter.storageManifest);
+  if (!manifest.domains.includes("interest_profile")) {
+    throw new TypeError("Recommendation profile persistence adapter does not declare interest_profile storage.");
+  }
+  return manifest;
 }
 
 function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): void {
@@ -64,7 +79,10 @@ function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIn
   assertTimestamp(intent.requestedAt);
 }
 
-function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWriteInput): {
+function resolveProfileWriteAuthority(
+  input: RecommendationProfilePersistenceWriteInput,
+  manifest: RecommendationStateStorageAdapterManifest
+): {
   storageAuthority: RecommendationStorageAuthority;
   processingBoundary: RecommendationProcessingBoundary;
 } {
@@ -78,8 +96,8 @@ function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWri
 
   if (!hasAuthority && !hasBoundary) {
     return Object.freeze({
-      storageAuthority: "device_owned",
-      processingBoundary: "local_only"
+      storageAuthority: manifest.authority,
+      processingBoundary: manifest.processingBoundary
     });
   }
 
@@ -88,6 +106,12 @@ function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWri
   }
   if (!isRecommendationProcessingBoundary(input.processingBoundary)) {
     throw new TypeError("Invalid recommendation profile processing boundary.");
+  }
+  if (
+    input.storageAuthority !== manifest.authority ||
+    input.processingBoundary !== manifest.processingBoundary
+  ) {
+    throw new TypeError("Recommendation profile write authority does not match the persistence adapter manifest.");
   }
 
   return Object.freeze({
@@ -100,8 +124,8 @@ export async function writeRecommendationProfileStoreRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   input: RecommendationProfilePersistenceWriteInput
 ): Promise<RecommendationProfileStoreRecord> {
-  assertPersistenceAdapter(adapter);
-  const authority = resolveProfileWriteAuthority(input);
+  const manifest = assertRecommendationProfilePersistenceAdapter(adapter);
+  const authority = resolveProfileWriteAuthority(input, manifest);
   const decision = evaluateRecommendationStorageAuthority({
     authority: authority.storageAuthority,
     processingBoundary: authority.processingBoundary,
@@ -120,7 +144,7 @@ export async function readRecommendationProfileStoreRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   input: RecommendationProfilePersistenceReadInput
 ): Promise<RecommendationProfileStoreRecord | null> {
-  assertPersistenceAdapter(adapter);
+  assertRecommendationProfilePersistenceAdapter(adapter);
   const subjectKey = createRecommendationProfileSubjectKey(input);
   const raw = await adapter.readProfileRecord(subjectKey);
   if (raw === null || raw === undefined) {
@@ -139,7 +163,7 @@ export async function deleteRecommendationProfileStoreRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   input: RecommendationProfilePersistenceDeleteInput
 ): Promise<RecommendationProfileSnapshot> {
-  assertPersistenceAdapter(adapter);
+  assertRecommendationProfilePersistenceAdapter(adapter);
   assertProfileDeletionIntent(input.intent);
   await adapter.deleteProfileRecord(
     createRecommendationProfileSubjectKey({
