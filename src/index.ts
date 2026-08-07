@@ -54,6 +54,7 @@ export * from "./recommendation/consent-gated-source-adapter.js";
 export * from "./recommendation/normalized-evidence-pipeline.js";
 export * from "./recommendation/interest-signal.js";
 export * from "./recommendation/storage-authority.js";
+export * from "./recommendation/state-placement-policy.js";
 export * from "./recommendation/public-signal-policy.js";
 export * from "./recommendation/interest-signal-derivation.js";
 export * from "./recommendation/labeler-interest-signal-derivation.js";
