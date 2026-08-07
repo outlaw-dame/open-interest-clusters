@@ -8,7 +8,7 @@ import type { RecommendationStateStorageAdapterManifest } from "./state-placemen
 export const RECOMMENDATION_ACTIVITYPODS_PROFILE_STORAGE_MANIFEST: RecommendationStateStorageAdapterManifest =
   Object.freeze({
     adapterId: "activitypods-profile-persistence",
-    domains: Object.freeze(["interest_profile"]),
+    domains: ["interest_profile"] as const,
     authority: "user_owned",
     processingBoundary: "server_allowed",
     persistence: "persistent",
