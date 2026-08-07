@@ -12,7 +12,7 @@ export const DEFAULT_RECOMMENDATION_PROFILE_SUBJECT_KEY_NAMESPACE = "recommendat
 export interface RecommendationProfileSubjectKeyInput {
   subjectId: string;
   namespace?: string;
-  salt?: string;
+  salt?: string | undefined;
 }
 
 export interface RecommendationProfileStoreRecord {
@@ -61,7 +61,7 @@ export interface RecommendationProfilePersistenceWriteInput extends Recommendati
 export interface RecommendationProfilePersistenceDeleteInput {
   intent: RecommendationDerivedDataDeletionIntent;
   namespace?: string;
-  salt?: string;
+  salt?: string | undefined;
 }
 
 export * from "./profile-store-persistence-key.js";
