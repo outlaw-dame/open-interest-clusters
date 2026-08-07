@@ -36,10 +36,11 @@ export interface RecommendationProfileStoreRecordParseOptions {
 
 export interface RecommendationProfilePersistenceAdapter {
   /**
-   * Mandatory placement declaration validated at every public persistence entry point.
-   * It must declare the interest_profile domain and may not be inferred from method shape.
+   * Placement declaration validated at every public persistence entry point.
+   * Optional in the structural type only for pre-1.0 source compatibility; an absent
+   * manifest is rejected before any adapter I/O.
    */
-  stateStorageManifest: RecommendationStateStorageAdapterManifest;
+  stateStorageManifest?: RecommendationStateStorageAdapterManifest;
   readProfileRecord(subjectKey: string): Promise<unknown | null | undefined>;
   writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<void | RecommendationProfileStoreRecord>;
   deleteProfileRecord(subjectKey: string): Promise<void>;
