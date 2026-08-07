@@ -36,10 +36,11 @@ export interface RecommendationProfileStoreRecordParseOptions {
 
 export interface RecommendationProfilePersistenceAdapter {
   /**
-   * Required placement declaration for this adapter. Every public persistence
-   * entry point validates it before invoking adapter I/O.
+   * Placement declaration for this adapter. It is optional only for source-level
+   * structural compatibility with pre-policy adapters; every public persistence
+   * entry point rejects an adapter that omits it before any I/O occurs.
    */
-  readonly storageManifest: RecommendationStateStorageAdapterManifest;
+  readonly storageManifest?: RecommendationStateStorageAdapterManifest;
   readProfileRecord(subjectKey: string): Promise<unknown | null | undefined>;
   writeProfileRecord(record: RecommendationProfileStoreRecord): Promise<void | RecommendationProfileStoreRecord>;
   deleteProfileRecord(subjectKey: string): Promise<void>;
@@ -51,15 +52,9 @@ export interface RecommendationProfilePersistenceReadInput extends Recommendatio
 }
 
 export interface RecommendationProfilePersistenceWriteInput extends RecommendationProfileStoreRecordInput {
-  /**
-   * Optional assertion about the destination authority. When supplied it must
-   * exactly match the adapter manifest; omission never overrides the manifest.
-   */
+  /** Optional assertion that must exactly match the adapter manifest. */
   storageAuthority?: RecommendationStorageAuthority;
-  /**
-   * Optional assertion about the processing boundary. When supplied it must
-   * exactly match the adapter manifest and storageAuthority must also be supplied.
-   */
+  /** Optional assertion that must exactly match the adapter manifest. */
   processingBoundary?: RecommendationProcessingBoundary;
 }
 
