@@ -17,12 +17,14 @@ import {
 } from "./profile-store-persistence-record.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import {
-  evaluateRecommendationStorageAuthority,
   isRecommendationProcessingBoundary,
-  isRecommendationStorageAuthority,
-  type RecommendationProcessingBoundary,
-  type RecommendationStorageAuthority
+  isRecommendationStorageAuthority
 } from "./storage-authority.js";
+import {
+  assertRecommendationStateStorageManifest,
+  evaluateRecommendationStatePlacement,
+  type RecommendationStateStorageAdapterManifest
+} from "./state-placement-policy.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -38,15 +40,24 @@ function assertTimestamp(value: unknown): void {
   }
 }
 
-function assertPersistenceAdapter(adapter: RecommendationProfilePersistenceAdapter): void {
+function assertPersistenceAdapter(
+  adapter: RecommendationProfilePersistenceAdapter
+): RecommendationStateStorageAdapterManifest {
   if (
     !isObject(adapter) ||
     typeof adapter.readProfileRecord !== "function" ||
     typeof adapter.writeProfileRecord !== "function" ||
-    typeof adapter.deleteProfileRecord !== "function"
+    typeof adapter.deleteProfileRecord !== "function" ||
+    !isObject(adapter.stateStorageManifest)
   ) {
     throw new TypeError("Invalid recommendation profile persistence adapter.");
   }
+  const manifest = assertRecommendationStateStorageManifest(adapter.stateStorageManifest);
+  const placement = evaluateRecommendationStatePlacement(manifest, "interest_profile");
+  if (placement.decision === "deny") {
+    throw new TypeError(`Recommendation profile persistence denied: ${placement.reason}.`);
+  }
+  return manifest;
 }
 
 function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): void {
@@ -64,10 +75,10 @@ function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIn
   assertTimestamp(intent.requestedAt);
 }
 
-function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWriteInput): {
-  storageAuthority: RecommendationStorageAuthority;
-  processingBoundary: RecommendationProcessingBoundary;
-} {
+function assertWriteManifestBinding(
+  input: RecommendationProfilePersistenceWriteInput,
+  manifest: RecommendationStateStorageAdapterManifest
+): void {
   const hasAuthority = input.storageAuthority !== undefined;
   const hasBoundary = input.processingBoundary !== undefined;
   if (hasAuthority !== hasBoundary) {
@@ -75,42 +86,27 @@ function resolveProfileWriteAuthority(input: RecommendationProfilePersistenceWri
       "Recommendation profile storage authority and processing boundary must be supplied together."
     );
   }
-
-  if (!hasAuthority && !hasBoundary) {
-    return Object.freeze({
-      storageAuthority: "device_owned",
-      processingBoundary: "local_only"
-    });
-  }
-
+  if (!hasAuthority) return;
   if (!isRecommendationStorageAuthority(input.storageAuthority)) {
     throw new TypeError("Invalid recommendation profile storage authority.");
   }
   if (!isRecommendationProcessingBoundary(input.processingBoundary)) {
     throw new TypeError("Invalid recommendation profile processing boundary.");
   }
-
-  return Object.freeze({
-    storageAuthority: input.storageAuthority,
-    processingBoundary: input.processingBoundary
-  });
+  if (
+    input.storageAuthority !== manifest.authority ||
+    input.processingBoundary !== manifest.processingBoundary
+  ) {
+    throw new TypeError("Recommendation profile persistence input does not match the adapter manifest.");
+  }
 }
 
 export async function writeRecommendationProfileStoreRecord(
   adapter: RecommendationProfilePersistenceAdapter,
   input: RecommendationProfilePersistenceWriteInput
 ): Promise<RecommendationProfileStoreRecord> {
-  assertPersistenceAdapter(adapter);
-  const authority = resolveProfileWriteAuthority(input);
-  const decision = evaluateRecommendationStorageAuthority({
-    authority: authority.storageAuthority,
-    processingBoundary: authority.processingBoundary,
-    subjectLevel: true
-  });
-  if (decision.decision === "deny") {
-    throw new TypeError(`Recommendation profile persistence denied: ${decision.reason}.`);
-  }
-
+  const manifest = assertPersistenceAdapter(adapter);
+  assertWriteManifestBinding(input, manifest);
   const record = createRecommendationProfileStoreRecord(input);
   await adapter.writeProfileRecord(record);
   return record;
