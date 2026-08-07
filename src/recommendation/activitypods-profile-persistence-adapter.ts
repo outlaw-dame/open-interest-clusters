@@ -301,6 +301,18 @@ export function createRecommendationActivityPodsProfilePersistenceAdapter(
   });
 
   return Object.freeze({
+    stateStorageManifest: Object.freeze({
+      adapterId: "activitypods-profile-persistence",
+      domains: Object.freeze(["interest_profile"] as const),
+      authority: "user_owned",
+      processingBoundary: "server_allowed",
+      persistence: "persistent",
+      requiresNetwork: true,
+      supportsOffline: false,
+      userExportable: true,
+      userDeletable: true,
+      encryptedAtRest: false
+    }),
     async readProfileRecord(subjectKey: string): Promise<unknown | null> {
       const profileResourceUri = resourceUri(profileContainerUri, subjectKey);
       const evidence = await authorize("read", profileResourceUri, subjectKey);
