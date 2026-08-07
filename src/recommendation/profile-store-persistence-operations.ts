@@ -53,6 +53,9 @@ export function assertRecommendationProfilePersistenceAdapter(
   ) {
     throw new TypeError("Invalid recommendation profile persistence adapter.");
   }
+  if (adapter.storageManifest === undefined) {
+    throw new TypeError("Recommendation profile persistence adapter requires a storage adapter manifest.");
+  }
 
   const manifest = assertRecommendationStateStorageManifest(adapter.storageManifest);
   if (!manifest.domains.includes("interest_profile")) {
