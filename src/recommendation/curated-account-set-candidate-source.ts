@@ -60,7 +60,7 @@ function provenanceForMember(
     kind: "curated_account_set",
     sourceId: `curated-set:v1:${sha256Hex(`${set.provider}:${set.id}`)}`,
     sourceItemId: member.accountId,
-    curator: set.curatorUri ?? set.curatorId,
+    curator: set.curatorId,
     sourceUrl: set.url,
     observedAt: set.observedAt,
     trustBoundary: set.trustBoundary
@@ -213,10 +213,10 @@ export function createRecommendationCuratedAccountSetCandidateSourceAdapter(
   const id = boundedId(input.id);
   const candidates = buildCandidates(input.sets);
 
-  return Object.freeze({
+  const adapter: RecommendationCandidateSourceAdapter = {
     id,
-    protocols: Object.freeze(["activitypub"]),
-    candidateKinds: Object.freeze(["account"]),
+    protocols: Object.freeze(["activitypub"] as const),
+    candidateKinds: Object.freeze(["account"] as const),
     authority: "curated_public",
     transport: "local",
     privacy: Object.freeze({
@@ -227,9 +227,10 @@ export function createRecommendationCuratedAccountSetCandidateSourceAdapter(
       serverSideProcessing: false,
       providerPolicyAllowsProcessing: true
     }),
-    capabilities: Object.freeze(["discover", "returns_public_metadata"]),
+    capabilities: Object.freeze(["discover", "returns_public_metadata"] as const),
     read(query: RecommendationCandidateSourceAdapterQuery) {
       return readCandidates(candidates, query);
     }
-  });
+  };
+  return Object.freeze(adapter);
 }
