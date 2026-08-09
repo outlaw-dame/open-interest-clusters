@@ -65,3 +65,17 @@ test("an explicit empty normalized profile is a valid inspected custom ATProto s
   });
   assert.deepEqual(evidence, []);
 });
+
+test("custom ATProto applications that declare profile text unsupported stay neutral", () => {
+  const evidence = deriveRecommendationProfilePinnedInterestEvidence({
+    ...BASE,
+    policy: {
+      ...CUSTOM_ATPROTO_POLICY,
+      capabilities: {
+        ...CUSTOM_ATPROTO_POLICY.capabilities,
+        rawProfileText: "unsupported" as const
+      }
+    }
+  });
+  assert.deepEqual(evidence, []);
+});
