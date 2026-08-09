@@ -86,7 +86,7 @@ test("Bluesky plain-text non-linkified bio hashtags remain usable interest evide
     policy: BLUESKY_ALLOW,
     observedAt: NOW
   });
-  assert.deepEqual(evidence.map((item) => item.keyword), ["climate", "activitypub"]);
+  assert.deepEqual(evidence.map((item) => item.keyword), ["climate", "activitypub", "open source"]);
 });
 
 test("Bluesky raw bio opt-out tokens work without structured or linkified hashtags", () => {
