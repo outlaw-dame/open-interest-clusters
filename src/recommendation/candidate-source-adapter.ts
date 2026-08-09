@@ -1,6 +1,11 @@
+import { sha256Hex } from "../runtime/hash.js";
 import {
+  RECOMMENDATION_ACCESS_BASES,
   RECOMMENDATION_PROTOCOLS,
-  type RecommendationProtocol
+  RECOMMENDATION_SOURCE_VISIBILITIES,
+  type RecommendationAccessBasis,
+  type RecommendationProtocol,
+  type RecommendationSourceVisibility
 } from "./consent.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
@@ -34,10 +39,38 @@ export const RECOMMENDATION_CANDIDATE_SOURCE_CAPABILITIES = [
 export type RecommendationCandidateSourceCapability =
   typeof RECOMMENDATION_CANDIDATE_SOURCE_CAPABILITIES[number];
 
+export const RECOMMENDATION_CANDIDATE_SOURCE_TRANSPORTS = ["local", "remote"] as const;
+export type RecommendationCandidateSourceTransport =
+  typeof RECOMMENDATION_CANDIDATE_SOURCE_TRANSPORTS[number];
+
+export interface RecommendationCandidateSourcePrivacyContext {
+  sourceVisibility: RecommendationSourceVisibility;
+  accessBasis: RecommendationAccessBasis;
+  containsPrivateData: boolean;
+  containsThirdPartyData: boolean;
+  serverSideProcessing: boolean;
+  providerPolicyAllowsProcessing: boolean;
+}
+
+/** Caller-side discovery context. This object is closed at runtime. */
 export interface RecommendationCandidateSourceAdapterReadRequest {
   requestId: string;
   candidateKinds: readonly RecommendationCandidateKind[];
   canonicalInterestIds: readonly string[];
+  languages?: readonly string[];
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Adapter-visible query. Remote adapters receive a privacy-redacted form that
+ * omits profile-derived interests and language preferences and hashes requestId.
+ */
+export interface RecommendationCandidateSourceAdapterQuery {
+  requestId: string;
+  candidateKinds: readonly RecommendationCandidateKind[];
+  canonicalInterestIds?: readonly string[];
   languages?: readonly string[];
   cursor?: string;
   limit?: number;
@@ -54,9 +87,14 @@ export interface RecommendationCandidateSourceAdapter {
   protocols: readonly RecommendationProtocol[];
   candidateKinds: readonly RecommendationCandidateKind[];
   authority: RecommendationCandidateSourceAuthority;
+  transport: RecommendationCandidateSourceTransport;
+  privacy: RecommendationCandidateSourcePrivacyContext;
   capabilities: readonly RecommendationCandidateSourceCapability[];
+  evaluateProviderPolicy?: (
+    query: RecommendationCandidateSourceAdapterQuery
+  ) => boolean | Promise<boolean>;
   read(
-    request: RecommendationCandidateSourceAdapterReadRequest
+    query: RecommendationCandidateSourceAdapterQuery
   ): RecommendationCandidateSourceAdapterReadResult | Promise<RecommendationCandidateSourceAdapterReadResult>;
 }
 
@@ -64,6 +102,18 @@ const PROTOCOL_SET = new Set<string>(RECOMMENDATION_PROTOCOLS);
 const CANDIDATE_KIND_SET = new Set<string>(RECOMMENDATION_CANDIDATE_KINDS);
 const AUTHORITY_SET = new Set<string>(RECOMMENDATION_CANDIDATE_SOURCE_AUTHORITIES);
 const CAPABILITY_SET = new Set<string>(RECOMMENDATION_CANDIDATE_SOURCE_CAPABILITIES);
+const TRANSPORT_SET = new Set<string>(RECOMMENDATION_CANDIDATE_SOURCE_TRANSPORTS);
+const VISIBILITY_SET = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);
+const ACCESS_BASIS_SET = new Set<string>(RECOMMENDATION_ACCESS_BASES);
+const REQUEST_KEYS = new Set([
+  "requestId",
+  "candidateKinds",
+  "canonicalInterestIds",
+  "languages",
+  "cursor",
+  "limit",
+  "signal"
+]);
 const MAX_ADAPTER_ID_LENGTH = 256;
 const MAX_REQUEST_ID_LENGTH = 512;
 const MAX_INTEREST_ID_LENGTH = 512;
@@ -99,6 +149,14 @@ function optionalBoundedString(
   return value === undefined ? undefined : boundedString(value, maximum, message);
 }
 
+function assertClosedRequest(value: Record<string, unknown>): void {
+  for (const key of Object.keys(value)) {
+    if (!REQUEST_KEYS.has(key)) {
+      throw new TypeError("Recommendation candidate source request contains unsupported context.");
+    }
+  }
+}
+
 function isProtocol(value: unknown): value is RecommendationProtocol {
   return typeof value === "string" && PROTOCOL_SET.has(value);
 }
@@ -113,6 +171,18 @@ function isAuthority(value: unknown): value is RecommendationCandidateSourceAuth
 
 function isCapability(value: unknown): value is RecommendationCandidateSourceCapability {
   return typeof value === "string" && CAPABILITY_SET.has(value);
+}
+
+function isTransport(value: unknown): value is RecommendationCandidateSourceTransport {
+  return typeof value === "string" && TRANSPORT_SET.has(value);
+}
+
+function isVisibility(value: unknown): value is RecommendationSourceVisibility {
+  return typeof value === "string" && VISIBILITY_SET.has(value);
+}
+
+function isAccessBasis(value: unknown): value is RecommendationAccessBasis {
+  return typeof value === "string" && ACCESS_BASIS_SET.has(value);
 }
 
 function uniqueKnownValues<T extends string>(
@@ -146,6 +216,28 @@ function normalizeLimit(value: unknown): number | undefined {
     throw new TypeError("Invalid recommendation candidate source limit.");
   }
   return value as number;
+}
+
+function normalizePrivacyContext(value: unknown): RecommendationCandidateSourcePrivacyContext {
+  if (!isRecord(value) || !isVisibility(value.sourceVisibility) || !isAccessBasis(value.accessBasis)) {
+    throw new TypeError("Invalid recommendation candidate source privacy context.");
+  }
+  if (
+    typeof value.containsPrivateData !== "boolean" ||
+    typeof value.containsThirdPartyData !== "boolean" ||
+    typeof value.serverSideProcessing !== "boolean" ||
+    typeof value.providerPolicyAllowsProcessing !== "boolean"
+  ) {
+    throw new TypeError("Invalid recommendation candidate source privacy context.");
+  }
+  return Object.freeze({
+    sourceVisibility: value.sourceVisibility,
+    accessBasis: value.accessBasis,
+    containsPrivateData: value.containsPrivateData,
+    containsThirdPartyData: value.containsThirdPartyData,
+    serverSideProcessing: value.serverSideProcessing,
+    providerPolicyAllowsProcessing: value.providerPolicyAllowsProcessing
+  });
 }
 
 function allowedVerificationStates(
@@ -190,10 +282,31 @@ function validateCapabilityConsistency(
   }
 }
 
+function validatePrivacyForTransport(
+  transport: RecommendationCandidateSourceTransport,
+  privacy: RecommendationCandidateSourcePrivacyContext
+): void {
+  if (!privacy.providerPolicyAllowsProcessing) {
+    throw new TypeError("Recommendation candidate source provider policy denies processing.");
+  }
+  if (transport === "remote") {
+    if (
+      privacy.containsPrivateData ||
+      (privacy.sourceVisibility !== "public" && privacy.sourceVisibility !== "atproto_public_repo") ||
+      !privacy.serverSideProcessing
+    ) {
+      throw new TypeError("Remote recommendation candidate source must use public discovery data only.");
+    }
+  } else if (privacy.serverSideProcessing) {
+    throw new TypeError("Local recommendation candidate source cannot declare server-side processing.");
+  }
+}
+
 export function normalizeRecommendationCandidateSourceAdapterReadRequest(
   value: unknown
 ): RecommendationCandidateSourceAdapterReadRequest {
   if (!isRecord(value)) throw new TypeError("Invalid recommendation candidate source request.");
+  assertClosedRequest(value);
   const requestId = boundedString(
     value.requestId,
     MAX_REQUEST_ID_LENGTH,
@@ -240,6 +353,26 @@ export function normalizeRecommendationCandidateSourceAdapterReadRequest(
   return Object.freeze(normalized);
 }
 
+function buildAdapterQuery(
+  adapter: RecommendationCandidateSourceAdapter,
+  request: RecommendationCandidateSourceAdapterReadRequest
+): RecommendationCandidateSourceAdapterQuery {
+  const query: RecommendationCandidateSourceAdapterQuery = {
+    requestId: adapter.transport === "remote"
+      ? `candidate-query:v1:${sha256Hex(request.requestId)}`
+      : request.requestId,
+    candidateKinds: request.candidateKinds
+  };
+  if (adapter.transport === "local") {
+    query.canonicalInterestIds = request.canonicalInterestIds;
+    if (request.languages !== undefined) query.languages = request.languages;
+  }
+  if (request.cursor !== undefined) query.cursor = request.cursor;
+  if (request.limit !== undefined) query.limit = request.limit;
+  if (request.signal !== undefined) query.signal = request.signal;
+  return Object.freeze(query);
+}
+
 export function isRecommendationCandidateSourceAdapter(
   value: unknown
 ): value is RecommendationCandidateSourceAdapter {
@@ -256,14 +389,21 @@ export function isRecommendationCandidateSourceAdapter(
       isCandidateKind,
       "Invalid recommendation candidate source adapter kinds."
     );
-    if (!isAuthority(value.authority)) return false;
+    if (!isAuthority(value.authority) || !isTransport(value.transport)) return false;
+    const privacy = normalizePrivacyContext(value.privacy);
     const capabilities = uniqueKnownValues(
       value.capabilities,
       isCapability,
       "Invalid recommendation candidate source adapter capabilities."
     );
     validateCapabilityConsistency(value.authority, capabilities);
-    return protocols.length > 0 && candidateKinds.length > 0 && typeof value.read === "function";
+    validatePrivacyForTransport(value.transport, privacy);
+    return (
+      protocols.length > 0 &&
+      candidateKinds.length > 0 &&
+      typeof value.read === "function" &&
+      (value.evaluateProviderPolicy === undefined || typeof value.evaluateProviderPolicy === "function")
+    );
   } catch {
     return false;
   }
@@ -282,6 +422,12 @@ function assertCandidateMatchesAdapter(
   const permitted = allowedVerificationStates(adapter.authority);
   if (!permitted.has(candidate.verification.state)) {
     throw new TypeError("Recommendation candidate verification exceeds source adapter authority.");
+  }
+  if (
+    candidate.verification.state === "unverified_hint" &&
+    !adapter.capabilities.includes("returns_untrusted_hints")
+  ) {
+    throw new TypeError("Recommendation candidate hint exceeds declared adapter capabilities.");
   }
   if (
     (candidate.verification.state === "authority_verified" || candidate.verification.state === "canonical") &&
@@ -340,6 +486,12 @@ export async function readRecommendationCandidateSourceAdapter(
     throw new TypeError("Invalid recommendation candidate source adapter.");
   }
   const normalizedRequest = normalizeRecommendationCandidateSourceAdapterReadRequest(request);
+  if (
+    normalizedRequest.cursor !== undefined &&
+    !adapter.capabilities.includes("supports_pagination")
+  ) {
+    throw new TypeError("Recommendation candidate source adapter does not declare pagination support.");
+  }
   if (normalizedRequest.signal?.aborted === true) {
     throw normalizedRequest.signal.reason ?? new DOMException("Aborted", "AbortError");
   }
@@ -349,6 +501,15 @@ export async function readRecommendationCandidateSourceAdapter(
   ) {
     throw new TypeError("Recommendation candidate source adapter does not declare abort support.");
   }
-  const result = await adapter.read(normalizedRequest);
+
+  const query = buildAdapterQuery(adapter, normalizedRequest);
+  if (adapter.evaluateProviderPolicy !== undefined) {
+    const allowed = await adapter.evaluateProviderPolicy(query);
+    if (allowed !== true) {
+      throw new TypeError("Recommendation candidate source provider policy denies processing.");
+    }
+  }
+
+  const result = await adapter.read(query);
   return normalizeRecommendationCandidateSourceAdapterReadResult(adapter, normalizedRequest, result);
 }
