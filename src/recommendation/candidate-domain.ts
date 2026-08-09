@@ -5,6 +5,7 @@ import {
   RECOMMENDATION_SOURCE_TRUST_BOUNDARIES,
   type RecommendationSourceTrustBoundary
 } from "./source-adapter.js";
+import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
 export const RECOMMENDATION_CANDIDATE_KINDS = [
   "account",
@@ -152,10 +153,7 @@ function optionalBoundedString(
 }
 
 function timestamp(value: unknown, message: string): string {
-  const candidate = boundedString(value, 128, message);
-  const parsed = Date.parse(candidate);
-  if (!Number.isFinite(parsed) || !candidate.includes("T")) throw new TypeError(message);
-  return new Date(parsed).toISOString();
+  return normalizeStrictRfc3339Timestamp(value, message);
 }
 
 function optionalTimestamp(value: unknown, message: string): string | undefined {
