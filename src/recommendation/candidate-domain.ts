@@ -1,3 +1,4 @@
+import { normalizeHashtag } from "../normalization/hashtags.js";
 import { sha256Hex } from "../runtime/hash.js";
 import { RECOMMENDATION_PROTOCOLS, type RecommendationProtocol } from "./consent.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
@@ -211,11 +212,22 @@ function isTrustBoundary(value: unknown): value is RecommendationSourceTrustBoun
   return typeof value === "string" && TRUST_BOUNDARY_SET.has(value);
 }
 
+function canonicalNativeId(kind: RecommendationCandidateKind, value: unknown): string {
+  const nativeId = boundedString(value, MAX_NATIVE_ID_LENGTH, "Invalid recommendation candidate native identity.");
+  if (kind === "hashtag") {
+    const canonical = normalizeHashtag(nativeId);
+    if (canonical.length === 0 || nativeId !== canonical) {
+      throw new TypeError("Recommendation hashtag candidate identity must be canonical and hashless.");
+    }
+  }
+  return nativeId;
+}
+
 export function createRecommendationCandidateId(input: RecommendationCandidateIdentityInput): string {
   if (!isRecord(input) || !isCandidateKind(input.kind) || !isProtocol(input.protocol)) {
     throw new TypeError("Invalid recommendation candidate identity input.");
   }
-  const nativeId = boundedString(input.nativeId, MAX_NATIVE_ID_LENGTH, "Invalid recommendation candidate native identity.");
+  const nativeId = canonicalNativeId(input.kind, input.nativeId);
   const provider = optionalBoundedString(input.provider, MAX_PROVIDER_LENGTH, "Invalid recommendation candidate provider.");
   const material = JSON.stringify([
     "recommendation-candidate.v1",
@@ -367,7 +379,7 @@ export function normalizeRecommendationCandidate(value: unknown): Recommendation
   }
 
   const candidateId = boundedString(value.candidateId, MAX_CANDIDATE_ID_LENGTH, "Invalid recommendation candidate ID.");
-  const nativeId = boundedString(value.nativeId, MAX_NATIVE_ID_LENGTH, "Invalid recommendation candidate native identity.");
+  const nativeId = canonicalNativeId(value.kind, value.nativeId);
   const provider = optionalBoundedString(value.provider, MAX_PROVIDER_LENGTH, "Invalid recommendation candidate provider.");
   const expectedId = createRecommendationCandidateId({
     kind: value.kind,
