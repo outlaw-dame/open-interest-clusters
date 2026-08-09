@@ -15,7 +15,7 @@ test("hashtagPhraseVariants conservatively expands camel and separator boundarie
   assert.deepEqual(hashtagPhraseVariants("#OpenSource"), ["opensource", "open source"]);
   assert.deepEqual(hashtagPhraseVariants("#BlackLivesMatter"), ["blacklivesmatter", "black lives matter"]);
   assert.deepEqual(hashtagPhraseVariants("#Open_Source"), ["open_source", "open source"]);
-  assert.deepEqual(hashtagPhraseVariants("＃OpenSource".replace("＃", "#")), ["opensource", "open source"]);
+  assert.deepEqual(hashtagPhraseVariants("＃OpenSource"), ["opensource", "open source"]);
 });
 
 test("hashtagPhraseVariants retains alternate acronym interpretations without guessing dictionary words", () => {
