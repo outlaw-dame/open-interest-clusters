@@ -302,9 +302,13 @@ function profileHashtagPhraseVariants(text: string): ReadonlySet<string> {
   return variants;
 }
 
+function proseWithoutHashtags(text: string): string {
+  return plainText(text).replace(HASHTAG_TOKEN_PATTERN, " ").replace(/\s+/gu, " ").trim();
+}
+
 function keywordMatches(text: string, keywords: readonly string[]): readonly string[] {
   const plain = plainText(text);
-  const normalized = plain.toLocaleLowerCase("und");
+  const prose = proseWithoutHashtags(plain).toLocaleLowerCase("und");
   const hashtagVariants = profileHashtagPhraseVariants(plain);
   const matches = new Set<string>();
   for (const raw of keywords) {
@@ -312,7 +316,7 @@ function keywordMatches(text: string, keywords: readonly string[]): readonly str
     const keyword = canonicalKeyword(raw);
     if (keyword.length < 2 || keyword.length > 80 || hasUnsafeControlCharacter(keyword)) throw new TypeError("Invalid profile interest keyword.");
     const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&").replace(/\s+/gu, "\\s+");
-    const directMatch = new RegExp(`(^|[^\\p{Letter}\\p{Number}_])${escaped}($|[^\\p{Letter}\\p{Number}_])`, "iu").test(normalized);
+    const directMatch = new RegExp(`(^|[^\\p{Letter}\\p{Number}_])${escaped}($|[^\\p{Letter}\\p{Number}_])`, "iu").test(prose);
     if (directMatch || hashtagVariants.has(keyword)) matches.add(keyword);
     if (matches.size >= MAX_KEYWORDS) break;
   }
