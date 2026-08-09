@@ -56,12 +56,7 @@ function candidate(
 
 const allowProvider = () => ({ allowed: true, evidenceComplete: true });
 const allowViewer = () => ({ eligible: true, evidenceComplete: true });
-const allowResolvedAccount = () => ({
-  discoverable: true,
-  noindex: false,
-  optedOut: false,
-  evidenceComplete: true
-});
+const allowResolvedAccount = () => ({ restrictions: [] as const, evidenceComplete: true });
 
 function evidence(kind: Exclude<RecommendationCandidateKind, "account">): RecommendationCandidateEligibilityEvidence {
   switch (kind) {
@@ -161,7 +156,7 @@ test("viewer safety cannot be bypassed by a moved-from account", async () => {
   assert.deepEqual(result.reasonCodes, ["viewer_safety_denied"]);
 });
 
-test("discoverability noindex and recommendation opt-out apply to the resolved current account", async () => {
+test("platform-applicable account restrictions apply to the resolved current account", async () => {
   let accountPolicyIdentity: string | undefined;
   let downstreamReads = 0;
   const result = await evaluateRecommendationCandidateEligibility({
@@ -178,7 +173,7 @@ test("discoverability noindex and recommendation opt-out apply to the resolved c
       },
       evaluateResolvedAccountPolicy(context) {
         accountPolicyIdentity = context.resolvedAccount.uri;
-        return { discoverable: false, noindex: true, optedOut: true, evidenceComplete: true };
+        return { restrictions: ["not_discoverable", "noindex", "opted_out"] as const, evidenceComplete: true };
       }
     },
     evaluateProviderPolicy: () => { downstreamReads += 1; return { allowed: true, evidenceComplete: true }; },
@@ -188,6 +183,23 @@ test("discoverability noindex and recommendation opt-out apply to the resolved c
   assert.equal(accountPolicyIdentity, "https://new.example/@a");
   assert.equal(downstreamReads, 0);
   assert.deepEqual(result.reasonCodes, ["account_noindex", "account_not_discoverable", "account_opted_out"]);
+});
+
+test("an account platform with no applicable restrictions needs no invented feature booleans", async () => {
+  const result = await evaluateRecommendationCandidateEligibility({
+    candidate: candidate("account", { nativeId: "did:plc:alice" }),
+    evidence: {
+      kind: "account",
+      identityBindingVerified: true,
+      resolver: { resolve: () => ({ id: "did:plc:alice", uri: "at://did:plc:alice/app.bsky.actor.profile/self", lastActivityAt: "2026-08-09T09:00:00Z" }) },
+      evaluateResolvedAccountPolicy: () => ({ restrictions: [], evidenceComplete: true })
+    },
+    evaluateProviderPolicy: allowProvider,
+    evaluateViewerSafety: allowViewer,
+    evaluatedAt: "2026-08-09T10:00:00Z"
+  });
+  assert.equal(result.eligible, true);
+  assert.deepEqual(result.reasonCodes, ["eligible"]);
 });
 
 test("incomplete or malformed resolved-account policy fails closed without private detail leakage", async () => {
@@ -205,7 +217,7 @@ test("incomplete or malformed resolved-account policy fails closed without priva
       kind: "account",
       identityBindingVerified: true,
       resolver,
-      evaluateResolvedAccountPolicy: () => ({ discoverable: true, noindex: false, optedOut: false, evidenceComplete: false })
+      evaluateResolvedAccountPolicy: () => ({ restrictions: [], evidenceComplete: false })
     }
   });
   assert.deepEqual(incomplete.reasonCodes, ["account_policy_incomplete"]);
@@ -216,7 +228,7 @@ test("incomplete or malformed resolved-account policy fails closed without priva
       kind: "account",
       identityBindingVerified: true,
       resolver,
-      evaluateResolvedAccountPolicy: () => ({ discoverable: true, noindex: false, optedOut: false, evidenceComplete: true, privateReason: "secret" } as never)
+      evaluateResolvedAccountPolicy: () => ({ restrictions: [], evidenceComplete: true, privateReason: "secret" } as never)
     }
   });
   assert.deepEqual(malformed.reasonCodes, ["account_policy_incomplete"]);
