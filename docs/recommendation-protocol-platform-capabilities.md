@@ -82,6 +82,94 @@ It declares Mastodon-style discoverability, indexability/noindex, and featured h
 
 This preset is **not** a generic ATProto preset. Other ATProto applications may declare additional or different capabilities.
 
+## Runtime provider and application discovery
+
+Runtime capability discovery must be **client-aware**, not merely server-software-aware.
+
+A recommendation engine can be embedded in a Mastodon client, an ATProto application, or an ActivityPods application even when the remote server is only one part of the integration. Probing a server implementation endpoint may be useful evidence, but it must not be the sole mechanism that determines the application capability profile.
+
+The thin runtime discovery layer should combine bounded evidence from four sources, ordered roughly from strongest to weakest for application identity:
+
+1. explicit application self-declaration supplied by the embedding integration;
+2. authenticated or authorization-bound application/client identity;
+3. protocol-native application registration or metadata;
+4. server/provider capability probing as corroborating evidence.
+
+The engine must keep the **application identity** and the **server/provider identity** as separate values. A Mastodon-compatible app can connect to many Mastodon servers; an ActivityPods app has its own ActivityPub actor and may connect to many Pods; an ATProto client has a client identity distinct from the user's PDS.
+
+### Mastodon applications
+
+For Mastodon integrations, `GET /api/v2/instance` is useful for identifying and negotiating with the server, but it is not sufficient to identify the client application using the recommendation engine.
+
+Mastodon applications register through `POST /api/v1/apps`. The resulting OAuth application has a `client_id`, registered scopes, redirect URIs, name, and optional website. With a valid app or user token, `GET /api/v1/apps/verify_credentials` returns the authenticated `Application` record. Mastodon's OAuth authorization-server metadata can also advertise the application-registration endpoint and supported scopes.
+
+The runtime layer should therefore model at least:
+
+```text
+application identity:
+  explicit integration ID
+  + OAuth client/application identity when available
+  + registered scopes / redirect origins as bounded corroboration
+
+server identity:
+  origin
+  + OAuth authorization-server metadata
+  + Mastodon-compatible API capability observations
+```
+
+A successful Mastodon-compatible API probe establishes server capabilities, **not** that every embedding client is the Mastodon first-party application. Likewise, an app name or website returned by an OAuth application record is descriptive evidence and must not silently authorize additional recommendation capabilities.
+
+### ATProto and Bluesky applications
+
+ATProto OAuth provides a stronger protocol-native client identity mechanism. Client software is identified by a globally unique `client_id`; for normal deployed clients this is an HTTPS URL whose resource is the public client metadata document. The metadata declares properties such as application type, redirect URIs, grant types, scopes, and optionally client name, client URI, logo, policy, and terms URLs.
+
+The runtime layer should bind ATProto application capability declarations to the exact normalized `client_id` and fetched client-metadata document rather than infer `Bluesky` merely because the user has an ATProto account or because the PDS speaks ATProto.
+
+Security requirements:
+
+- fetch client metadata with the same hardened SSRF, redirect, size, timeout, and content-type protections used elsewhere in the engine;
+- require the metadata `client_id` to exactly match the URL used as the client ID where the ATProto profile requires it;
+- treat descriptive branding fields as untrusted unless the integration has an independent trust binding;
+- never use requested OAuth scopes as positive interest evidence;
+- use scopes only for authorization/capability gating.
+
+This supports Bluesky and non-Bluesky ATProto applications without making `ATProto == Bluesky` an architectural assumption.
+
+### ActivityPods applications
+
+ActivityPods exposes an application-native discovery path that is stronger than probing a Pod server alone.
+
+ActivityPods applications are ActivityPub actors. ActivityPods documents FEP-2677 support for finding the actor linked with an application. Application installation/authorization then uses ActivityPub plus Solid Application Interoperability concepts: applications declare `AccessNeedGroups` / `AccessNeeds`, the Pod creates `AccessGrants` / `DataGrants` and an `ApplicationRegistration`, and registration lifecycle changes are communicated with ActivityPub `Create`, `Update`, and `Delete` activities.
+
+The runtime layer should therefore preserve:
+
+```text
+application actor identity
+  + ApplicationRegistration identity
+  + declared AccessNeeds
+  + currently valid grants
+  + Pod/provider identity
+```
+
+These are separate pieces of evidence. The application actor identifies the app; the registration and grants determine what the user explicitly authorized; the Pod/provider determines storage and transport behavior. None of them should be collapsed into a generic `ActivityPub server detected` flag.
+
+This is also important for the user-controlled-storage rule: recommendation state may be stored remotely in an ActivityPod only when the current application registration/grant authorizes that user-controlled storage operation. The existence of ActivityPods-compatible endpoints alone is insufficient authority.
+
+### Discovery precedence and conflicts
+
+The eventual runtime resolver should not blindly choose one detector. It should normalize all observations into a bounded evidence set and resolve them with explicit precedence.
+
+Recommended rules:
+
+- authenticated registration/client identity outranks unauthenticated server fingerprinting;
+- an explicit integration declaration must be validated against protocol-native evidence when such evidence is available;
+- server probes can add server capabilities but cannot silently rewrite application identity;
+- conflicting high-confidence identity evidence fails closed instead of choosing whichever detector ran last;
+- unknown privacy-relevant application capabilities remain `unknown` and fail closed at the policy boundary;
+- capability cache entries must be scoped by the correct authority key: application/client identity for app features, server/provider identity for server features, and application-registration/user grant identity for ActivityPods authorization.
+
+This separation prevents a future runtime discovery layer from accidentally treating one Mastodon instance probe, one PDS, or one Pod host as authoritative for every client application that connects to it.
+
 ## Raw profile text and hashtags
 
 Raw profile text is processed independently of whether the application linkifies hashtags or exposes structured tag objects.
@@ -91,9 +179,10 @@ The profile signal path:
 1. converts profile markup to normalized plain text where necessary;
 2. scans plain text for explicit opt-out language;
 3. scans both hash-prefixed and plain opt-out tokens such as `#NoAI`, `#NoRecommendations`, and `NoAI`;
-4. matches allowed interest keywords against the same normalized raw text;
-5. expands explicit compound hashtag boundaries conservatively for exact phrase matching;
-6. optionally inspects platform-native featured hashtags only when that capability is declared supported.
+4. checks bounded structured profile tags for safety/opt-out tokens without using those tags as positive affinity;
+5. matches allowed interest keywords against the same normalized raw text;
+6. expands explicit compound hashtag boundaries conservatively for exact phrase matching;
+7. optionally inspects platform-native featured hashtags only when that capability is declared supported.
 
 This means a Bluesky description such as `Climate researcher #Climate #ActivityPub` can provide public topical evidence even though those hashtags are not Mastodon featured-tag objects. A description containing `#NoAI` or `#NoRecommendations` fails closed before emitting profile-derived interest evidence.
 
@@ -146,11 +235,12 @@ When a capability is supported, its restrictive state is respected. For example:
 - Mastodon `discoverable: false` blocks profile-derived recommendation evidence;
 - Mastodon `indexable: false` blocks it;
 - an observed `noindex: true` blocks it;
-- a featured opt-out hashtag blocks it.
+- a featured opt-out hashtag blocks it;
+- a bounded structured profile tag carrying an opt-out token blocks it.
 
 When a capability is explicitly unsupported, the engine does not invent a corresponding positive value. For example, Bluesky does not need fictitious `discoverable: true` or `indexable: true` values.
 
-These controls must never be converted into positive user-interest signals, recommendation boosts, or public explanation text.
+These controls and structured safety tags must never be converted into positive user-interest signals, recommendation boosts, or public explanation text.
 
 ## ActivityPods and extensions
 
@@ -181,8 +271,11 @@ Instead, the flow is:
 
 ```text
 protocol/source context
+  + application/client identity
+  + provider/server identity
   + provider/application adapter
-  -> declared feature capabilities
+  + user-scoped authorization/grant evidence where applicable
+  -> declared and verified feature capabilities
   -> observed platform controls/public profile text
   -> privacy-safe eligibility decision
   -> profile-derived interest evidence
