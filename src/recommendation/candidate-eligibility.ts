@@ -496,7 +496,9 @@ async function evaluateProviderPolicySafely(
   context: RecommendationCandidatePolicyEvaluationContext
 ): Promise<RecommendationCandidatePolicyGate> {
   try {
-    return normalizeProviderPolicy(await evaluator(context));
+    const decision = await evaluator(context);
+    assertNotAborted(context.signal);
+    return normalizeProviderPolicy(decision);
   } catch (error) {
     assertNotAborted(context.signal);
     void error;
@@ -509,7 +511,9 @@ async function evaluateViewerSafetySafely(
   context: RecommendationCandidatePolicyEvaluationContext
 ): Promise<RecommendationCandidateViewerSafetyGate> {
   try {
-    return normalizeViewerSafety(await evaluator(context));
+    const decision = await evaluator(context);
+    assertNotAborted(context.signal);
+    return normalizeViewerSafety(decision);
   } catch (error) {
     assertNotAborted(context.signal);
     void error;
@@ -522,7 +526,9 @@ async function evaluateResolvedAccountPolicySafely(
   context: RecommendationCandidatePolicyEvaluationContext & { resolvedAccount: RecommendationAccountProfile }
 ): Promise<RecommendationResolvedAccountPolicyGate> {
   try {
-    return normalizeResolvedAccountPolicy(await evaluator(context));
+    const decision = await evaluator(context);
+    assertNotAborted(context.signal);
+    return normalizeResolvedAccountPolicy(decision);
   } catch (error) {
     assertNotAborted(context.signal);
     void error;
@@ -571,6 +577,7 @@ export async function evaluateRecommendationCandidateEligibility(
         ...(evidence.inactivityDays === undefined ? {} : { inactivityDays: evidence.inactivityDays }),
         ...(input.signal === undefined ? {} : { signal: input.signal })
       });
+      assertNotAborted(input.signal);
       if (!accountResult.eligible) {
         return result(candidate, evaluatedAt, [accountReasonCode(accountResult.reason)], accountResult.resolvedAccount, accountResult.moveChain);
       }
