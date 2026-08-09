@@ -1,4 +1,5 @@
 import {
+  RECOMMENDATION_CANDIDATE_KINDS,
   normalizeRecommendationCandidate,
   type RecommendationCandidate,
   type RecommendationCandidateKind,
@@ -104,7 +105,7 @@ const MAX_LANGUAGE_LENGTH = 64;
 const MAX_MERGED_METADATA_VALUES = 128;
 const MAX_MERGED_LANGUAGES = 32;
 const MAX_MERGED_PROVENANCE = 32;
-
+const CANDIDATE_KIND_SET = new Set<string>(RECOMMENDATION_CANDIDATE_KINDS);
 const MATCHABLE_TARGET_KINDS = new Set<RecommendationInterestTargetKind>([
   "canonical_interest",
   "hashtag",
@@ -194,11 +195,7 @@ function buildProfileMatchIndex(profile: RecommendationProfileSnapshot): Profile
   const entities = new Map<string, RecommendationProfileEntry>();
 
   for (const entry of profile.entries) {
-    if (
-      entry.score <= 0 ||
-      entry.positiveSignalCount === 0 ||
-      !MATCHABLE_TARGET_KINDS.has(entry.target.kind)
-    ) {
+    if (entry.score <= 0 || entry.positiveSignalCount === 0 || !MATCHABLE_TARGET_KINDS.has(entry.target.kind)) {
       continue;
     }
 
@@ -268,14 +265,10 @@ async function readSource(
       limit: input.limit,
       ...(supportsAbort && input.signal !== undefined ? { signal: input.signal } : {})
     });
-    if (input.signal?.aborted === true) {
-      return sourceFailure(source.id, "source_cancelled");
-    }
+    if (input.signal?.aborted === true) return sourceFailure(source.id, "source_cancelled");
     return { sourceId: source.id, candidates: result.candidates };
   } catch {
-    if (input.signal?.aborted === true) {
-      return sourceFailure(source.id, "source_cancelled");
-    }
+    if (input.signal?.aborted === true) return sourceFailure(source.id, "source_cancelled");
     return sourceFailure(source.id, "source_read_failed");
   }
 }
@@ -290,7 +283,14 @@ function provenanceKey(value: RecommendationCandidateProvenance): string {
   ]);
 }
 
-function mergeProvenance(group: readonly RecommendationCandidate[]): readonly RecommendationCandidateProvenance[] {
+function isTrustedVerificationProvenance(value: RecommendationCandidateProvenance): boolean {
+  return value.trustBoundary !== "third_party" && value.trustBoundary !== "unknown";
+}
+
+function mergeProvenance(
+  group: readonly RecommendationCandidate[],
+  representative: RecommendationCandidate
+): readonly RecommendationCandidateProvenance[] {
   const byKey = new Map<string, RecommendationCandidateProvenance>();
   for (const candidate of group) {
     for (const provenance of candidate.provenance) {
@@ -302,13 +302,33 @@ function mergeProvenance(group: readonly RecommendationCandidate[]): readonly Re
     }
   }
 
-  return Object.freeze(
-    [...byKey.values()]
-      .sort((left, right) =>
-        right.observedAt.localeCompare(left.observedAt) || provenanceKey(left).localeCompare(provenanceKey(right))
-      )
-      .slice(0, MAX_MERGED_PROVENANCE)
+  const ordered = [...byKey.values()].sort((left, right) =>
+    right.observedAt.localeCompare(left.observedAt) || provenanceKey(left).localeCompare(provenanceKey(right))
   );
+
+  if (
+    representative.verification.state !== "authority_verified" &&
+    representative.verification.state !== "canonical"
+  ) {
+    return Object.freeze(ordered.slice(0, MAX_MERGED_PROVENANCE));
+  }
+
+  const supporting = representative.provenance
+    .filter(isTrustedVerificationProvenance)
+    .sort((left, right) =>
+      right.observedAt.localeCompare(left.observedAt) || provenanceKey(left).localeCompare(provenanceKey(right))
+    )[0];
+  if (supporting === undefined) {
+    throw new TypeError("Verified recommendation candidate lacks supporting provenance.");
+  }
+
+  const supportingKey = provenanceKey(supporting);
+  const retainedSupporting = byKey.get(supportingKey) ?? supporting;
+  const retained = [
+    retainedSupporting,
+    ...ordered.filter((entry) => provenanceKey(entry) !== supportingKey).slice(0, MAX_MERGED_PROVENANCE - 1)
+  ];
+  return Object.freeze(retained);
 }
 
 function unionMetadataValues(
@@ -373,7 +393,6 @@ function mergeCandidateGroup(group: readonly RecommendationCandidate[]): Recomme
     ...(displayName === undefined ? {} : { displayName }),
     ...(summary === undefined ? {} : { summary })
   };
-
   const observedAt = normalized.reduce(
     (latest, candidate) => candidate.observedAt > latest ? candidate.observedAt : latest,
     normalized[0]?.observedAt ?? representative.observedAt
@@ -390,13 +409,11 @@ function mergeCandidateGroup(group: readonly RecommendationCandidate[]): Recomme
     availability: latestAvailability(normalized),
     observedAt,
     metadata,
-    provenance: mergeProvenance(normalized)
+    provenance: mergeProvenance(normalized, representative)
   });
 }
 
-function matchedTarget(
-  entry: RecommendationProfileEntry
-): RecommendationColdStartMatchedProfileTarget {
+function matchedTarget(entry: RecommendationProfileEntry): RecommendationColdStartMatchedProfileTarget {
   if (
     entry.target.kind !== "canonical_interest" &&
     entry.target.kind !== "hashtag" &&
@@ -405,11 +422,7 @@ function matchedTarget(
   ) {
     throw new TypeError("Unsupported cold-start matched profile target.");
   }
-  return Object.freeze({
-    kind: entry.target.kind,
-    key: entry.target.key,
-    weight: profileEntryWeight(entry)
-  });
+  return Object.freeze({ kind: entry.target.kind, key: entry.target.key, weight: profileEntryWeight(entry) });
 }
 
 function languageFeatures(
@@ -449,7 +462,6 @@ function matchCandidate(
       targetByIdentity.set(`${entry.target.kind}:${entry.target.key}`, entry);
     }
   }
-
   for (const tag of candidate.metadata.tags) {
     const entry = profileIndex.tags.get(normalizedTag(tag));
     if (entry !== undefined) {
@@ -457,7 +469,6 @@ function matchCandidate(
       targetByIdentity.set(`${entry.target.kind}:${entry.target.key}`, entry);
     }
   }
-
   for (const entityId of candidate.metadata.entityIds) {
     const entry = profileIndex.entities.get(entityId);
     if (entry !== undefined) {
@@ -465,11 +476,10 @@ function matchCandidate(
       targetByIdentity.set(`${entry.target.kind}:${entry.target.key}`, entry);
     }
   }
-
   if (targetByIdentity.size === 0) return undefined;
 
   const matchedProfileTargets = [...targetByIdentity.values()]
-    .map((entry) => matchedTarget(entry))
+    .map(matchedTarget)
     .sort((left, right) => left.kind.localeCompare(right.kind) || left.key.localeCompare(right.key));
   const profileAffinityWeight = matchedProfileTargets.reduce((total, target) => total + target.weight, 0);
   const language = languageFeatures(candidate, languages);
@@ -508,6 +518,20 @@ function compareGeneratedCandidates(
   return left.candidate.candidateId.localeCompare(right.candidate.candidateId);
 }
 
+function normalizeCandidateKinds(value: unknown): readonly RecommendationCandidateKind[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string" || !CANDIDATE_KIND_SET.has(entry))
+  ) {
+    throw new TypeError("Invalid cold-start candidate requested kinds.");
+  }
+  if (new Set(value).size !== value.length) {
+    throw new TypeError("Duplicate cold-start candidate requested kind.");
+  }
+  return Object.freeze([...value]) as readonly RecommendationCandidateKind[];
+}
+
 function validateInput(input: RecommendationColdStartCandidateGenerationInput): {
   requestId: string;
   profile: RecommendationProfileSnapshot;
@@ -534,13 +558,7 @@ function validateInput(input: RecommendationColdStartCandidateGenerationInput): 
   if (new Set(sources.map((source) => source.id)).size !== sources.length) {
     throw new TypeError("Duplicate cold-start candidate source adapter ID.");
   }
-  if (!Array.isArray(input.candidateKinds) || input.candidateKinds.length === 0) {
-    throw new TypeError("Invalid cold-start candidate requested kinds.");
-  }
-  const candidateKinds = Object.freeze([...new Set(input.candidateKinds)]);
-  if (candidateKinds.length !== input.candidateKinds.length) {
-    throw new TypeError("Duplicate cold-start candidate requested kind.");
-  }
+  const candidateKinds = normalizeCandidateKinds(input.candidateKinds);
   const languages = normalizeLanguages(input.languages);
   const perSourceLimit = positiveSafeInteger(
     input.perSourceLimit,
