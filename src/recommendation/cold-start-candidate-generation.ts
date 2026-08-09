@@ -105,6 +105,7 @@ const MAX_LANGUAGE_LENGTH = 64;
 const MAX_MERGED_METADATA_VALUES = 128;
 const MAX_MERGED_LANGUAGES = 32;
 const MAX_MERGED_PROVENANCE = 32;
+const MAX_SOURCE_REQUEST_INTERESTS = 256;
 const CANDIDATE_KIND_SET = new Set<string>(RECOMMENDATION_CANDIDATE_KINDS);
 const MATCHABLE_TARGET_KINDS = new Set<RecommendationInterestTargetKind>([
   "canonical_interest",
@@ -224,7 +225,20 @@ function buildProfileMatchIndex(profile: RecommendationProfileSnapshot): Profile
 }
 
 function canonicalInterestRequest(profileIndex: ProfileMatchIndex): readonly string[] {
-  return Object.freeze([...profileIndex.canonicalInterests.keys()].sort());
+  return Object.freeze(
+    [...profileIndex.canonicalInterests.entries()]
+      .sort((left, right) => {
+        const weight = profileEntryWeight(right[1]) - profileEntryWeight(left[1]);
+        if (weight !== 0) return weight;
+        const confidence = right[1].confidence - left[1].confidence;
+        if (confidence !== 0) return confidence;
+        const updated = right[1].updatedAt.localeCompare(left[1].updatedAt);
+        if (updated !== 0) return updated;
+        return left[0].localeCompare(right[0]);
+      })
+      .slice(0, MAX_SOURCE_REQUEST_INTERESTS)
+      .map(([interestId]) => interestId)
+  );
 }
 
 function intersectKinds(
@@ -324,11 +338,10 @@ function mergeProvenance(
 
   const supportingKey = provenanceKey(supporting);
   const retainedSupporting = byKey.get(supportingKey) ?? supporting;
-  const retained = [
+  return Object.freeze([
     retainedSupporting,
     ...ordered.filter((entry) => provenanceKey(entry) !== supportingKey).slice(0, MAX_MERGED_PROVENANCE - 1)
-  ];
-  return Object.freeze(retained);
+  ]);
 }
 
 function unionMetadataValues(
