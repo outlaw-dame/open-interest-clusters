@@ -19,7 +19,7 @@ discovery
   -> eligibility result
 ```
 
-The ordering matters for moved accounts. Activity, discoverability, `noindex`, recommendation opt-out, provider policy, and viewer safety must apply to the current resolved account rather than merely the moved-from candidate that was initially discovered.
+The ordering matters for moved accounts. Activity and every application-relevant account restriction must apply to the current resolved account rather than merely the moved-from candidate that was initially discovered.
 
 ## Privacy boundary
 
@@ -39,18 +39,22 @@ Viewer safety returns:
 { eligible: boolean, evidenceComplete: boolean }
 ```
 
-Resolved-account recommendation policy returns:
+Resolved-account recommendation policy returns application-neutral restrictions:
 
 ```ts
 {
-  discoverable: boolean,
-  noindex: boolean,
-  optedOut: boolean,
-  evidenceComplete: boolean
+  restrictions: readonly (
+    | "not_discoverable"
+    | "noindex"
+    | "opted_out"
+  )[];
+  evidenceComplete: boolean;
 }
 ```
 
-Unexpected properties on these decisions are rejected and converted to incomplete evidence. Evaluator exceptions likewise fail closed without exposing private error details.
+The restriction list contains only restrictions that actually apply to the resolved account's provider/application capability surface. A platform that has no Mastodon-style discoverability or noindex controls does **not** invent positive booleans; it simply omits those restrictions after its adapter has established complete policy evidence. Explicit recommendation opt-outs discovered through another supported mechanism, such as normalized public profile text, can still produce `opted_out`.
+
+Unexpected properties, duplicate/unknown restrictions, or malformed decisions are rejected and converted to incomplete evidence. Evaluator exceptions likewise fail closed without exposing private error details.
 
 Private policy inputs must remain local or within the repository's permitted user-controlled storage boundary. They must never become affinity features or provider-owned subject-level recommendation state.
 
@@ -68,7 +72,7 @@ The compositor rejects candidates before account resolution or policy callbacks 
 
 This prevents unnecessary resolver or policy work for candidates whose ineligibility is already known without further identity-sensitive evaluation.
 
-Account discoverability, `noindex`, and recommendation opt-out are deliberately **not** pre-resolution cheap gates because moved accounts require these properties to be checked against the resolved current account.
+Account restrictions are deliberately **not** pre-resolution cheap gates because moved accounts require them to be checked against the resolved current account.
 
 ## Account candidates
 
@@ -80,14 +84,18 @@ That existing implementation continues to own:
 - moved-account traversal;
 - move-loop and move-depth protection;
 - deletion, deactivation, and suspension rejection;
-- fail-closed unresolved activity state.
+- fail-closed unresolved activity state;
+- cancellation before and after each moved-account resolver hop.
 
-Phase 3 additionally requires identity binding to the resolver namespace and a `evaluateResolvedAccountPolicy` callback. After account resolution succeeds, that callback receives the resolved current account and must establish:
+Phase 3 additionally requires identity binding to the resolver namespace and an `evaluateResolvedAccountPolicy` callback. After account resolution succeeds, that callback receives the resolved current account and must establish all application-relevant recommendation restrictions with complete evidence.
 
-- discoverability;
-- `noindex` state;
-- recommendation opt-out state;
-- whether that policy evidence is complete.
+For example, a Mastodon-aware evaluator may translate supported account controls into:
+
+- `discoverable: false` -> `not_discoverable`;
+- `indexable: false` or an applicable noindex signal -> `noindex`;
+- an explicit recommendation opt-out -> `opted_out`.
+
+A Bluesky-aware evaluator does not manufacture `discoverable: true` or `noindex: false` because those Mastodon controls are not part of the current Bluesky profile surface. It can return an empty restriction list when all supported/observable policy mechanisms are clear and non-restrictive, or `opted_out` when an explicit supported opt-out mechanism is observed.
 
 Malformed, unavailable, or failed resolved-account policy evidence returns `account_policy_incomplete` and fails closed.
 
@@ -144,7 +152,7 @@ Communities require protocol-appropriate existence, availability, and policy eli
 
 ### Hashtag
 
-Hashtags require a normalized valid public topic and must not be locally filtered.
+Hashtags require a canonical normalized public topic and must not be locally filtered.
 
 ### Topic
 
@@ -165,9 +173,9 @@ Closed-registration instances fail eligibility.
 For account candidates, resolved-account policy runs after successful identity/activity resolution and before provider or viewer policy.
 
 - incomplete or malformed resolved-account evidence -> `account_policy_incomplete`;
-- not discoverable -> `account_not_discoverable`;
-- `noindex` -> `account_noindex`;
-- explicit recommendation opt-out -> `account_opted_out`.
+- `not_discoverable` restriction -> `account_not_discoverable`;
+- `noindex` restriction -> `account_noindex`;
+- `opted_out` restriction -> `account_opted_out`.
 
 Provider-policy evaluation occurs before viewer-safety evaluation. If provider policy is denied or incomplete, viewer-safety evaluation is not invoked.
 
@@ -192,6 +200,19 @@ The following kinds cannot pass with only `unverified_hint` or `source_asserted`
 - labeler.
 
 They require `authority_verified` or `canonical` candidate identity before provider or viewer policy work.
+
+## Protocol/application capability rule
+
+Eligibility policy must consume application capability evidence rather than infer features from the transport protocol alone.
+
+In particular:
+
+- generic ActivityPub must not imply Mastodon account controls;
+- generic ATProto must not imply Bluesky application features;
+- ActivityPods may combine ActivityPub with Solid/ActivityPods authorization and user-owned resource semantics without implementing Mastodon or ATProto features;
+- provider adapters translate supported platform controls into the generic restriction list.
+
+See `recommendation-protocol-platform-capabilities.md` for the profile capability contract.
 
 ## Non-goals
 
