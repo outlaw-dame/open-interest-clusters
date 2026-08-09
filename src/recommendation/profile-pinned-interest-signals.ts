@@ -162,24 +162,22 @@ function normalizePolicy(
   if (capabilities.protocol !== protocol) {
     throw new TypeError("Profile feature capabilities do not match the recommendation protocol.");
   }
-  return Object.freeze({
+  const discoverable = optionalBoolean(value.discoverable, "discoverability state");
+  const indexable = optionalBoolean(value.indexable, "indexability state");
+  const noindex = optionalBoolean(value.noindex, "noindex state");
+  const normalized: RecommendationProfilePinnedAccountPolicy = {
     accountEligible: booleanField(value.accountEligible, "account eligibility"),
     providerAllowsRecommendation: booleanField(value.providerAllowsRecommendation, "provider policy"),
     blocked: booleanField(value.blocked, "blocked state"),
     muted: booleanField(value.muted, "muted state"),
     domainBlocked: booleanField(value.domainBlocked, "domain-blocked state"),
     capabilities,
-    ...(optionalBoolean(value.discoverable, "discoverability state") === undefined
-      ? {}
-      : { discoverable: optionalBoolean(value.discoverable, "discoverability state") }),
-    ...(optionalBoolean(value.indexable, "indexability state") === undefined
-      ? {}
-      : { indexable: optionalBoolean(value.indexable, "indexability state") }),
-    ...(optionalBoolean(value.noindex, "noindex state") === undefined
-      ? {}
-      : { noindex: optionalBoolean(value.noindex, "noindex state") }),
     featuredTags: featuredTags(value.featuredTags)
-  });
+  };
+  if (discoverable !== undefined) normalized.discoverable = discoverable;
+  if (indexable !== undefined) normalized.indexable = indexable;
+  if (noindex !== undefined) normalized.noindex = noindex;
+  return Object.freeze(normalized);
 }
 
 function supportedPositiveControl(
@@ -206,10 +204,6 @@ function supportedNoindexControl(
 
 function supportsRequiredFeature(support: RecommendationProfileFeatureSupport): boolean {
   return support === "supported";
-}
-
-function supportsAbsentFeature(support: RecommendationProfileFeatureSupport): boolean {
-  return support === "unsupported";
 }
 
 function hasFeaturedTagOptOut(policy: RecommendationProfilePinnedAccountPolicy): boolean {
