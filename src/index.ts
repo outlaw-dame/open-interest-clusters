@@ -24,6 +24,8 @@ export * from "./recommendation/consent-enforcement.js";
 export * from "./recommendation/source-adapter.js";
 export * from "./recommendation/candidate-domain.js";
 export * from "./recommendation/candidate-source-adapter.js";
+export * from "./recommendation/cold-start-candidate-generation.js";
+export * from "./recommendation/curated-account-set-candidate-source.js";
 export * from "./recommendation/protocol-source-contexts.js";
 export * from "./recommendation/protocol-source-normalizers.js";
 export * from "./recommendation/protocol-source-adapters.js";
