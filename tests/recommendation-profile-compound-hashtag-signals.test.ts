@@ -55,9 +55,16 @@ test("all-lowercase compounds are not dictionary-segmented", () => {
   );
 });
 
-test("compound expansion does not make substrings into interests", () => {
+test("compound expansion does not make hashtag components into standalone interests", () => {
   assert.deepEqual(
     keywordsFor("Building #OpenSourceSecurity", ["source", "security", "open source"]),
     []
+  );
+});
+
+test("ordinary prose keywords still match when the same word is also inside a compound hashtag", () => {
+  assert.deepEqual(
+    keywordsFor("Security researcher building #OpenSourceSecurity", ["security", "open source security"]),
+    ["security", "open source security"]
   );
 });
