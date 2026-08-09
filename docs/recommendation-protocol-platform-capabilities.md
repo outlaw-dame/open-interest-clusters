@@ -92,11 +92,41 @@ The profile signal path:
 2. scans plain text for explicit opt-out language;
 3. scans both hash-prefixed and plain opt-out tokens such as `#NoAI`, `#NoRecommendations`, and `NoAI`;
 4. matches allowed interest keywords against the same normalized raw text;
-5. optionally inspects platform-native featured hashtags only when that capability is declared supported.
+5. expands explicit compound hashtag boundaries conservatively for exact phrase matching;
+6. optionally inspects platform-native featured hashtags only when that capability is declared supported.
 
 This means a Bluesky description such as `Climate researcher #Climate #ActivityPub` can provide public topical evidence even though those hashtags are not Mastodon featured-tag objects. A description containing `#NoAI` or `#NoRecommendations` fails closed before emitting profile-derived interest evidence.
 
 Linkification is presentation behavior, not a prerequisite for semantic extraction.
+
+### Compound hashtags
+
+Compound hashtag expansion is deterministic and intentionally conservative.
+
+The shared `hashtagPhraseVariants` helper always retains the compact canonical hashtag identity and may add phrase variants only when word boundaries are explicitly encoded by:
+
+- Unicode compatibility normalization;
+- separators such as `_` or `-`;
+- lower-case to upper-case transitions;
+- acronym-to-word case transitions.
+
+Examples:
+
+```text
+#OpenSource       -> opensource + "open source"
+#BlackLivesMatter -> blacklivesmatter + "black lives matter"
+#Open_Source      -> open_source + "open source"
+#OpenAIResearch   -> openairesearch + "open airesearch" + "open ai research"
+#OAuthSecurity    -> oauthsecurity + "oauth security" + "o auth security"
+```
+
+The engine preserves multiple plausible casing-derived alternatives rather than declaring one ambiguous acronym split authoritative. Matching still requires an **exact allowed interest phrase** to equal one of these variants.
+
+It does **not** perform dictionary-based segmentation of all-lowercase compounds. For example, `#opensource` remains only `opensource`; it does not automatically become `open source`. This avoids silently inventing semantic boundaries and creating broad false-positive interests.
+
+Expansion is used for matching only. It does not rewrite canonical hashtag identity, candidate deduplication identity, or provenance.
+
+Likewise, partial substrings are not promoted. `#OpenSourceSecurity` may produce the full phrase `open source security`, but does not by itself match standalone `source`, `security`, or `open source` interest keywords.
 
 ## Pinned posts
 
