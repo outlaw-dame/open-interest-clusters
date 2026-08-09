@@ -54,13 +54,20 @@ export interface RecommendationCandidateViewerSafetyDecision {
   evidenceComplete: boolean;
 }
 
+export interface RecommendationResolvedAccountBinding {
+  id: string;
+  uri: string;
+  moveChain: readonly string[];
+}
+
 export interface RecommendationCandidateViewerSafetyEvaluator {
   authority: RecommendationStorageAuthority;
   processingBoundary: RecommendationProcessingBoundary;
-  evaluate(
-    candidate: RecommendationCandidate,
-    signal?: AbortSignal
-  ): RecommendationCandidateViewerSafetyDecision | Promise<RecommendationCandidateViewerSafetyDecision>;
+  evaluate(input: {
+    candidate: RecommendationCandidate;
+    resolvedAccount?: RecommendationResolvedAccountBinding;
+    signal?: AbortSignal;
+  }): RecommendationCandidateViewerSafetyDecision | Promise<RecommendationCandidateViewerSafetyDecision>;
 }
 
 interface RecommendationCandidateEligibilityEvidenceBase {
@@ -142,12 +149,6 @@ export type RecommendationCandidateEligibilityEvidence =
   | RecommendationHashtagCandidateEligibilityEvidence
   | RecommendationTopicCandidateEligibilityEvidence
   | RecommendationInstanceCandidateEligibilityEvidence;
-
-export interface RecommendationResolvedAccountBinding {
-  id: string;
-  uri: string;
-  moveChain: readonly string[];
-}
 
 export interface RecommendationCandidateEligibilityResult {
   eligible: boolean;
@@ -253,6 +254,7 @@ function validateViewerSafetyEvaluator(
 
 async function applyViewerSafety(
   candidate: RecommendationCandidate,
+  resolvedAccount: RecommendationResolvedAccountBinding | undefined,
   evaluator: RecommendationCandidateViewerSafetyEvaluator | undefined,
   signal: AbortSignal | undefined
 ): Promise<RecommendationCandidateEligibilityReason | undefined> {
@@ -263,7 +265,11 @@ async function applyViewerSafety(
     subjectLevel: true
   });
   if (placement.decision !== "allow") return "viewer_safety_placement_denied";
-  const decision = await evaluator.evaluate(candidate, signal);
+  const decision = await evaluator.evaluate({
+    candidate,
+    ...(resolvedAccount === undefined ? {} : { resolvedAccount }),
+    ...(signal === undefined ? {} : { signal })
+  });
   if (!isRecord(decision) || typeof decision.eligible !== "boolean" || typeof decision.evidenceComplete !== "boolean") {
     throw new TypeError("Invalid recommendation candidate viewer-safety decision.");
   }
@@ -321,8 +327,9 @@ async function evaluateTypeSpecificEligibility(
         ...(evidence.inactivityDays === undefined ? {} : { inactivityDays: evidence.inactivityDays }),
         ...(signal === undefined ? {} : { signal })
       });
+      const binding = resolvedAccountBinding(account);
       return result(candidate, accountReason(account), {
-        ...(resolvedAccountBinding(account) === undefined ? {} : { resolvedAccount: resolvedAccountBinding(account) })
+        ...(binding === undefined ? {} : { resolvedAccount: binding })
       });
     }
     case "post": {
@@ -413,7 +420,12 @@ export async function evaluateRecommendationCandidateEligibility(input: {
   const typeResult = await evaluateTypeSpecificEligibility(candidate, input.evidence, input.signal);
   if (!typeResult.eligible) return typeResult;
 
-  const safetyReason = await applyViewerSafety(candidate, input.viewerSafety, input.signal);
+  const safetyReason = await applyViewerSafety(
+    candidate,
+    typeResult.resolvedAccount,
+    input.viewerSafety,
+    input.signal
+  );
   if (safetyReason !== undefined) {
     return result(candidate, safetyReason, {
       ...(typeResult.resolvedAccount === undefined ? {} : { resolvedAccount: typeResult.resolvedAccount }),
