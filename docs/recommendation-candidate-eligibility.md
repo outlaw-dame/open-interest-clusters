@@ -13,25 +13,44 @@ discovery
   -> candidate normalization
   -> cheap availability and kind-specific checks
   -> authoritative account resolution when applicable
+  -> resolved-current-account policy when applicable
   -> provider policy against the effective identity
   -> viewer safety against the effective identity
   -> eligibility result
 ```
 
-The ordering matters for moved accounts: provider and viewer policy must see the resolved current account, not merely the moved-from candidate that was initially discovered.
+The ordering matters for moved accounts. Activity, discoverability, `noindex`, recommendation opt-out, provider policy, and viewer safety must apply to the current resolved account rather than merely the moved-from candidate that was initially discovered.
 
 ## Privacy boundary
 
 Viewer-private moderation state remains filter-only.
 
-The generic layer does not accept raw blocks, mutes, domain blocks, filter keywords, matched labels, subject-private moderation identifiers, or similar data. Instead, callers provide policy evaluator callbacks. Those callbacks may close over private/user-owned state, but they receive only the normalized candidate plus the resolved current account when one exists and must return a runtime-closed privacy-safe decision:
+The generic layer does not accept raw blocks, mutes, domain blocks, filter keywords, matched labels, subject-private moderation identifiers, or similar data. Instead, callers provide policy evaluator callbacks. Those callbacks may close over private or user-owned state, but the generic layer only receives closed privacy-safe decisions.
+
+Provider policy returns:
 
 ```ts
 { allowed: boolean, evidenceComplete: boolean }
+```
+
+Viewer safety returns:
+
+```ts
 { eligible: boolean, evidenceComplete: boolean }
 ```
 
-Unexpected properties on those decisions are rejected and converted to incomplete evidence. Provider/viewer evaluator exceptions likewise fail closed without exposing private error details.
+Resolved-account recommendation policy returns:
+
+```ts
+{
+  discoverable: boolean,
+  noindex: boolean,
+  optedOut: boolean,
+  evidenceComplete: boolean
+}
+```
+
+Unexpected properties on these decisions are rejected and converted to incomplete evidence. Evaluator exceptions likewise fail closed without exposing private error details.
 
 Private policy inputs must remain local or within the repository's permitted user-controlled storage boundary. They must never become affinity features or provider-owned subject-level recommendation state.
 
@@ -40,14 +59,16 @@ Private policy inputs must remain local or within the repository's permitted use
 The compositor rejects candidates before account resolution or policy callbacks when it already knows they cannot be eligible. Examples include:
 
 - candidate-level `unavailable` state;
-- discoverability/noindex/opt-out rejection;
+- account identity that is not bound to the resolver namespace;
 - non-public or identity-unbound posts;
-- unresolvable/unavailable feeds or lists;
+- unresolvable or unavailable feeds and lists;
 - stale or oversized starter packs;
 - unverified strong-identity target kinds;
 - closed-registration instances.
 
-This prevents unnecessary resolver or policy work for already-ineligible candidates.
+This prevents unnecessary resolver or policy work for candidates whose ineligibility is already known without further identity-sensitive evaluation.
+
+Account discoverability, `noindex`, and recommendation opt-out are deliberately **not** pre-resolution cheap gates because moved accounts require these properties to be checked against the resolved current account.
 
 ## Account candidates
 
@@ -58,17 +79,21 @@ That existing implementation continues to own:
 - the 45-day inactivity default;
 - moved-account traversal;
 - move-loop and move-depth protection;
-- deletion, deactivation and suspension rejection;
+- deletion, deactivation, and suspension rejection;
 - fail-closed unresolved activity state.
 
-Phase 3 additionally requires explicit evidence for:
+Phase 3 additionally requires identity binding to the resolver namespace and a `evaluateResolvedAccountPolicy` callback. After account resolution succeeds, that callback receives the resolved current account and must establish:
 
-- identity binding to the resolver namespace;
 - discoverability;
-- `noindex`;
-- recommendation opt-out.
+- `noindex` state;
+- recommendation opt-out state;
+- whether that policy evidence is complete.
 
-If the resolver follows a moved account, the provider-policy and viewer-safety callbacks receive `resolvedAccount` and `moveChain`. This prevents a moved-from account's safety state from being mistaken for the current identity's state.
+Malformed, unavailable, or failed resolved-account policy evidence returns `account_policy_incomplete` and fails closed.
+
+If the account has moved, the resolved-account policy, provider-policy, and viewer-safety callbacks all receive the current `resolvedAccount` and the `moveChain`. This prevents moved-from state from bypassing policy that applies to the current identity.
+
+If resolved-account policy rejects the account, provider and viewer-safety callbacks are not invoked.
 
 The result retains the resolved account and move chain for later scoring-input construction.
 
@@ -100,13 +125,13 @@ Starter packs require:
 - `authority_verified` or `canonical` identity;
 - no more than 1,000 members at this container boundary.
 
-Container eligibility does not authorize member follows. Any later expansion must re-evaluate every member independently through account identity, activity, provider-policy and viewer-safety checks.
+Container eligibility does not authorize member follows. Any later expansion must re-evaluate every member independently through account identity, activity, resolved-account policy, provider policy, and viewer-safety checks.
 
 ### Labeler
 
 Labelers require:
 
-- authoritative/canonical candidate identity;
+- authoritative or canonical candidate identity;
 - explicit identity-verification evidence;
 - availability;
 - policy eligibility.
@@ -115,7 +140,7 @@ Eligibility never means subscription. Subscription remains a later explicit user
 
 ### Community
 
-Communities require protocol-appropriate existence, availability and policy eligibility.
+Communities require protocol-appropriate existence, availability, and policy eligibility.
 
 ### Hashtag
 
@@ -127,7 +152,7 @@ Topics require canonical catalog identity and policy-safe metadata.
 
 ### Instance
 
-Instance candidates represent onboarding/signup recommendations and therefore require:
+Instance candidates represent onboarding or signup recommendations and therefore require:
 
 - current health;
 - open registration;
@@ -135,22 +160,27 @@ Instance candidates represent onboarding/signup recommendations and therefore re
 
 Closed-registration instances fail eligibility.
 
-## Provider and viewer policy failure semantics
+## Policy failure semantics
+
+For account candidates, resolved-account policy runs after successful identity/activity resolution and before provider or viewer policy.
+
+- incomplete or malformed resolved-account evidence -> `account_policy_incomplete`;
+- not discoverable -> `account_not_discoverable`;
+- `noindex` -> `account_noindex`;
+- explicit recommendation opt-out -> `account_opted_out`.
 
 Provider-policy evaluation occurs before viewer-safety evaluation. If provider policy is denied or incomplete, viewer-safety evaluation is not invoked.
-
-Both policy evaluators fail closed:
 
 - incomplete provider evidence -> `provider_policy_incomplete`;
 - provider denial -> `provider_policy_denied`;
 - incomplete viewer evidence -> `viewer_safety_incomplete`;
 - viewer rejection -> `viewer_safety_denied`.
 
-Evaluator exceptions are reduced to the corresponding incomplete reason code. Exception text is never included in the result.
+Evaluator exceptions are reduced to the corresponding incomplete reason code. Exception text and raw private matches are never included in the result.
 
 ## Empty moderation state
 
-A successfully-read empty block/mute/filter collection is valid and should become `eligible: true, evidenceComplete: true`. Empty state is distinct from unavailable, incomplete, or failed safety evidence.
+A successfully-read empty block, mute, or filter collection is valid and should become `eligible: true, evidenceComplete: true`. Empty state is distinct from unavailable, incomplete, or failed safety evidence.
 
 ## Strong identity
 
@@ -161,7 +191,7 @@ The following kinds cannot pass with only `unverified_hint` or `source_asserted`
 - starter pack;
 - labeler.
 
-They require `authority_verified` or `canonical` candidate identity before provider/viewer policy work.
+They require `authority_verified` or `canonical` candidate identity before provider or viewer policy work.
 
 ## Non-goals
 
@@ -169,7 +199,7 @@ Phase 3 does not:
 
 - score candidates;
 - convert safety decisions into positive affinity;
-- execute follow/subscribe/join actions;
+- execute follow, subscribe, or join actions;
 - auto-subscribe labelers;
 - expand starter packs into follow operations;
 - expose raw moderation matches in public explanations;
