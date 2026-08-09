@@ -59,6 +59,15 @@ export const RECOMMENDATION_CANDIDATE_ELIGIBILITY_REASON_CODES = [
 export type RecommendationCandidateEligibilityReasonCode =
   typeof RECOMMENDATION_CANDIDATE_ELIGIBILITY_REASON_CODES[number];
 
+export const RECOMMENDATION_RESOLVED_ACCOUNT_POLICY_RESTRICTIONS = [
+  "not_discoverable",
+  "noindex",
+  "opted_out"
+] as const;
+
+export type RecommendationResolvedAccountPolicyRestriction =
+  typeof RECOMMENDATION_RESOLVED_ACCOUNT_POLICY_RESTRICTIONS[number];
+
 export interface RecommendationCandidatePolicyGate {
   allowed: boolean;
   evidenceComplete: boolean;
@@ -70,9 +79,7 @@ export interface RecommendationCandidateViewerSafetyGate {
 }
 
 export interface RecommendationResolvedAccountPolicyGate {
-  discoverable: boolean;
-  noindex: boolean;
-  optedOut: boolean;
+  restrictions: readonly RecommendationResolvedAccountPolicyRestriction[];
   evidenceComplete: boolean;
 }
 
@@ -205,7 +212,10 @@ const INPUT_KEYS = new Set([
 ]);
 const POLICY_GATE_KEYS = new Set(["allowed", "evidenceComplete"]);
 const VIEWER_GATE_KEYS = new Set(["eligible", "evidenceComplete"]);
-const RESOLVED_ACCOUNT_POLICY_KEYS = new Set(["discoverable", "noindex", "optedOut", "evidenceComplete"]);
+const RESOLVED_ACCOUNT_POLICY_KEYS = new Set(["restrictions", "evidenceComplete"]);
+const RESOLVED_ACCOUNT_POLICY_RESTRICTION_SET = new Set<string>(
+  RECOMMENDATION_RESOLVED_ACCOUNT_POLICY_RESTRICTIONS
+);
 const EVIDENCE_KEYS: Readonly<Record<RecommendationCandidateKind, ReadonlySet<string>>> = {
   account: new Set(["kind", "resolver", "identityBindingVerified", "evaluateResolvedAccountPolicy", "inactivityDays"]),
   post: new Set(["kind", "explicitlyPublic", "available", "identityBound"]),
@@ -253,13 +263,26 @@ function normalizeViewerSafety(value: unknown): RecommendationCandidateViewerSaf
 }
 
 function normalizeResolvedAccountPolicy(value: unknown): RecommendationResolvedAccountPolicyGate {
-  if (!isRecord(value) || !hasOnlyKeys(value, RESOLVED_ACCOUNT_POLICY_KEYS)) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, RESOLVED_ACCOUNT_POLICY_KEYS) ||
+    !Array.isArray(value.restrictions) ||
+    value.restrictions.length > RECOMMENDATION_RESOLVED_ACCOUNT_POLICY_RESTRICTIONS.length
+  ) {
     throw new TypeError("Invalid recommendation resolved-account policy decision.");
   }
+  const restrictions = value.restrictions.map((entry) => {
+    if (typeof entry !== "string" || !RESOLVED_ACCOUNT_POLICY_RESTRICTION_SET.has(entry)) {
+      throw new TypeError("Invalid recommendation resolved-account policy decision.");
+    }
+    return entry as RecommendationResolvedAccountPolicyRestriction;
+  });
+  if (new Set(restrictions).size !== restrictions.length) {
+    throw new TypeError("Invalid recommendation resolved-account policy decision.");
+  }
+  restrictions.sort();
   return Object.freeze({
-    discoverable: booleanField(value.discoverable, "Invalid recommendation resolved-account policy decision."),
-    noindex: booleanField(value.noindex, "Invalid recommendation resolved-account policy decision."),
-    optedOut: booleanField(value.optedOut, "Invalid recommendation resolved-account policy decision."),
+    restrictions: Object.freeze(restrictions),
     evidenceComplete: booleanField(value.evidenceComplete, "Invalid recommendation resolved-account policy decision.")
   });
 }
@@ -374,6 +397,16 @@ function accountReasonCode(reason: RecommendationAccountEligibilityReason): Reco
     case "unresolved": return "account_unresolved";
     case "move_loop": return "account_move_loop";
     case "move_limit": return "account_move_limit";
+  }
+}
+
+function accountRestrictionReasonCode(
+  restriction: RecommendationResolvedAccountPolicyRestriction
+): RecommendationCandidateEligibilityReasonCode {
+  switch (restriction) {
+    case "not_discoverable": return "account_not_discoverable";
+    case "noindex": return "account_noindex";
+    case "opted_out": return "account_opted_out";
   }
 }
 
@@ -532,7 +565,7 @@ async function evaluateResolvedAccountPolicySafely(
   } catch (error) {
     assertNotAborted(context.signal);
     void error;
-    return Object.freeze({ discoverable: false, noindex: true, optedOut: true, evidenceComplete: false });
+    return Object.freeze({ restrictions: Object.freeze([]), evidenceComplete: false });
   }
 }
 
@@ -598,12 +631,14 @@ export async function evaluateRecommendationCandidateEligibility(
     if (!accountPolicy.evidenceComplete) {
       return result(candidate, evaluatedAt, ["account_policy_incomplete"], resolvedAccount, moveChain);
     }
-    const accountReasons: RecommendationCandidateEligibilityReasonCode[] = [];
-    if (!accountPolicy.discoverable) accountReasons.push("account_not_discoverable");
-    if (accountPolicy.noindex) accountReasons.push("account_noindex");
-    if (accountPolicy.optedOut) accountReasons.push("account_opted_out");
-    if (accountReasons.length > 0) {
-      return result(candidate, evaluatedAt, accountReasons, resolvedAccount, moveChain);
+    if (accountPolicy.restrictions.length > 0) {
+      return result(
+        candidate,
+        evaluatedAt,
+        accountPolicy.restrictions.map(accountRestrictionReasonCode),
+        resolvedAccount,
+        moveChain
+      );
     }
   }
 
