@@ -249,11 +249,6 @@ function profileTextState(input: {
   normalizedProfileText?: unknown;
   requireNormalizedCustomText: boolean;
 }): { text: string; present: boolean } {
-  const normalized = normalizedProfileText(input.normalizedProfileText);
-  if (normalized !== undefined) {
-    return Object.freeze({ text: normalized, present: normalized.length > 0 });
-  }
-
   if (input.protocol === "activitypub") {
     const present = activityPubProfileTextPresent(input.profile);
     return Object.freeze({
@@ -268,6 +263,11 @@ function profileTextState(input: {
       text: present ? readBlueskyProfileText(input.profile) : "",
       present
     });
+  }
+
+  const normalized = normalizedProfileText(input.normalizedProfileText);
+  if (normalized !== undefined) {
+    return Object.freeze({ text: normalized, present: normalized.length > 0 });
   }
 
   if (!input.requireNormalizedCustomText) {
