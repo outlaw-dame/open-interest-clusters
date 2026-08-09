@@ -1,4 +1,10 @@
+import { normalizeHashtag } from "../normalization/hashtags.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
+import {
+  normalizeRecommendationProfileFeatureCapabilities,
+  type RecommendationProfileFeatureCapabilities,
+  type RecommendationProfileFeatureSupport
+} from "./profile-feature-capabilities.js";
 
 export const RECOMMENDATION_PROFILE_PINNED_SIGNAL_KINDS = ["bio_keyword", "pinned_post_keyword"] as const;
 export type RecommendationProfilePinnedSignalKind = typeof RECOMMENDATION_PROFILE_PINNED_SIGNAL_KINDS[number];
@@ -19,18 +25,32 @@ export interface RecommendationProfilePinnedInterestEvidence {
 export interface RecommendationProfilePinnedAccountPolicy {
   accountEligible: boolean;
   providerAllowsRecommendation: boolean;
-  discoverable: boolean;
-  indexable: boolean;
   blocked: boolean;
   muted: boolean;
   domainBlocked: boolean;
-  profileTags?: readonly string[];
+  capabilities: RecommendationProfileFeatureCapabilities;
+  discoverable?: boolean | null;
+  indexable?: boolean | null;
+  noindex?: boolean | null;
   featuredTags?: readonly string[];
 }
 
 const MAX_TEXT = 16_384;
 const MAX_KEYWORDS = 256;
 const MAX_PINNED_POSTS = 10;
+const MAX_FEATURED_TAGS = 256;
+const POLICY_KEYS = new Set([
+  "accountEligible",
+  "providerAllowsRecommendation",
+  "blocked",
+  "muted",
+  "domainBlocked",
+  "capabilities",
+  "discoverable",
+  "indexable",
+  "noindex",
+  "featuredTags"
+]);
 const OPT_OUT_PATTERNS = [
   /(?:^|\b)no\s*ai(?:\b|$)/iu,
   /(?:^|\b)no\s*bot(?:s)?(?:\b|$)/iu,
@@ -39,7 +59,19 @@ const OPT_OUT_PATTERNS = [
   /(?:^|\b)not\s+for\s+(?:ai|bots?|training|recommendations?)(?:\b|$)/iu,
   /(?:^|\b)no\s+(?:indexing|scraping|recommendations?|training)(?:\b|$)/iu
 ] as const;
-const OPT_OUT_TAGS = new Set(["noai", "nobot", "noindex", "noarchive", "norecommendation", "norecommendations"]);
+const OPT_OUT_TAGS = new Set([
+  "noai",
+  "nobot",
+  "nobots",
+  "noindex",
+  "noindexing",
+  "noarchive",
+  "noscrape",
+  "noscraping",
+  "norecommendation",
+  "norecommendations",
+  "notraining"
+]);
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -82,29 +114,155 @@ function canonicalKeyword(value: string): string {
   return value.normalize("NFKC").trim().replace(/^#/u, "").toLocaleLowerCase("und");
 }
 
-function hasPlainTextOptOut(text: string): boolean {
-  const normalized = plainText(text);
-  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(normalized));
+function canonicalOptOutToken(value: string): string {
+  return normalizeHashtag(value).replace(/[^\p{Letter}\p{Number}]+/gu, "");
 }
 
-function hasTagOptOut(policy: RecommendationProfilePinnedAccountPolicy): boolean {
-  for (const raw of [...(policy.profileTags ?? []), ...(policy.featuredTags ?? [])]) {
-    if (typeof raw !== "string") return true;
-    if (OPT_OUT_TAGS.has(canonicalKeyword(raw).replace(/[_-]/gu, ""))) return true;
+function hasInlineOptOutToken(text: string): boolean {
+  const normalized = plainText(text);
+  const tokenPattern = /(?:^|[^\p{Letter}\p{Number}_])#?([\p{Letter}\p{Number}_-]{2,80})(?=$|[^\p{Letter}\p{Number}_])/gu;
+  for (const match of normalized.matchAll(tokenPattern)) {
+    const raw = match[1];
+    if (raw !== undefined && OPT_OUT_TAGS.has(canonicalOptOutToken(raw))) return true;
   }
   return false;
 }
 
-function assertAllowed(policy: RecommendationProfilePinnedAccountPolicy, allText: readonly string[]): void {
+function hasPlainTextOptOut(text: string): boolean {
+  const normalized = plainText(text);
+  return OPT_OUT_PATTERNS.some((pattern) => pattern.test(normalized)) || hasInlineOptOutToken(normalized);
+}
+
+function booleanField(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`Invalid profile interest ${label}.`);
+  return value;
+}
+
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  return booleanField(value, label);
+}
+
+function featuredTags(value: unknown): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_FEATURED_TAGS || value.some((entry) => typeof entry !== "string")) {
+    throw new TypeError("Invalid profile interest featured tags.");
+  }
+  return Object.freeze(value.map((entry) => requiredText(entry, "featured tag", 256)));
+}
+
+function normalizePolicy(
+  value: unknown,
+  protocol: RecommendationProfilePinnedProtocol
+): RecommendationProfilePinnedAccountPolicy {
+  if (!record(value) || Object.keys(value).some((key) => !POLICY_KEYS.has(key))) {
+    throw new TypeError("Invalid profile interest account policy.");
+  }
+  const capabilities = normalizeRecommendationProfileFeatureCapabilities(value.capabilities);
+  if (capabilities.protocol !== protocol) {
+    throw new TypeError("Profile feature capabilities do not match the recommendation protocol.");
+  }
+  return Object.freeze({
+    accountEligible: booleanField(value.accountEligible, "account eligibility"),
+    providerAllowsRecommendation: booleanField(value.providerAllowsRecommendation, "provider policy"),
+    blocked: booleanField(value.blocked, "blocked state"),
+    muted: booleanField(value.muted, "muted state"),
+    domainBlocked: booleanField(value.domainBlocked, "domain-blocked state"),
+    capabilities,
+    ...(optionalBoolean(value.discoverable, "discoverability state") === undefined
+      ? {}
+      : { discoverable: optionalBoolean(value.discoverable, "discoverability state") }),
+    ...(optionalBoolean(value.indexable, "indexability state") === undefined
+      ? {}
+      : { indexable: optionalBoolean(value.indexable, "indexability state") }),
+    ...(optionalBoolean(value.noindex, "noindex state") === undefined
+      ? {}
+      : { noindex: optionalBoolean(value.noindex, "noindex state") }),
+    featuredTags: featuredTags(value.featuredTags)
+  });
+}
+
+function supportedPositiveControl(
+  support: RecommendationProfileFeatureSupport,
+  value: boolean | undefined
+): boolean {
+  switch (support) {
+    case "supported": return value === true;
+    case "unsupported": return value === undefined;
+    case "unknown": return false;
+  }
+}
+
+function supportedNoindexControl(
+  support: RecommendationProfileFeatureSupport,
+  value: boolean | undefined
+): boolean {
+  switch (support) {
+    case "supported": return value !== true;
+    case "unsupported": return value === undefined;
+    case "unknown": return false;
+  }
+}
+
+function supportsRequiredFeature(support: RecommendationProfileFeatureSupport): boolean {
+  return support === "supported";
+}
+
+function supportsAbsentFeature(support: RecommendationProfileFeatureSupport): boolean {
+  return support === "unsupported";
+}
+
+function hasFeaturedTagOptOut(policy: RecommendationProfilePinnedAccountPolicy): boolean {
+  for (const raw of policy.featuredTags ?? []) {
+    if (OPT_OUT_TAGS.has(canonicalOptOutToken(raw))) return true;
+  }
+  return false;
+}
+
+function hasAnyPinnedInput(
+  protocol: RecommendationProfilePinnedProtocol,
+  profile: Record<string, unknown>,
+  pinnedPosts: unknown
+): boolean {
+  if (protocol === "atproto") return profile.pinnedPost !== undefined && profile.pinnedPost !== null;
+  return Array.isArray(pinnedPosts) && pinnedPosts.length > 0;
+}
+
+function assertCapabilitiesAndPolicy(
+  policy: RecommendationProfilePinnedAccountPolicy,
+  protocol: RecommendationProfilePinnedProtocol,
+  profile: Record<string, unknown>,
+  pinnedPosts: unknown,
+  allText: readonly string[]
+): void {
+  const capabilities = policy.capabilities;
+  const pinnedPresent = hasAnyPinnedInput(protocol, profile, pinnedPosts);
+  const featured = policy.featuredTags ?? [];
+
+  const featuredCapabilityValid = capabilities.featuredHashtags === "supported"
+    ? true
+    : capabilities.featuredHashtags === "unsupported"
+      ? featured.length === 0
+      : false;
+  const pinnedCapabilityValid = capabilities.pinnedPosts === "supported"
+    ? true
+    : capabilities.pinnedPosts === "unsupported"
+      ? !pinnedPresent
+      : false;
+
   if (
     policy.accountEligible !== true ||
     policy.providerAllowsRecommendation !== true ||
-    policy.discoverable !== true ||
-    policy.indexable !== true ||
     policy.blocked !== false ||
     policy.muted !== false ||
     policy.domainBlocked !== false ||
-    hasTagOptOut(policy) ||
+    !supportsRequiredFeature(capabilities.rawProfileText) ||
+    !supportedPositiveControl(capabilities.discoverabilityControl, policy.discoverable ?? undefined) ||
+    !supportedPositiveControl(capabilities.indexabilityControl, policy.indexable ?? undefined) ||
+    !supportedNoindexControl(capabilities.noindexSignal, policy.noindex ?? undefined) ||
+    !featuredCapabilityValid ||
+    !pinnedCapabilityValid ||
+    hasFeaturedTagOptOut(policy) ||
     allText.some(hasPlainTextOptOut)
   ) {
     throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
@@ -160,27 +318,65 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
   policy: RecommendationProfilePinnedAccountPolicy;
   observedAt: string;
 }): readonly RecommendationProfilePinnedInterestEvidence[] {
-  if (!record(input.profile) || !Array.isArray(input.keywords) || input.keywords.length > MAX_KEYWORDS) {
+  if (
+    !record(input) ||
+    (input.protocol !== "activitypub" && input.protocol !== "atproto") ||
+    !record(input.profile) ||
+    !Array.isArray(input.keywords) ||
+    input.keywords.length > MAX_KEYWORDS
+  ) {
     throw new TypeError("Invalid profile interest input.");
   }
   const accountId = requiredText(input.accountId, "account ID", 512);
   const accountUri = requiredText(input.accountUri, "account URI");
   const observedAt = instant(input.observedAt);
+  const policy = normalizePolicy(input.policy, input.protocol);
   const bio = input.protocol === "activitypub"
     ? `${boundedText(input.profile.note ?? input.profile.summary ?? "", "bio")} ${boundedText(input.profile.display_name ?? input.profile.name ?? "", "display name")}`.trim()
     : `${boundedText(input.profile.description ?? "", "bio")} ${boundedText(input.profile.displayName ?? "", "display name")}`.trim();
-  const pinned = input.protocol === "activitypub"
-    ? mastodonPinnedPosts(input.pinnedPosts ?? [])
-    : atprotoPinnedPost(input.profile, input.pinnedPosts);
-  assertAllowed(input.policy, [bio, ...pinned.map((item) => item.text)]);
+
+  const pinnedPresent = hasAnyPinnedInput(input.protocol, input.profile, input.pinnedPosts);
+  if (policy.capabilities.pinnedPosts === "unknown") {
+    throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
+  }
+  if (policy.capabilities.pinnedPosts === "unsupported" && pinnedPresent) {
+    throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
+  }
+  const pinned = policy.capabilities.pinnedPosts === "supported"
+    ? input.protocol === "activitypub"
+      ? mastodonPinnedPosts(input.pinnedPosts ?? [])
+      : atprotoPinnedPost(input.profile, input.pinnedPosts)
+    : Object.freeze([]);
+
+  assertCapabilitiesAndPolicy(policy, input.protocol, input.profile, input.pinnedPosts, [bio, ...pinned.map((item) => item.text)]);
 
   const output: RecommendationProfilePinnedInterestEvidence[] = [];
   for (const keyword of keywordMatches(bio, input.keywords)) {
-    output.push(Object.freeze({ protocol: input.protocol, kind: "bio_keyword", accountId, accountUri, keyword, sourceText: plainText(bio), sourceUri: accountUri, observedAt, confidence: 0.68 }));
+    output.push(Object.freeze({
+      protocol: input.protocol,
+      kind: "bio_keyword",
+      accountId,
+      accountUri,
+      keyword,
+      sourceText: plainText(bio),
+      sourceUri: accountUri,
+      observedAt,
+      confidence: 0.68
+    }));
   }
   for (const item of pinned) {
     for (const keyword of keywordMatches(item.text, input.keywords)) {
-      output.push(Object.freeze({ protocol: input.protocol, kind: "pinned_post_keyword", accountId, accountUri, keyword, sourceText: plainText(item.text), sourceUri: item.uri, observedAt, confidence: 0.82 }));
+      output.push(Object.freeze({
+        protocol: input.protocol,
+        kind: "pinned_post_keyword",
+        accountId,
+        accountUri,
+        keyword,
+        sourceText: plainText(item.text),
+        sourceUri: item.uri,
+        observedAt,
+        confidence: 0.82
+      }));
     }
   }
   return Object.freeze(output);
