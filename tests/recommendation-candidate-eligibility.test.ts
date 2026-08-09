@@ -47,7 +47,7 @@ function candidate(
       kind: verification.state === "canonical" ? "local_catalog" : "provider_discovery",
       sourceId: verification.state === "canonical" ? "catalog.local" : "provider.native",
       observedAt: NOW,
-      trustBoundary: verification.state === "canonical" ? "local" : "same_provider"
+      trustBoundary: verification.state === "canonical" ? "user_owned" : "same_provider"
     }]
   };
 }
