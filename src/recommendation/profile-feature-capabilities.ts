@@ -1,5 +1,3 @@
-import type { RecommendationProfilePinnedProtocol } from "./profile-pinned-interest-signals.js";
-
 export const RECOMMENDATION_PROFILE_FEATURE_SUPPORT_STATES = [
   "supported",
   "unsupported",
@@ -8,9 +6,10 @@ export const RECOMMENDATION_PROFILE_FEATURE_SUPPORT_STATES = [
 
 export type RecommendationProfileFeatureSupport =
   typeof RECOMMENDATION_PROFILE_FEATURE_SUPPORT_STATES[number];
+export type RecommendationProfileFeatureProtocol = "activitypub" | "atproto";
 
 export interface RecommendationProfileFeatureCapabilities {
-  protocol: RecommendationProfilePinnedProtocol;
+  protocol: RecommendationProfileFeatureProtocol;
   rawProfileText: RecommendationProfileFeatureSupport;
   pinnedPosts: RecommendationProfileFeatureSupport;
   discoverabilityControl: RecommendationProfileFeatureSupport;
@@ -80,9 +79,9 @@ export function createRecommendationMastodonProfileFeatureCapabilities(): Recomm
 }
 
 /**
- * Convenience preset for the app.bsky.actor.profile surface. Generic ATProto
- * applications must declare their own capabilities because app lexicons can
- * expose a different feature set.
+ * Convenience preset for the current app.bsky.actor.profile surface. Generic
+ * ATProto applications must declare their own capabilities because app
+ * lexicons can expose a different feature set.
  */
 export function createRecommendationBlueskyProfileFeatureCapabilities(): RecommendationProfileFeatureCapabilities {
   return Object.freeze({
