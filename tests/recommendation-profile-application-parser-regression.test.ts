@@ -20,6 +20,23 @@ const CUSTOM_ATPROTO_POLICY = {
   }
 };
 
+const ACTIVITYPUB_POLICY = {
+  accountEligible: true,
+  providerAllowsRecommendation: true,
+  blocked: false,
+  muted: false,
+  domainBlocked: false,
+  capabilities: {
+    protocol: "activitypub" as const,
+    rawProfileText: "supported" as const,
+    pinnedPosts: "unsupported" as const,
+    discoverabilityControl: "unsupported" as const,
+    indexabilityControl: "unsupported" as const,
+    noindexSignal: "unsupported" as const,
+    featuredHashtags: "unsupported" as const
+  }
+};
+
 const BASE = {
   protocol: "atproto" as const,
   accountId: "did:plc:custom-app",
@@ -78,4 +95,36 @@ test("custom ATProto applications that declare profile text unsupported stay neu
     }
   });
   assert.deepEqual(evidence, []);
+});
+
+test("adapter-normalized text cannot mask an ActivityPub native profile opt-out", () => {
+  assert.throws(
+    () => deriveRecommendationProfilePinnedInterestEvidence({
+      protocol: "activitypub",
+      accountId: "https://social.example/users/alice",
+      accountUri: "https://social.example/users/alice",
+      profile: { note: "#NoAI Open social developer" },
+      normalizedProfileText: "Open social developer",
+      keywords: ["open social"],
+      policy: ACTIVITYPUB_POLICY,
+      observedAt: "2026-08-09T17:30:00Z"
+    }),
+    /not eligible/u
+  );
+});
+
+test("adapter-normalized text cannot mask a native Bluesky profile opt-out", () => {
+  assert.throws(
+    () => deriveRecommendationProfilePinnedInterestEvidence({
+      protocol: "atproto",
+      accountId: "did:plc:bluesky-user",
+      accountUri: "at://did:plc:bluesky-user/app.bsky.actor.profile/self",
+      profile: { description: "#NoAI Open social developer" },
+      normalizedProfileText: "Open social developer",
+      keywords: ["open social"],
+      policy: CUSTOM_ATPROTO_POLICY,
+      observedAt: "2026-08-09T17:30:00Z"
+    }),
+    /not eligible/u
+  );
 });
