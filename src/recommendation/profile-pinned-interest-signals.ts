@@ -247,17 +247,17 @@ function profileTextState(input: {
   accountUri: string;
   profile: Record<string, unknown>;
   normalizedProfileText?: unknown;
-}): { text: string; explicit: boolean; present: boolean } {
+  requireNormalizedCustomText: boolean;
+}): { text: string; present: boolean } {
   const normalized = normalizedProfileText(input.normalizedProfileText);
   if (normalized !== undefined) {
-    return Object.freeze({ text: normalized, explicit: true, present: normalized.length > 0 });
+    return Object.freeze({ text: normalized, present: normalized.length > 0 });
   }
 
   if (input.protocol === "activitypub") {
     const present = activityPubProfileTextPresent(input.profile);
     return Object.freeze({
       text: present ? readActivityPubProfileText(input.profile) : "",
-      explicit: false,
       present
     });
   }
@@ -266,9 +266,12 @@ function profileTextState(input: {
     const present = blueskyProfileTextPresent(input.profile);
     return Object.freeze({
       text: present ? readBlueskyProfileText(input.profile) : "",
-      explicit: false,
       present
     });
+  }
+
+  if (!input.requireNormalizedCustomText) {
+    return Object.freeze({ text: "", present: false });
   }
 
   // ATProto does not define one universal profile lexicon. For non-Bluesky
@@ -288,7 +291,7 @@ function hasAnyPinnedInput(
 
 function assertCapabilitiesAndPolicy(
   policy: RecommendationProfilePinnedAccountPolicy,
-  profileText: { text: string; explicit: boolean; present: boolean },
+  profileText: { text: string; present: boolean },
   protocol: RecommendationProfilePinnedProtocol,
   profile: Record<string, unknown>,
   pinnedPosts: unknown,
@@ -429,7 +432,8 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
     protocol: input.protocol,
     accountUri,
     profile: input.profile,
-    normalizedProfileText: input.normalizedProfileText
+    normalizedProfileText: input.normalizedProfileText,
+    requireNormalizedCustomText: policy.capabilities.rawProfileText === "supported"
   });
   if (policy.capabilities.rawProfileText === "unsupported" && profileText.present) {
     throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
