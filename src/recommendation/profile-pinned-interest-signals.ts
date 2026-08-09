@@ -32,12 +32,14 @@ export interface RecommendationProfilePinnedAccountPolicy {
   discoverable?: boolean | null;
   indexable?: boolean | null;
   noindex?: boolean | null;
+  profileTags?: readonly string[];
   featuredTags?: readonly string[];
 }
 
 const MAX_TEXT = 16_384;
 const MAX_KEYWORDS = 256;
 const MAX_PINNED_POSTS = 10;
+const MAX_PROFILE_TAGS = 256;
 const MAX_FEATURED_TAGS = 256;
 const MAX_EXTRACTED_HASHTAGS = 128;
 const HASHTAG_TOKEN_PATTERN = /#([\p{Letter}\p{Mark}\p{Number}_\-\u2010-\u2015]{2,160})/gu;
@@ -51,6 +53,7 @@ const POLICY_KEYS = new Set([
   "discoverable",
   "indexable",
   "noindex",
+  "profileTags",
   "featuredTags"
 ]);
 const OPT_OUT_PATTERNS = [
@@ -122,7 +125,7 @@ function canonicalOptOutToken(value: string): string {
 
 function hasInlineOptOutToken(text: string): boolean {
   const normalized = plainText(text);
-  const tokenPattern = /(?:^|[^\p{Letter}\p{Number}_])#?([\p{Letter}\p{Number}_-]{2,80})(?=$|[^\p{Letter}\p{Number}_])/gu;
+  const tokenPattern = /(?:^|[^\p{Letter}\p{Number}_])#?([\p{Letter}\p{Mark}\p{Number}_\-\u2010-\u2015]{2,80})(?=$|[^\p{Letter}\p{Mark}\p{Number}_])/gu;
   for (const match of normalized.matchAll(tokenPattern)) {
     const raw = match[1];
     if (raw !== undefined && OPT_OUT_TAGS.has(canonicalOptOutToken(raw))) return true;
@@ -145,12 +148,12 @@ function optionalBoolean(value: unknown, label: string): boolean | undefined {
   return booleanField(value, label);
 }
 
-function featuredTags(value: unknown): readonly string[] {
+function policyTags(value: unknown, label: string, max: number): readonly string[] {
   if (value === undefined) return Object.freeze([]);
-  if (!Array.isArray(value) || value.length > MAX_FEATURED_TAGS || value.some((entry) => typeof entry !== "string")) {
-    throw new TypeError("Invalid profile interest featured tags.");
+  if (!Array.isArray(value) || value.length > max || value.some((entry) => typeof entry !== "string")) {
+    throw new TypeError(`Invalid profile interest ${label}.`);
   }
-  return Object.freeze(value.map((entry) => requiredText(entry, "featured tag", 256)));
+  return Object.freeze(value.map((entry) => requiredText(entry, label.replace(/s$/u, ""), 256)));
 }
 
 function normalizePolicy(
@@ -174,7 +177,8 @@ function normalizePolicy(
     muted: booleanField(value.muted, "muted state"),
     domainBlocked: booleanField(value.domainBlocked, "domain-blocked state"),
     capabilities,
-    featuredTags: featuredTags(value.featuredTags)
+    profileTags: policyTags(value.profileTags, "profile tags", MAX_PROFILE_TAGS),
+    featuredTags: policyTags(value.featuredTags, "featured tags", MAX_FEATURED_TAGS)
   };
   if (discoverable !== undefined) normalized.discoverable = discoverable;
   if (indexable !== undefined) normalized.indexable = indexable;
@@ -204,8 +208,8 @@ function supportedNoindexControl(
   }
 }
 
-function hasFeaturedTagOptOut(policy: RecommendationProfilePinnedAccountPolicy): boolean {
-  for (const raw of policy.featuredTags ?? []) {
+function hasTagOptOut(tags: readonly string[] | undefined): boolean {
+  for (const raw of tags ?? []) {
     if (OPT_OUT_TAGS.has(canonicalOptOutToken(raw))) return true;
   }
   return false;
@@ -279,7 +283,8 @@ function assertCapabilitiesAndPolicy(
     !supportedNoindexControl(capabilities.noindexSignal, policy.noindex ?? undefined) ||
     !featuredCapabilityValid ||
     !pinnedCapabilityValid ||
-    hasFeaturedTagOptOut(policy) ||
+    hasTagOptOut(policy.profileTags) ||
+    hasTagOptOut(policy.featuredTags) ||
     allText.some(hasPlainTextOptOut)
   ) {
     throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
