@@ -99,6 +99,12 @@ function result(
   });
 }
 
+function assertNotAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+}
+
 export async function evaluateRecommendationAccountEligibility(input: {
   reference: string;
   resolver: RecommendationAccountProfileResolver;
@@ -115,14 +121,17 @@ export async function evaluateRecommendationAccountEligibility(input: {
   if (!Number.isSafeInteger(inactivityDays) || inactivityDays < 1 || inactivityDays > 365) {
     throw new TypeError("Invalid recommendation account inactivity window.");
   }
+  assertNotAborted(input.signal);
 
   const visited = new Set<string>();
   const moveChain: string[] = [];
   let reference = requestedReference;
   for (let depth = 0; depth <= MAX_MOVES; depth += 1) {
+    assertNotAborted(input.signal);
     if (visited.has(reference)) return result(requestedReference, evaluatedAt, inactivityDays, "move_loop", moveChain);
     visited.add(reference);
     const raw = await input.resolver.resolve(reference, input.signal);
+    assertNotAborted(input.signal);
     if (raw === undefined) return result(requestedReference, evaluatedAt, inactivityDays, "unresolved", moveChain);
     const profile = normalizeProfile(raw);
     if (profile.movedTo !== undefined) {
