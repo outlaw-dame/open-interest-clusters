@@ -1,4 +1,4 @@
-import { normalizeHashtag } from "../normalization/hashtags.js";
+import { hashtagPhraseVariants, normalizeHashtag } from "../normalization/hashtags.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   normalizeRecommendationProfileFeatureCapabilities,
@@ -39,6 +39,8 @@ const MAX_TEXT = 16_384;
 const MAX_KEYWORDS = 256;
 const MAX_PINNED_POSTS = 10;
 const MAX_FEATURED_TAGS = 256;
+const MAX_EXTRACTED_HASHTAGS = 128;
+const HASHTAG_TOKEN_PATTERN = /#([\p{Letter}\p{Mark}\p{Number}_\-\u2010-\u2015]{2,160})/gu;
 const POLICY_KEYS = new Set([
   "accountEligible",
   "providerAllowsRecommendation",
@@ -284,15 +286,34 @@ function assertCapabilitiesAndPolicy(
   }
 }
 
+function profileHashtagPhraseVariants(text: string): ReadonlySet<string> {
+  const variants = new Set<string>();
+  const normalized = plainText(text);
+  let count = 0;
+  for (const match of normalized.matchAll(HASHTAG_TOKEN_PATTERN)) {
+    const token = match[1];
+    if (token === undefined) continue;
+    for (const variant of hashtagPhraseVariants(token)) {
+      variants.add(variant);
+    }
+    count += 1;
+    if (count >= MAX_EXTRACTED_HASHTAGS) break;
+  }
+  return variants;
+}
+
 function keywordMatches(text: string, keywords: readonly string[]): readonly string[] {
-  const normalized = plainText(text).toLocaleLowerCase("und");
+  const plain = plainText(text);
+  const normalized = plain.toLocaleLowerCase("und");
+  const hashtagVariants = profileHashtagPhraseVariants(plain);
   const matches = new Set<string>();
   for (const raw of keywords) {
     if (typeof raw !== "string") throw new TypeError("Invalid profile interest keyword.");
     const keyword = canonicalKeyword(raw);
     if (keyword.length < 2 || keyword.length > 80 || hasUnsafeControlCharacter(keyword)) throw new TypeError("Invalid profile interest keyword.");
     const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&").replace(/\s+/gu, "\\s+");
-    if (new RegExp(`(^|[^\\p{Letter}\\p{Number}_])${escaped}($|[^\\p{Letter}\\p{Number}_])`, "iu").test(normalized)) matches.add(keyword);
+    const directMatch = new RegExp(`(^|[^\\p{Letter}\\p{Number}_])${escaped}($|[^\\p{Letter}\\p{Number}_])`, "iu").test(normalized);
+    if (directMatch || hashtagVariants.has(keyword)) matches.add(keyword);
     if (matches.size >= MAX_KEYWORDS) break;
   }
   return Object.freeze([...matches]);
