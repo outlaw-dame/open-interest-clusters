@@ -202,15 +202,30 @@ function supportedNoindexControl(
   }
 }
 
-function supportsRequiredFeature(support: RecommendationProfileFeatureSupport): boolean {
-  return support === "supported";
-}
-
 function hasFeaturedTagOptOut(policy: RecommendationProfilePinnedAccountPolicy): boolean {
   for (const raw of policy.featuredTags ?? []) {
     if (OPT_OUT_TAGS.has(canonicalOptOutToken(raw))) return true;
   }
   return false;
+}
+
+function profileTextPresent(
+  protocol: RecommendationProfilePinnedProtocol,
+  profile: Record<string, unknown>
+): boolean {
+  const fields = protocol === "activitypub"
+    ? [profile.note, profile.summary, profile.display_name, profile.name]
+    : [profile.description, profile.displayName];
+  return fields.some((value) => value !== undefined && value !== null && value !== "");
+}
+
+function readProfileText(
+  protocol: RecommendationProfilePinnedProtocol,
+  profile: Record<string, unknown>
+): string {
+  return protocol === "activitypub"
+    ? `${boundedText(profile.note ?? profile.summary ?? "", "bio")} ${boundedText(profile.display_name ?? profile.name ?? "", "display name")}`.trim()
+    : `${boundedText(profile.description ?? "", "bio")} ${boundedText(profile.displayName ?? "", "display name")}`.trim();
 }
 
 function hasAnyPinnedInput(
@@ -231,8 +246,14 @@ function assertCapabilitiesAndPolicy(
 ): void {
   const capabilities = policy.capabilities;
   const pinnedPresent = hasAnyPinnedInput(protocol, profile, pinnedPosts);
+  const profileTextExists = profileTextPresent(protocol, profile);
   const featured = policy.featuredTags ?? [];
 
+  const profileTextCapabilityValid = capabilities.rawProfileText === "supported"
+    ? true
+    : capabilities.rawProfileText === "unsupported"
+      ? !profileTextExists
+      : false;
   const featuredCapabilityValid = capabilities.featuredHashtags === "supported"
     ? true
     : capabilities.featuredHashtags === "unsupported"
@@ -250,7 +271,7 @@ function assertCapabilitiesAndPolicy(
     policy.blocked !== false ||
     policy.muted !== false ||
     policy.domainBlocked !== false ||
-    !supportsRequiredFeature(capabilities.rawProfileText) ||
+    !profileTextCapabilityValid ||
     !supportedPositiveControl(capabilities.discoverabilityControl, policy.discoverable ?? undefined) ||
     !supportedPositiveControl(capabilities.indexabilityControl, policy.indexable ?? undefined) ||
     !supportedNoindexControl(capabilities.noindexSignal, policy.noindex ?? undefined) ||
@@ -325,9 +346,16 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
   const accountUri = requiredText(input.accountUri, "account URI");
   const observedAt = instant(input.observedAt);
   const policy = normalizePolicy(input.policy, input.protocol);
-  const bio = input.protocol === "activitypub"
-    ? `${boundedText(input.profile.note ?? input.profile.summary ?? "", "bio")} ${boundedText(input.profile.display_name ?? input.profile.name ?? "", "display name")}`.trim()
-    : `${boundedText(input.profile.description ?? "", "bio")} ${boundedText(input.profile.displayName ?? "", "display name")}`.trim();
+
+  if (policy.capabilities.rawProfileText === "unknown") {
+    throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
+  }
+  if (policy.capabilities.rawProfileText === "unsupported" && profileTextPresent(input.protocol, input.profile)) {
+    throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
+  }
+  const bio = policy.capabilities.rawProfileText === "supported"
+    ? readProfileText(input.protocol, input.profile)
+    : "";
 
   const pinnedPresent = hasAnyPinnedInput(input.protocol, input.profile, input.pinnedPosts);
   if (policy.capabilities.pinnedPosts === "unknown") {
