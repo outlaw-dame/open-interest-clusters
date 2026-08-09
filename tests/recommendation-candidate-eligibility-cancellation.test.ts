@@ -96,7 +96,7 @@ test("cancellation after a viewer-safety await cannot return an eligible result"
 
 test("cancellation after resolved-account policy await stops downstream policy work", async () => {
   const controller = new AbortController();
-  const pending = deferred<{ discoverable: boolean; noindex: boolean; optedOut: boolean; evidenceComplete: boolean }>();
+  const pending = deferred<{ restrictions: readonly []; evidenceComplete: boolean }>();
   let providerReads = 0;
   const evaluation = evaluateRecommendationCandidateEligibility({
     candidate: accountCandidate(),
@@ -120,7 +120,7 @@ test("cancellation after resolved-account policy await stops downstream policy w
 
   await Promise.resolve();
   controller.abort(new Error("cancel-account-policy"));
-  pending.resolve({ discoverable: true, noindex: false, optedOut: false, evidenceComplete: true });
+  pending.resolve({ restrictions: [], evidenceComplete: true });
   await assert.rejects(evaluation, /cancel-account-policy/u);
   assert.equal(providerReads, 0);
 });
@@ -141,7 +141,7 @@ test("cancellation after account resolver await stops resolved-account policy wo
       resolver: { resolve: () => pending.promise },
       evaluateResolvedAccountPolicy: () => {
         accountPolicyReads += 1;
-        return { discoverable: true, noindex: false, optedOut: false, evidenceComplete: true };
+        return { restrictions: [], evidenceComplete: true };
       }
     },
     evaluateProviderPolicy: () => ({ allowed: true, evidenceComplete: true }),
