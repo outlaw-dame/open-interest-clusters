@@ -105,7 +105,7 @@ test("local adapters may receive bounded profile-derived discovery terms", async
   let seen: RecommendationCandidateSourceAdapterQuery | undefined;
   const source = adapter({
     transport: "local",
-    authority: "local_canonical",
+    authority: "curated_public",
     privacy: {
       sourceVisibility: "local_only",
       accessBasis: "owner",
