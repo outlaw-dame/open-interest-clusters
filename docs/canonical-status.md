@@ -2,7 +2,7 @@
 
 This document is the authoritative architectural summary of the current repository state.
 
-**Last reconciled against `main` through merged PR #122 on 2026-08-10.**
+**Last reconciled against `main` through merged PR #123 on 2026-08-10, with late-review hardening tracked in the follow-up to PRs #122/#123.**
 
 For the concise phase ledger, see [`current-roadmap-status.md`](current-roadmap-status.md). For detailed candidate/onboarding acceptance criteria, see [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md) and its normative [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
@@ -27,7 +27,7 @@ Generic consent does not permit provider-private records to become affinity evid
 
 Blocks, mutes, domain blocks, keyword filters, safety preferences, and equivalent private moderation state are filtering constraints only. They may suppress, exclude, or explain candidates locally/user-owned, but must not become positive interest evidence.
 
-Subject-level recommendation state is permitted only in device-owned local-first storage or explicitly user-owned remote storage. Provider-owned subject-level personalization remains denied. Shared-operator storage is limited to policy-permitted non-subject or aggregate state.
+Subject-level recommendation state is permitted by policy only in device-owned local-first storage or explicitly user-owned remote storage. Provider-owned subject-level personalization remains denied. Shared-operator storage is limited to policy-permitted non-subject or aggregate state. Public persistence entry points enforce this placement policy before I/O; the low-level in-memory profile store still has a documented aggregate-only enforcement gap when callers explicitly enable that boundary, so callers must not treat the store alone as a universal state-placement guard.
 
 ## Current maturity
 
@@ -45,16 +45,16 @@ Subject-level recommendation state is permitted only in device-owned local-first
 | ActivityPub/Mastodon live integration | Implemented integration slices |
 | ATProto live integration | Implemented repository/API normalization plus `queryLabels`/`subscribeLabels` slices |
 | ActivityPods/Solid integration | Implemented public/live outbox path plus grant-bound user-controlled profile persistence |
-| Local-first/user-owned state placement | Implemented and enforced |
+| Local-first/user-owned state placement | Implemented and enforced at public persistence boundaries; low-level aggregate-only store caveat remains documented |
 | Multi-kind recommendation candidate domain | **Implemented** |
 | Candidate-source adapter boundary | **Implemented** |
 | Cold-start candidate generation | **Implemented** |
 | Candidate eligibility/policy composition | **Implemented** |
 | Protocol/application profile capability hardening | **Implemented** |
-| Runtime provider discovery/capability resolution | **Implemented** |
+| Runtime provider discovery/capability resolution | **Implemented; late-review authority/cache/freshness hardening applied in follow-up** |
 | Cold-start scoring-input builder | **Not yet implemented — next phase** |
 | First-session recommendation orchestration | Not yet implemented; depends on scoring-input builder |
-| Recommendation action-plan contracts | Not yet implemented |
+| Generalized recommendation action-plan contracts | Existing hashtag-follow plan implemented; generalized candidate-bound action plans not yet implemented |
 | Onboarding lifecycle/refresh composition | Not yet implemented as the higher-level candidate/onboarding lifecycle |
 | Reference onboarding integration/UX examples | Not yet implemented |
 | Turnkey operator service | Not implemented and not required for local-first use |
@@ -151,7 +151,7 @@ Mastodon-compatible and Bluesky-compatible capability profiles are application-s
 
 Compound/camel hashtag phrase expansion is conservative and matching-only. It does not rewrite canonical hashtag identity or perform dictionary segmentation of arbitrary lowercase compounds.
 
-## Runtime provider discovery — completed in PR #122
+## Runtime provider discovery — completed in PR #122 and hardened after late review
 
 `discoverRecommendationProviderCapabilities` is a thin layer above hardened adapters. It resolves current provider/application capability observations without performing arbitrary network fetching itself.
 
@@ -159,12 +159,16 @@ Key invariants:
 
 - provider/server identity is distinct from application/client identity;
 - protocol bindings are additive rather than flattened;
+- application identity/profile claims carry their own explicit authority and do not inherit the maximum authority of unrelated protocol bindings;
+- missing application-claim authority is treated as weak provider-probe evidence for backward compatibility;
 - weak provider fingerprinting cannot become application identity/profile authority by itself;
 - conflicting strong application identity evidence fails closed;
 - same-authority capability conflicts resolve to `unknown`;
 - missing capability evidence remains `unknown`;
 - provider identity mismatches are rejected;
 - cache entries are scoped by provider + application identity, validated before reuse, and never resurrected when stale;
+- cached application profiles without a bound application identity are rejected and rediscovered;
+- freshness is sampled again after asynchronous cache/probe work and before final descriptor return;
 - malformed/stale cache entries trigger fresh discovery rather than stale fallback;
 - cache failures do not override valid fresh discovery;
 - only explicitly classified retryable probe failures use bounded exponential backoff;
@@ -189,7 +193,7 @@ See [`recommendation-provider-discovery.md`](recommendation-provider-discovery.m
 - public outbox and live-notification composition;
 - grant reauthorization and public-refetch requirements;
 - user-controlled profile persistence with registration/grant/storage binding and conditional mutation;
-- explicit user-owned storage placement.
+- explicit user-owned storage placement at persistence boundaries.
 
 ActivityPods is a user-controlled remote-storage exception, not a provider-owned personalization path.
 
@@ -219,7 +223,7 @@ The following are already satisfied and should not be renamed/rebuilt inside lat
 - live ActivityPub/Mastodon/ATProto/ActivityPods slices described above;
 - account eligibility;
 - derived-state invalidation and recovery;
-- storage-authority and state-placement enforcement;
+- storage-authority and state-placement enforcement at public persistence boundaries, with the low-level aggregate-only store caveat remaining explicit;
 - candidate domain/source contracts;
 - cold-start candidate generation;
 - candidate eligibility/policy composition;
@@ -256,8 +260,10 @@ See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledge
 
 1. **Phase 5 — First-session recommendation orchestrator**
    - onboarding bootstrap -> candidate discovery -> capability-aware source use -> eligibility -> Phase 4 scoring inputs -> existing execution -> bounded recommendations.
-2. **Phase 6 — Recommendation action-plan contracts**
-   - non-executable protocol-neutral plans; every provider mutation remains explicit and user-confirmed.
+2. **Phase 6 — Generalized recommendation action-plan contracts**
+   - extend the already-implemented versioned `RecommendationHashtagFollowPlan` / `createRecommendationHashtagFollowPlan` prerequisite across candidate kinds;
+   - add non-executable candidate-bound plans for account, feed, list, starter-pack, labeler, community, topic/hashtag, and eligible instance actions where provider semantics support them;
+   - every provider mutation remains application-executed, explicitly user-confirmed, and revalidated against current identity/eligibility immediately before execution.
 3. **Phase 7 — Onboarding lifecycle and refresh**
    - edit/retract/rerun/expire/refresh/resume using existing ledger/invalidation/recovery machinery.
 4. **Phase 8 — Reference onboarding integration and UX examples**
@@ -285,7 +291,7 @@ The project should not be described as a complete turnkey recommendation product
 
 - the Phase 4 scoring-input bridge;
 - Phase 5 end-to-end first-session composition;
-- correct action/lifecycle contracts for the intended integrations;
+- generalized action/lifecycle contracts for the intended integrations;
 - at least one reference device-local persistence path;
 - privacy-safe operational health behavior;
 - appropriate replay/concurrency/cancellation/reconnect/crash-recovery coverage;
