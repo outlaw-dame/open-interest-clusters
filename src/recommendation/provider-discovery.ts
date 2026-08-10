@@ -732,6 +732,9 @@ export async function discoverRecommendationProviderCapabilities(
   const capabilities = mergeCapabilities(currentObservations);
   const detectedAtMs = Math.max(...currentObservations.map((entry) => Date.parse(entry.observedAt)));
   const expiresAtMs = Math.min(...currentObservations.map((entry) => Date.parse(entry.expiresAt)));
+  if (detectedAtMs >= expiresAtMs) {
+    throw new Error("Recommendation provider discovery observations have no overlapping validity window.");
+  }
   const finalCheckMs = currentTimeMs(now);
   if (expiresAtMs <= finalCheckMs) {
     throw new Error("Recommendation provider discovery observations expired before resolution completed.");
