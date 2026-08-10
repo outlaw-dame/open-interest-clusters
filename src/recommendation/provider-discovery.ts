@@ -79,7 +79,7 @@ export interface RecommendationProviderCapabilityObservation {
 export interface RecommendationProviderDiscoveryObservation {
   providerId: string;
   applicationId?: string;
-  applicationAuthority?: RecommendationProviderDiscoveryAuthority;
+  applicationAuthority?: RecommendationProviderDiscoveryAuthority | undefined;
   protocolBindings: readonly RecommendationProviderProtocolBinding[];
   applicationProfiles: readonly RecommendationProviderApplicationProfile[];
   capabilities: readonly RecommendationProviderCapabilityObservation[];
