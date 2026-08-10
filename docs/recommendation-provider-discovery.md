@@ -27,13 +27,15 @@ A provider/server identity and an application/client identity are separate.
 
 The resolver is keyed by `providerId` plus optional `applicationId`. Observations returning another provider identity are rejected. Conflicting strong application identity evidence fails closed.
 
-Application identity authority is ordered as:
+Application identity/profile claims carry their **own** `applicationAuthority`; they do not inherit authority from protocol bindings in the same observation. The authority ordering is:
 
 1. explicit integration declaration and authenticated registration;
-2. protocol-native identity;
+2. protocol-native application identity;
 3. unauthenticated provider probing.
 
-Server probes can add provider capabilities but must not silently rewrite strong application identity.
+For backward compatibility, an observation that supplies `applicationId` without `applicationAuthority` is treated as weak `provider_probe` application evidence. Weak server branding may coexist with a strong protocol binding without being promoted to a strong application identity or compatibility profile.
+
+Application profiles require a bound application identity. Provider-only observations and provider-only cached descriptors cannot publish application compatibility profiles.
 
 ## Multi-protocol providers
 
@@ -55,15 +57,18 @@ Capabilities use `supported`, `unsupported`, or `unknown`.
 
 For the same capability/protocol pair, the highest-authority observation wins. Conflicting observations at the same highest authority resolve to `unknown`, which is the fail-closed state. Missing capability evidence is also `unknown`.
 
-This prevents a weak provider fingerprint from overriding stronger protocol-native or authenticated evidence and prevents run-order-dependent capability expansion.
+Capability authority is independent of application-claim authority. A strong capability or protocol binding does not automatically strengthen unrelated application branding.
 
 ## Caching and staleness
 
 The optional cache is scoped by provider and application identity. Cached descriptors are runtime-normalized before use.
 
 - fresh valid cache entries are reused;
+- provider-only cached descriptors containing application profiles are rejected;
 - stale or malformed entries are deleted when possible and rediscovered;
-- stale probe observations are discarded;
+- cache freshness is rechecked after asynchronous cache reads;
+- probe freshness is checked after asynchronous probe/retry work;
+- descriptor freshness is checked again immediately before final return;
 - no stale capability fallback is used when every current probe fails.
 
 This favors privacy and correctness over availability when capabilities may have changed.
@@ -86,7 +91,7 @@ The current normalized application profiles are convenience classifications, not
 - `bluesky_compatible`
 - `activitypods`
 
-A provider may expose multiple profiles. For example, an ActivityPods deployment may expose `activitypods` and `generic_activitypub` while having no ATProto binding at all.
+A provider may expose multiple profiles only when the application identity itself has sufficient authority. For example, an ActivityPods deployment may expose `activitypods` and `generic_activitypub` while having no ATProto binding at all.
 
 ## Relationship to candidate discovery
 
@@ -99,11 +104,13 @@ The candidate adapter remains authoritative for its own candidate kinds, transpo
 The following are intentional invariants:
 
 - no automatic protocol-to-application promotion;
+- no protocol-binding-authority to application-claim-authority promotion;
+- no provider-only cached application profiles;
 - no capability-to-consent promotion;
 - no capability-to-ACL/OAuth grant promotion;
 - no provider identity mismatch merging;
 - no conflicting strong application identity fallback;
-- no stale capability resurrection;
+- no stale capability resurrection across asynchronous cache/probe work;
 - no retry of arbitrary/adversarial failures;
 - no unbounded probes, concurrency, retries, identifiers, endpoints, or capability lists;
 - no unknown protocol binding published as usable;
