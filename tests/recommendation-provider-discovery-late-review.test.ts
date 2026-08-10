@@ -106,6 +106,45 @@ test("provider-only cached profiles are rejected and self-healed", async () => {
   assert.deepEqual(descriptor.applicationProfiles, []);
 });
 
+test("the v2 cache namespace cannot reuse pre-authority v1 descriptors", async () => {
+  const readKeys: string[] = [];
+  let probes = 0;
+  const legacyDescriptor: RecommendationProviderDescriptor = {
+    providerId: "provider.example",
+    applicationId: "https://legacy-brand.example/client.json",
+    detectedAt: NOW,
+    expiresAt: EXPIRY,
+    protocolBindings: providerOnlyObservation().protocolBindings,
+    applicationProfiles: ["mastodon_compatible"],
+    capabilities: []
+  };
+  const cache: RecommendationProviderDiscoveryCache = {
+    read: (key) => {
+      readKeys.push(key);
+      return key.startsWith("provider-discovery:v1:") ? legacyDescriptor : undefined;
+    },
+    write: () => undefined
+  };
+
+  const descriptor = await discoverRecommendationProviderCapabilities({
+    providerId: "provider.example",
+    now: () => new Date(NOW),
+    cache,
+    probes: [{
+      id: "fresh",
+      probe: () => {
+        probes += 1;
+        return providerOnlyObservation();
+      }
+    }]
+  });
+
+  assert.deepEqual(readKeys, ["provider-discovery:v2:provider.example:-"]);
+  assert.equal(probes, 1);
+  assert.equal(descriptor.applicationId, undefined);
+  assert.deepEqual(descriptor.applicationProfiles, []);
+});
+
 test("cache freshness is rechecked after asynchronous cache reads", async () => {
   const times = [
     new Date("2026-08-10T12:59:59.000Z"),
@@ -163,6 +202,34 @@ test("probe freshness is rechecked after asynchronous probe completion", async (
     }),
     /no current trusted observations/iu
   );
+});
+
+test("expiry is rechecked after an asynchronous cache write", async () => {
+  const times = [
+    new Date("2026-08-10T12:59:59.000Z"),
+    new Date("2026-08-10T12:59:59.000Z"),
+    new Date("2026-08-10T12:59:59.000Z"),
+    new Date("2026-08-10T13:00:00.001Z")
+  ];
+  let timeIndex = 0;
+  let deletes = 0;
+  const cache: RecommendationProviderDiscoveryCache = {
+    read: () => undefined,
+    write: async () => undefined,
+    delete: () => { deletes += 1; }
+  };
+
+  await assert.rejects(
+    () => discoverRecommendationProviderCapabilities({
+      providerId: "provider.example",
+      now: () => times[Math.min(timeIndex++, times.length - 1)] as Date,
+      cache,
+      probes: [{ id: "fresh", probe: () => providerOnlyObservation() }]
+    }),
+    /expired before resolution completed/iu
+  );
+
+  assert.equal(deletes, 1);
 });
 
 test("nonoverlapping observation lifetimes fail closed before descriptor construction", async () => {
