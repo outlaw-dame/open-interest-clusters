@@ -225,6 +225,7 @@ test("custom ATProto applications can declare features independently of Bluesky"
       accountId: "did:plc:custom",
       accountUri: "at://did:plc:custom/example.profile/self",
       profile: { description: "Open social developer" },
+      normalizedProfileText: "Open social developer",
       keywords: ["open social"],
       policy: {
         accountEligible: true,
