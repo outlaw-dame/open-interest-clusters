@@ -286,7 +286,9 @@ export function normalizeRecommendationProviderDiscoveryObservation(
     throw new TypeError("Invalid recommendation provider protocol bindings.");
   }
   const protocolBindings = value.protocolBindings.map(normalizeBinding);
-  const bindingKeys = protocolBindings.map((entry) => `${entry.protocol}\u0000${entry.endpoint ?? ""}\u0000${entry.authority}\u0000${entry.verification}`);
+  const bindingKeys = protocolBindings.map((entry) =>
+    `${entry.protocol}\u0000${entry.endpoint ?? ""}\u0000${entry.authority}\u0000${entry.verification}`
+  );
   if (new Set(bindingKeys).size !== bindingKeys.length) {
     throw new TypeError("Duplicate recommendation provider protocol binding.");
   }
@@ -300,7 +302,9 @@ export function normalizeRecommendationProviderDiscoveryObservation(
     throw new TypeError("Invalid recommendation provider capabilities.");
   }
   const capabilities = value.capabilities.map(normalizeCapabilityObservation);
-  const capabilityKeys = capabilities.map((entry) => `${entry.capability}\u0000${entry.protocol ?? ""}\u0000${entry.authority}`);
+  const capabilityKeys = capabilities.map((entry) =>
+    `${entry.capability}\u0000${entry.protocol ?? ""}\u0000${entry.authority}`
+  );
   if (new Set(capabilityKeys).size !== capabilityKeys.length) {
     throw new TypeError("Duplicate recommendation provider capability observation.");
   }
@@ -332,14 +336,24 @@ function normalizeDescriptor(value: unknown): RecommendationProviderDescriptor {
     throw new TypeError("Invalid cached recommendation provider descriptor.");
   }
   const providerId = boundedString(value.providerId, MAX_ID_LENGTH, "Invalid recommendation provider ID.");
-  const applicationId = optionalBoundedString(value.applicationId, MAX_ID_LENGTH, "Invalid recommendation provider application ID.");
+  const applicationId = optionalBoundedString(
+    value.applicationId,
+    MAX_ID_LENGTH,
+    "Invalid recommendation provider application ID."
+  );
   const detectedAt = timestamp(value.detectedAt, "Invalid recommendation provider detection timestamp.");
   const expiresAt = timestamp(value.expiresAt, "Invalid recommendation provider expiration timestamp.");
-  if (Date.parse(expiresAt) <= Date.parse(detectedAt)) throw new TypeError("Invalid recommendation provider descriptor lifetime.");
-  if (!Array.isArray(value.protocolBindings) || value.protocolBindings.length > MAX_BINDINGS) {
+  if (Date.parse(expiresAt) <= Date.parse(detectedAt)) {
+    throw new TypeError("Invalid recommendation provider descriptor lifetime.");
+  }
+  if (!Array.isArray(value.protocolBindings) || value.protocolBindings.length === 0 || value.protocolBindings.length > MAX_BINDINGS) {
     throw new TypeError("Invalid recommendation provider protocol bindings.");
   }
   const protocolBindings = value.protocolBindings.map(normalizeBinding);
+  const bindingKeys = protocolBindings.map((entry) => `${entry.protocol}\u0000${entry.endpoint ?? ""}`);
+  if (new Set(bindingKeys).size !== bindingKeys.length) {
+    throw new TypeError("Duplicate recommendation provider protocol binding.");
+  }
   const applicationProfiles = uniqueKnown<RecommendationProviderApplicationProfile>(
     value.applicationProfiles,
     PROFILE_SET,
@@ -353,6 +367,10 @@ function normalizeDescriptor(value: unknown): RecommendationProviderDescriptor {
     const normalized = normalizeCapabilityObservation(entry);
     return Object.freeze({ ...normalized }) as RecommendationResolvedProviderCapability;
   });
+  const capabilityKeys = capabilities.map((entry) => `${entry.capability}\u0000${entry.protocol ?? ""}`);
+  if (new Set(capabilityKeys).size !== capabilityKeys.length) {
+    throw new TypeError("Duplicate recommendation provider capability.");
+  }
   const descriptor: RecommendationProviderDescriptor = {
     providerId,
     detectedAt,
@@ -377,17 +395,20 @@ async function defaultSleep(milliseconds: number, signal?: AbortSignal): Promise
   if (milliseconds <= 0) return;
   throwIfAborted(signal);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const timer = setTimeout(() => finish(resolve), milliseconds);
     const onAbort = (): void => {
       clearTimeout(timer);
-      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      finish(() => reject(signal?.reason ?? new DOMException("Aborted", "AbortError")));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
-    else if (signal !== undefined) {
-      const cleanup = (): void => signal.removeEventListener("abort", onAbort);
-      setTimeout(cleanup, milliseconds);
-    }
   });
 }
 
@@ -412,7 +433,9 @@ async function runProbe(
   sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>
 ): Promise<RecommendationProviderDiscoveryObservation | undefined> {
   boundedString(probe.id, 256, "Invalid recommendation provider discovery probe ID.");
-  if (typeof probe.probe !== "function") throw new TypeError("Invalid recommendation provider discovery probe.");
+  if (typeof probe.probe !== "function") {
+    throw new TypeError("Invalid recommendation provider discovery probe.");
+  }
   for (let attempt = 1; attempt <= retry.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
     try {
@@ -420,8 +443,7 @@ async function runProbe(
     } catch (error) {
       throwIfAborted(signal);
       const retryable = error instanceof RecommendationProviderProbeError && error.retryable;
-      if (!retryable) return undefined;
-      if (attempt === retry.maxAttempts) return undefined;
+      if (!retryable || attempt === retry.maxAttempts) return undefined;
       const delay = Math.min(retry.maxDelayMs, retry.baseDelayMs * (2 ** (attempt - 1)));
       await sleep(delay, signal);
     }
@@ -429,24 +451,46 @@ async function runProbe(
   return undefined;
 }
 
+function observationMaxAuthority(observation: RecommendationProviderDiscoveryObservation): number {
+  return observation.protocolBindings.reduce(
+    (highest, binding) => Math.max(highest, AUTHORITY_RANK[binding.authority]),
+    0
+  );
+}
+
 function resolveApplicationId(
   expected: string | undefined,
   observations: readonly RecommendationProviderDiscoveryObservation[]
 ): string | undefined {
-  const candidates = observations
-    .flatMap((observation) => observation.applicationId === undefined
-      ? []
-      : observation.protocolBindings.map((binding) => ({
-          applicationId: observation.applicationId as string,
-          authority: binding.authority
-        })))
-    .filter((entry) => AUTHORITY_RANK[entry.authority] >= AUTHORITY_RANK.protocol_native);
-  const strongIds = new Set(candidates.map((entry) => entry.applicationId));
+  const strongIds = new Set(
+    observations
+      .filter((observation) =>
+        observation.applicationId !== undefined &&
+        observationMaxAuthority(observation) >= AUTHORITY_RANK.protocol_native
+      )
+      .map((observation) => observation.applicationId as string)
+  );
   if (expected !== undefined && [...strongIds].some((entry) => entry !== expected)) {
     throw new TypeError("Conflicting recommendation provider application identity evidence.");
   }
-  if (strongIds.size > 1) throw new TypeError("Conflicting recommendation provider application identity evidence.");
-  return expected ?? [...strongIds][0] ?? observations.find((entry) => entry.applicationId !== undefined)?.applicationId;
+  if (strongIds.size > 1) {
+    throw new TypeError("Conflicting recommendation provider application identity evidence.");
+  }
+  return expected ?? [...strongIds][0];
+}
+
+function resolveApplicationProfiles(
+  resolvedApplicationId: string | undefined,
+  observations: readonly RecommendationProviderDiscoveryObservation[]
+): readonly RecommendationProviderApplicationProfile[] {
+  if (resolvedApplicationId === undefined) return Object.freeze([]);
+  const profiles = observations
+    .filter((observation) =>
+      observation.applicationId === resolvedApplicationId &&
+      observationMaxAuthority(observation) >= AUTHORITY_RANK.protocol_native
+    )
+    .flatMap((observation) => observation.applicationProfiles);
+  return Object.freeze([...new Set(profiles)].sort()) as readonly RecommendationProviderApplicationProfile[];
 }
 
 function mergeBindings(
@@ -522,6 +566,59 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
+async function bestEffortDelete(
+  cache: RecommendationProviderDiscoveryCache,
+  key: string
+): Promise<void> {
+  try {
+    await cache.delete?.(key);
+  } catch {
+    // Cache cleanup is auxiliary. Fresh discovery remains authoritative.
+  }
+}
+
+async function readFreshCache(
+  cache: RecommendationProviderDiscoveryCache,
+  key: string,
+  providerId: string,
+  applicationId: string | undefined,
+  currentTimeMs: number
+): Promise<RecommendationProviderDescriptor | undefined> {
+  let raw: RecommendationProviderDescriptor | undefined;
+  try {
+    raw = await cache.read(key);
+  } catch {
+    return undefined;
+  }
+  if (raw === undefined) return undefined;
+  try {
+    const cached = normalizeDescriptor(raw);
+    if (
+      cached.providerId === providerId &&
+      cached.applicationId === applicationId &&
+      Date.parse(cached.expiresAt) > currentTimeMs
+    ) {
+      return cached;
+    }
+  } catch {
+    // Delete malformed cache entries below and continue with fresh probes.
+  }
+  await bestEffortDelete(cache, key);
+  return undefined;
+}
+
+async function bestEffortWrite(
+  cache: RecommendationProviderDiscoveryCache,
+  key: string,
+  descriptor: RecommendationProviderDescriptor
+): Promise<void> {
+  try {
+    await cache.write(key, descriptor);
+  } catch {
+    // Cache persistence must not invalidate an already verified fresh result.
+  }
+}
+
 export function recommendationProviderCapabilityState(
   descriptor: RecommendationProviderDescriptor,
   capability: RecommendationProviderCapability,
@@ -538,11 +635,24 @@ export function recommendationProviderCapabilityState(
 export async function discoverRecommendationProviderCapabilities(
   options: RecommendationProviderDiscoveryOptions
 ): Promise<RecommendationProviderDescriptor> {
-  if (!isRecord(options)) throw new TypeError("Invalid recommendation provider discovery options.");
+  if (!isRecord(options)) {
+    throw new TypeError("Invalid recommendation provider discovery options.");
+  }
   const providerId = boundedString(options.providerId, MAX_ID_LENGTH, "Invalid recommendation provider ID.");
-  const applicationId = optionalBoundedString(options.applicationId, MAX_ID_LENGTH, "Invalid recommendation provider application ID.");
+  const applicationId = optionalBoundedString(
+    options.applicationId,
+    MAX_ID_LENGTH,
+    "Invalid recommendation provider application ID."
+  );
   if (!Array.isArray(options.probes) || options.probes.length === 0 || options.probes.length > MAX_PROBES) {
     throw new TypeError("Invalid recommendation provider discovery probes.");
+  }
+  for (const candidate of options.probes) {
+    if (!isRecord(candidate)) throw new TypeError("Invalid recommendation provider discovery probe.");
+    boundedString(candidate.id, 256, "Invalid recommendation provider discovery probe ID.");
+    if (typeof candidate.probe !== "function") {
+      throw new TypeError("Invalid recommendation provider discovery probe.");
+    }
   }
   if (new Set(options.probes.map((probe) => probe.id)).size !== options.probes.length) {
     throw new TypeError("Duplicate recommendation provider discovery probe ID.");
@@ -562,28 +672,26 @@ export async function discoverRecommendationProviderCapabilities(
   const key = cacheKey(providerId, applicationId);
   throwIfAborted(options.signal);
   if (options.cache !== undefined) {
-    try {
-      const cached = normalizeDescriptor(await options.cache.read(key));
-      if (
-        cached.providerId === providerId &&
-        cached.applicationId === applicationId &&
-        Date.parse(cached.expiresAt) > current.getTime()
-      ) {
-        return cached;
-      }
-      await options.cache.delete?.(key);
-    } catch {
-      await options.cache.delete?.(key);
-    }
+    const cached = await readFreshCache(
+      options.cache,
+      key,
+      providerId,
+      applicationId,
+      current.getTime()
+    );
+    throwIfAborted(options.signal);
+    if (cached !== undefined) return cached;
   }
+
   const retry = retryPolicy(options.retry);
   const sleep = options.sleep ?? defaultSleep;
   const observations = (await mapConcurrent(
     options.probes,
     concurrency,
-    (probe) => runProbe(probe, options.signal, retry, sleep)
+    (candidate) => runProbe(candidate, options.signal, retry, sleep)
   )).filter((entry): entry is RecommendationProviderDiscoveryObservation => entry !== undefined)
     .filter((entry) => Date.parse(entry.expiresAt) > current.getTime());
+
   throwIfAborted(options.signal);
   if (observations.length === 0) {
     throw new Error("Recommendation provider discovery produced no current trusted observations.");
@@ -591,12 +699,13 @@ export async function discoverRecommendationProviderCapabilities(
   if (observations.some((entry) => entry.providerId !== providerId)) {
     throw new TypeError("Recommendation provider discovery returned mismatched provider identity.");
   }
+
   const resolvedApplicationId = resolveApplicationId(applicationId, observations);
   const protocolBindings = mergeBindings(observations);
   if (protocolBindings.length === 0) {
     throw new Error("Recommendation provider discovery produced no verified protocol bindings.");
   }
-  const applicationProfiles = Object.freeze([...new Set(observations.flatMap((entry) => entry.applicationProfiles))].sort()) as readonly RecommendationProviderApplicationProfile[];
+  const applicationProfiles = resolveApplicationProfiles(resolvedApplicationId, observations);
   const capabilities = mergeCapabilities(observations);
   const detectedAtMs = Math.max(...observations.map((entry) => Date.parse(entry.observedAt)));
   const expiresAtMs = Math.min(...observations.map((entry) => Date.parse(entry.expiresAt)));
@@ -609,6 +718,6 @@ export async function discoverRecommendationProviderCapabilities(
     applicationProfiles,
     capabilities
   });
-  if (options.cache !== undefined) await options.cache.write(key, descriptor);
+  if (options.cache !== undefined) await bestEffortWrite(options.cache, key, descriptor);
   return descriptor;
 }
