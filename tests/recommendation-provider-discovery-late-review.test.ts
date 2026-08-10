@@ -164,3 +164,35 @@ test("probe freshness is rechecked after asynchronous probe completion", async (
     /no current trusted observations/iu
   );
 });
+
+test("nonoverlapping observation lifetimes fail closed before descriptor construction", async () => {
+  await assert.rejects(
+    () => discoverRecommendationProviderCapabilities({
+      providerId: "provider.example",
+      now: () => new Date("2026-08-10T12:00:00.000Z"),
+      probes: [
+        {
+          id: "early-window",
+          probe: () => providerOnlyObservation({
+            observedAt: "2026-08-10T11:00:00.000Z",
+            expiresAt: "2026-08-10T12:30:00.000Z"
+          })
+        },
+        {
+          id: "future-window",
+          probe: () => providerOnlyObservation({
+            observedAt: "2026-08-10T12:45:00.000Z",
+            expiresAt: "2026-08-10T14:00:00.000Z",
+            protocolBindings: [{
+              protocol: "atproto",
+              endpoint: "https://pds.provider.example",
+              authority: "protocol_native",
+              verification: "verified"
+            }]
+          })
+        }
+      ]
+    }),
+    /no overlapping validity window/iu
+  );
+});
