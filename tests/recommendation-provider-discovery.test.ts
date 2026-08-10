@@ -21,6 +21,7 @@ function observation(
   return {
     providerId: "provider.example",
     applicationId: "https://app.example/client-metadata.json",
+    applicationAuthority: "protocol_native",
     protocolBindings: [{
       protocol: "activitypub",
       endpoint: "https://provider.example/users/alice",
@@ -54,6 +55,7 @@ test("normalizes a closed bounded provider observation", () => {
   const normalized = normalizeRecommendationProviderDiscoveryObservation(observation());
   assert.equal(normalized.providerId, "provider.example");
   assert.equal(normalized.protocolBindings[0]?.protocol, "activitypub");
+  assert.equal(normalized.applicationAuthority, "protocol_native");
   assert.ok(Object.isFrozen(normalized));
   assert.throws(
     () => normalizeRecommendationProviderDiscoveryObservation({ ...observation(), subjectId: "alice" }),
@@ -110,6 +112,7 @@ test("ActivityPods can be ActivityPub plus user-owned storage without ATProto", 
     probes: [probe("activitypods", observation({
       providerId: "pod.example",
       applicationId: "https://app.example/actor",
+      applicationAuthority: "authenticated_registration",
       protocolBindings: [{
         protocol: "activitypods",
         endpoint: "https://pod.example",
