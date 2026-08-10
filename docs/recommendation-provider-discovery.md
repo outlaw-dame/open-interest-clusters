@@ -63,13 +63,17 @@ Capability authority is independent of application-claim authority. A strong cap
 
 The optional cache is scoped by provider and application identity. Cached descriptors are runtime-normalized before use.
 
-- fresh valid cache entries are reused;
+- the authority-model hardening uses the `provider-discovery:v2` cache namespace, so pre-authority-model `v1` descriptors are not reused;
+- fresh valid `v2` cache entries are reused;
 - provider-only cached descriptors containing application profiles are rejected;
 - stale or malformed entries are deleted when possible and rediscovered;
 - cache freshness is rechecked after asynchronous cache reads;
 - probe freshness is checked after asynchronous probe/retry work;
-- descriptor freshness is checked again immediately before final return;
+- descriptor freshness is checked before cache persistence and again after an awaited cache write;
+- if a cache write crosses expiry, the newly stale entry is deleted when possible and the result fails closed;
 - no stale capability fallback is used when every current probe fails.
+
+Merged observations must also share a non-empty validity window. Individually valid observations whose lifetimes do not overlap cannot be combined into a descriptor.
 
 This favors privacy and correctness over availability when capabilities may have changed.
 
@@ -105,12 +109,14 @@ The following are intentional invariants:
 
 - no automatic protocol-to-application promotion;
 - no protocol-binding-authority to application-claim-authority promotion;
+- no reuse of pre-authority-model cache descriptors;
 - no provider-only cached application profiles;
 - no capability-to-consent promotion;
 - no capability-to-ACL/OAuth grant promotion;
 - no provider identity mismatch merging;
 - no conflicting strong application identity fallback;
-- no stale capability resurrection across asynchronous cache/probe work;
+- no merge of non-overlapping observation validity windows;
+- no stale capability resurrection across asynchronous cache/probe/write work;
 - no retry of arbitrary/adversarial failures;
 - no unbounded probes, concurrency, retries, identifiers, endpoints, or capability lists;
 - no unknown protocol binding published as usable;
