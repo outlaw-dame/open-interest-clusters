@@ -1,6 +1,6 @@
 # Current recommendation roadmap status
 
-This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through merged PR #122 on 2026-08-10.
+This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through merged PR #123 on 2026-08-10, with late-review hardening from PRs #122/#123 tracked in the immediate follow-up.
 
 It complements the detailed architecture and acceptance criteria in:
 
@@ -20,7 +20,7 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 - Positive recommendation affinity may use explicitly public provider evidence, ATProto public-repository evidence, explicit user-owned local evidence, or narrowly authorized user-controlled ActivityPods/Solid Pod evidence permitted by repository policy.
 - Provider-private activity and private moderation/settings must not become positive affinity.
 - Blocks, mutes, domain blocks, keyword filters, safety settings, and equivalent private state are filtering constraints only.
-- Subject-level personalization state may live only in device-owned storage or explicitly user-owned remote storage. Provider-owned subject-level personalization remains denied.
+- Subject-level personalization state may live by policy only in device-owned storage or explicitly user-owned remote storage. Provider-owned subject-level personalization remains denied. Public persistence boundaries enforce that placement policy before I/O; the low-level in-memory profile store still has a documented aggregate-only enforcement gap when callers explicitly enable that boundary.
 - ActivityPods providers may support ActivityPub plus Solid/ACL semantics without ATProto; other providers may expose multiple protocol bindings simultaneously.
 - Protocol identity must not be collapsed into application identity: ActivityPub does not imply Mastodon and ATProto does not imply Bluesky.
 - Curated sets, starter packs, follow packs, directories, labeler directories, and similar sources are discovery provenance, not viewer endorsement.
@@ -35,10 +35,10 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 | Phase 2 — Cold-start candidate generation | **Complete** | PR #116 |
 | Phase 3 — Candidate eligibility and policy composition | **Complete** | PR #117; superseded review work from #118/#119 folded into final implementation |
 | Phase 3.5 — Protocol/application capability hardening | **Complete** | PR #120 and PR #121 |
-| Phase 3.6 — Runtime provider discovery/capability resolution | **Complete** | PR #122 |
+| Phase 3.6 — Runtime provider discovery/capability resolution | **Complete; late-review hardening applied** | PR #122 plus follow-up authority/cache/freshness fixes |
 | Phase 4 — Cold-start scoring-input builder | **Next** | Not yet implemented as the reusable candidate/profile → scorer-input bridge |
 | Phase 5 — First-session recommendation orchestrator | Pending | Depends on Phase 4 |
-| Phase 6 — Recommendation action-plan contracts | Pending | Depends on stable recommendation output/candidate identity |
+| Phase 6 — Generalized recommendation action-plan contracts | Pending | Existing hashtag-follow action-plan prerequisite is implemented; generalized candidate-bound plans remain |
 | Phase 7 — Onboarding lifecycle and refresh | Pending | Reuses existing retraction/invalidation/recovery architecture |
 | Phase 8 — Reference onboarding integration and UX examples | Pending | Depends on stable engine contracts |
 
@@ -54,7 +54,8 @@ The idempotent signal ledger and retraction architecture is **not** Phase 4. It 
 - label semantics and signal-effect policy;
 - idempotent signal ledger, replay protection, retractions, tombstones, and expiration behavior;
 - profile application orchestration;
-- privacy-preserving profile persistence and storage-authority enforcement;
+- privacy-preserving profile persistence and storage-authority enforcement at public persistence boundaries;
+- documented low-level aggregate-only store caveat rather than an assumed universal store-level placement guarantee;
 - derived-state invalidation, repair, deletion propagation, and crash-recovery barriers;
 - embeddings, graph/entity infrastructure, ANN backends, hybrid scoring, bandits, reranking, explanations, and bounded serving.
 
@@ -78,13 +79,21 @@ The idempotent signal ledger and retraction architecture is **not** Phase 4. It 
 - compound/camel hashtag matching is conservative and matching-only, without rewriting canonical hashtag identity;
 - runtime provider discovery keeps provider/server identity separate from application/client identity;
 - multi-protocol bindings are additive;
+- application identity/profile claims carry their own authority rather than inheriting unrelated protocol-binding authority;
+- missing application-claim authority remains weak provider-probe evidence;
 - weak provider fingerprinting cannot establish application identity/profile authority by itself;
 - conflicting strong identity evidence fails closed;
 - same-authority capability conflicts resolve to unknown;
 - cache entries are validated, identity-scoped, freshness-bounded, and re-probed when stale/malformed;
+- provider-only cached application profiles are rejected;
+- freshness is rechecked after asynchronous cache/probe work and before final descriptor return;
 - cache failures do not override otherwise valid fresh discovery;
 - only explicitly classified transient probe failures are retried with bounded exponential backoff;
 - capability discovery never substitutes for consent, OAuth scope authorization, ActivityPods/Solid ACL/grant validation, or storage-placement policy.
+
+### Existing action-plan prerequisite
+
+The repository already exports the versioned `RecommendationHashtagFollowPlan` and `createRecommendationHashtagFollowPlan`, and onboarding bootstrap can return that plan. Phase 6 therefore extends an existing safe action-plan primitive; it does not start action planning from zero.
 
 ## Phase 4 — Cold-start scoring-input builder
 
@@ -155,9 +164,9 @@ explicit onboarding choices
   -> bounded first-session recommendations
 ```
 
-### Phase 6 — Recommendation action-plan contracts
+### Phase 6 — Generalized recommendation action-plan contracts
 
-Add protocol-neutral, non-executable plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
+Extend the existing hashtag-follow plan into protocol-neutral, non-executable, candidate-bound plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
 
 ### Phase 7 — Onboarding lifecycle and refresh
 

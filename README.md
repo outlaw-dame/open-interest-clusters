@@ -30,7 +30,8 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 - Profile-to-results execution orchestration with intentionally injected scoring-input construction.
 - Durable derived-state invalidation and repair for embeddings, candidate caches, explanation caches, expiration, retractions, and deletion.
 - Shared normalized-signal enforcement of the public/user-controlled affinity boundary.
-- Explicit storage-authority and local-first/user-owned state-placement policy at persistence boundaries.
+- Explicit storage-authority and local-first/user-owned state-placement policy at public persistence boundaries; the low-level in-memory aggregate-only caveat remains documented.
+- Existing versioned hashtag-follow action-plan primitives used by onboarding bootstrap.
 
 ### Candidate and cold-start architecture
 
@@ -52,9 +53,11 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 - Conservative compound/camel hashtag phrase matching without rewriting canonical hashtag identity.
 - Runtime provider discovery above hardened adapters.
 - Provider/server identity remains separate from application/client identity.
+- Application identity/profile claims carry their own authority instead of inheriting unrelated protocol-binding authority.
 - Additive multi-protocol bindings for ActivityPub, ATProto, ActivityPods, and supported combinations.
 - Authority-ranked capability observations with fail-closed identity/capability conflict handling.
-- Validated provider+application-scoped capability caching with stale/malformed re-probe behavior.
+- Validated provider+application-scoped capability caching with stale/malformed re-probe behavior and provider-only application-profile rejection.
+- Freshness revalidation after asynchronous cache/probe work.
 - Bounded concurrency, abort handling, partial probe isolation, and retryable-only bounded exponential backoff.
 - Capability discovery never substitutes for consent, OAuth/ACL/grant authorization, storage placement, or candidate-native identity verification.
 
@@ -115,10 +118,10 @@ The candidate/onboarding dependency chain is now:
 2. **Phase 2 — Cold-start candidate generation — COMPLETE** (`#116`)
 3. **Phase 3 — Candidate eligibility and policy composition — COMPLETE** (`#117`)
 4. **Phase 3.5 — Protocol/application profile capability hardening — COMPLETE** (`#120`, `#121`)
-5. **Phase 3.6 — Runtime provider discovery/capability resolution — COMPLETE** (`#122`)
+5. **Phase 3.6 — Runtime provider discovery/capability resolution — COMPLETE** (`#122`, with late-review hardening in the immediate follow-up)
 6. **Phase 4 — Cold-start scoring-input builder — NEXT**
 7. **Phase 5 — First-session recommendation orchestrator — PENDING**
-8. **Phase 6 — Recommendation action-plan contracts — PENDING**
+8. **Phase 6 — Generalized recommendation action-plan contracts — PENDING** (existing hashtag-follow plan already implemented)
 9. **Phase 7 — Onboarding lifecycle and refresh — PENDING**
 10. **Phase 8 — Reference onboarding integration and UX examples — PENDING**
 
