@@ -79,6 +79,7 @@ export interface RecommendationProviderCapabilityObservation {
 export interface RecommendationProviderDiscoveryObservation {
   providerId: string;
   applicationId?: string;
+  applicationAuthority?: RecommendationProviderDiscoveryAuthority;
   protocolBindings: readonly RecommendationProviderProtocolBinding[];
   applicationProfiles: readonly RecommendationProviderApplicationProfile[];
   capabilities: readonly RecommendationProviderCapabilityObservation[];
@@ -200,6 +201,14 @@ function timestamp(value: unknown, message: string): string {
   return text;
 }
 
+function currentTimeMs(now: () => Date): number {
+  const current = now();
+  if (!(current instanceof Date) || !Number.isFinite(current.getTime())) {
+    throw new TypeError("Invalid recommendation provider discovery clock.");
+  }
+  return current.getTime();
+}
+
 function uniqueKnown<T extends string>(
   value: unknown,
   known: ReadonlySet<string>,
@@ -270,7 +279,7 @@ export function normalizeRecommendationProviderDiscoveryObservation(
   if (
     !isRecord(value) ||
     Object.keys(value).some((key) => ![
-      "providerId", "applicationId", "protocolBindings", "applicationProfiles",
+      "providerId", "applicationId", "applicationAuthority", "protocolBindings", "applicationProfiles",
       "capabilities", "observedAt", "expiresAt"
     ].includes(key))
   ) {
@@ -282,6 +291,12 @@ export function normalizeRecommendationProviderDiscoveryObservation(
     MAX_ID_LENGTH,
     "Invalid recommendation provider application ID."
   );
+  if (
+    value.applicationAuthority !== undefined &&
+    (typeof value.applicationAuthority !== "string" || !AUTHORITY_SET.has(value.applicationAuthority))
+  ) {
+    throw new TypeError("Invalid recommendation provider application authority.");
+  }
   if (!Array.isArray(value.protocolBindings) || value.protocolBindings.length > MAX_BINDINGS) {
     throw new TypeError("Invalid recommendation provider protocol bindings.");
   }
@@ -298,6 +313,12 @@ export function normalizeRecommendationProviderDiscoveryObservation(
     MAX_PROFILES,
     "Invalid recommendation provider application profiles."
   );
+  if (applicationId === undefined && (value.applicationAuthority !== undefined || applicationProfiles.length > 0)) {
+    throw new TypeError("Recommendation provider application claims require an application identity.");
+  }
+  const applicationAuthority = applicationId === undefined
+    ? undefined
+    : (value.applicationAuthority as RecommendationProviderDiscoveryAuthority | undefined) ?? "provider_probe";
   if (!Array.isArray(value.capabilities) || value.capabilities.length > MAX_CAPABILITIES) {
     throw new TypeError("Invalid recommendation provider capabilities.");
   }
@@ -321,7 +342,10 @@ export function normalizeRecommendationProviderDiscoveryObservation(
     observedAt,
     expiresAt
   };
-  if (applicationId !== undefined) normalized.applicationId = applicationId;
+  if (applicationId !== undefined) {
+    normalized.applicationId = applicationId;
+    normalized.applicationAuthority = applicationAuthority;
+  }
   return Object.freeze(normalized);
 }
 
@@ -360,6 +384,9 @@ function normalizeDescriptor(value: unknown): RecommendationProviderDescriptor {
     MAX_PROFILES,
     "Invalid recommendation provider application profiles."
   );
+  if (applicationId === undefined && applicationProfiles.length > 0) {
+    throw new TypeError("Cached recommendation provider application profiles require an application identity.");
+  }
   if (!Array.isArray(value.capabilities) || value.capabilities.length > MAX_CAPABILITIES) {
     throw new TypeError("Invalid recommendation provider capabilities.");
   }
@@ -451,11 +478,8 @@ async function runProbe(
   return undefined;
 }
 
-function observationMaxAuthority(observation: RecommendationProviderDiscoveryObservation): number {
-  return observation.protocolBindings.reduce(
-    (highest, binding) => Math.max(highest, AUTHORITY_RANK[binding.authority]),
-    0
-  );
+function applicationAuthorityRank(observation: RecommendationProviderDiscoveryObservation): number {
+  return AUTHORITY_RANK[observation.applicationAuthority ?? "provider_probe"];
 }
 
 function resolveApplicationId(
@@ -466,7 +490,7 @@ function resolveApplicationId(
     observations
       .filter((observation) =>
         observation.applicationId !== undefined &&
-        observationMaxAuthority(observation) >= AUTHORITY_RANK.protocol_native
+        applicationAuthorityRank(observation) >= AUTHORITY_RANK.protocol_native
       )
       .map((observation) => observation.applicationId as string)
   );
@@ -487,7 +511,7 @@ function resolveApplicationProfiles(
   const profiles = observations
     .filter((observation) =>
       observation.applicationId === resolvedApplicationId &&
-      observationMaxAuthority(observation) >= AUTHORITY_RANK.protocol_native
+      applicationAuthorityRank(observation) >= AUTHORITY_RANK.protocol_native
     )
     .flatMap((observation) => observation.applicationProfiles);
   return Object.freeze([...new Set(profiles)].sort()) as readonly RecommendationProviderApplicationProfile[];
@@ -582,7 +606,7 @@ async function readFreshCache(
   key: string,
   providerId: string,
   applicationId: string | undefined,
-  currentTimeMs: number
+  now: () => Date
 ): Promise<RecommendationProviderDescriptor | undefined> {
   let raw: RecommendationProviderDescriptor | undefined;
   try {
@@ -593,10 +617,11 @@ async function readFreshCache(
   if (raw === undefined) return undefined;
   try {
     const cached = normalizeDescriptor(raw);
+    const checkedAtMs = currentTimeMs(now);
     if (
       cached.providerId === providerId &&
       cached.applicationId === applicationId &&
-      Date.parse(cached.expiresAt) > currentTimeMs
+      Date.parse(cached.expiresAt) > checkedAtMs
     ) {
       return cached;
     }
@@ -665,10 +690,7 @@ export async function discoverRecommendationProviderCapabilities(
     throw new TypeError("Invalid recommendation provider discovery abort signal.");
   }
   const now = options.now ?? (() => new Date());
-  const current = now();
-  if (!(current instanceof Date) || !Number.isFinite(current.getTime())) {
-    throw new TypeError("Invalid recommendation provider discovery clock.");
-  }
+  currentTimeMs(now);
   const key = cacheKey(providerId, applicationId);
   throwIfAborted(options.signal);
   if (options.cache !== undefined) {
@@ -677,7 +699,7 @@ export async function discoverRecommendationProviderCapabilities(
       key,
       providerId,
       applicationId,
-      current.getTime()
+      now
     );
     throwIfAborted(options.signal);
     if (cached !== undefined) return cached;
@@ -689,26 +711,31 @@ export async function discoverRecommendationProviderCapabilities(
     options.probes,
     concurrency,
     (candidate) => runProbe(candidate, options.signal, retry, sleep)
-  )).filter((entry): entry is RecommendationProviderDiscoveryObservation => entry !== undefined)
-    .filter((entry) => Date.parse(entry.expiresAt) > current.getTime());
+  )).filter((entry): entry is RecommendationProviderDiscoveryObservation => entry !== undefined);
 
   throwIfAborted(options.signal);
-  if (observations.length === 0) {
+  const afterProbeMs = currentTimeMs(now);
+  const currentObservations = observations.filter((entry) => Date.parse(entry.expiresAt) > afterProbeMs);
+  if (currentObservations.length === 0) {
     throw new Error("Recommendation provider discovery produced no current trusted observations.");
   }
-  if (observations.some((entry) => entry.providerId !== providerId)) {
+  if (currentObservations.some((entry) => entry.providerId !== providerId)) {
     throw new TypeError("Recommendation provider discovery returned mismatched provider identity.");
   }
 
-  const resolvedApplicationId = resolveApplicationId(applicationId, observations);
-  const protocolBindings = mergeBindings(observations);
+  const resolvedApplicationId = resolveApplicationId(applicationId, currentObservations);
+  const protocolBindings = mergeBindings(currentObservations);
   if (protocolBindings.length === 0) {
     throw new Error("Recommendation provider discovery produced no verified protocol bindings.");
   }
-  const applicationProfiles = resolveApplicationProfiles(resolvedApplicationId, observations);
-  const capabilities = mergeCapabilities(observations);
-  const detectedAtMs = Math.max(...observations.map((entry) => Date.parse(entry.observedAt)));
-  const expiresAtMs = Math.min(...observations.map((entry) => Date.parse(entry.expiresAt)));
+  const applicationProfiles = resolveApplicationProfiles(resolvedApplicationId, currentObservations);
+  const capabilities = mergeCapabilities(currentObservations);
+  const detectedAtMs = Math.max(...currentObservations.map((entry) => Date.parse(entry.observedAt)));
+  const expiresAtMs = Math.min(...currentObservations.map((entry) => Date.parse(entry.expiresAt)));
+  const finalCheckMs = currentTimeMs(now);
+  if (expiresAtMs <= finalCheckMs) {
+    throw new Error("Recommendation provider discovery observations expired before resolution completed.");
+  }
   const descriptor: RecommendationProviderDescriptor = Object.freeze({
     providerId,
     ...(resolvedApplicationId === undefined ? {} : { applicationId: resolvedApplicationId }),
