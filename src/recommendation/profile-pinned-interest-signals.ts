@@ -215,23 +215,69 @@ function hasTagOptOut(tags: readonly string[] | undefined): boolean {
   return false;
 }
 
-function profileTextPresent(
-  protocol: RecommendationProfilePinnedProtocol,
-  profile: Record<string, unknown>
-): boolean {
-  const fields = protocol === "activitypub"
-    ? [profile.note, profile.summary, profile.display_name, profile.name]
-    : [profile.description, profile.displayName];
-  return fields.some((value) => value !== undefined && value !== null && value !== "");
+function activityPubProfileTextPresent(profile: Record<string, unknown>): boolean {
+  return [profile.note, profile.summary, profile.display_name, profile.name]
+    .some((value) => value !== undefined && value !== null && value !== "");
 }
 
-function readProfileText(
-  protocol: RecommendationProfilePinnedProtocol,
-  profile: Record<string, unknown>
-): string {
-  return protocol === "activitypub"
-    ? `${boundedText(profile.note ?? profile.summary ?? "", "bio")} ${boundedText(profile.display_name ?? profile.name ?? "", "display name")}`.trim()
-    : `${boundedText(profile.description ?? "", "bio")} ${boundedText(profile.displayName ?? "", "display name")}`.trim();
+function readActivityPubProfileText(profile: Record<string, unknown>): string {
+  return `${boundedText(profile.note ?? profile.summary ?? "", "bio")} ${boundedText(profile.display_name ?? profile.name ?? "", "display name")}`.trim();
+}
+
+function isBlueskyProfileUri(accountUri: string): boolean {
+  return /^at:\/\/[^/]+\/app\.bsky\.actor\.profile\/[^/]+$/u.test(accountUri);
+}
+
+function blueskyProfileTextPresent(profile: Record<string, unknown>): boolean {
+  return [profile.description, profile.displayName]
+    .some((value) => value !== undefined && value !== null && value !== "");
+}
+
+function readBlueskyProfileText(profile: Record<string, unknown>): string {
+  return `${boundedText(profile.description ?? "", "bio")} ${boundedText(profile.displayName ?? "", "display name")}`.trim();
+}
+
+function normalizedProfileText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return boundedText(value, "normalized profile text");
+}
+
+function profileTextState(input: {
+  protocol: RecommendationProfilePinnedProtocol;
+  accountUri: string;
+  profile: Record<string, unknown>;
+  normalizedProfileText?: unknown;
+  requireNormalizedCustomText: boolean;
+}): { text: string; present: boolean } {
+  if (input.protocol === "activitypub") {
+    const present = activityPubProfileTextPresent(input.profile);
+    return Object.freeze({
+      text: present ? readActivityPubProfileText(input.profile) : "",
+      present
+    });
+  }
+
+  if (isBlueskyProfileUri(input.accountUri)) {
+    const present = blueskyProfileTextPresent(input.profile);
+    return Object.freeze({
+      text: present ? readBlueskyProfileText(input.profile) : "",
+      present
+    });
+  }
+
+  const normalized = normalizedProfileText(input.normalizedProfileText);
+  if (normalized !== undefined) {
+    return Object.freeze({ text: normalized, present: normalized.length > 0 });
+  }
+
+  if (!input.requireNormalizedCustomText) {
+    return Object.freeze({ text: "", present: false });
+  }
+
+  // ATProto does not define one universal profile lexicon. For non-Bluesky
+  // applications the adapter must explicitly normalize profile text, including
+  // an empty string when it inspected a supported profile surface with no text.
+  throw new TypeError("Custom ATProto profile text must be adapter-normalized.");
 }
 
 function hasAnyPinnedInput(
@@ -245,6 +291,7 @@ function hasAnyPinnedInput(
 
 function assertCapabilitiesAndPolicy(
   policy: RecommendationProfilePinnedAccountPolicy,
+  profileText: { text: string; present: boolean },
   protocol: RecommendationProfilePinnedProtocol,
   profile: Record<string, unknown>,
   pinnedPosts: unknown,
@@ -252,13 +299,12 @@ function assertCapabilitiesAndPolicy(
 ): void {
   const capabilities = policy.capabilities;
   const pinnedPresent = hasAnyPinnedInput(protocol, profile, pinnedPosts);
-  const profileTextExists = profileTextPresent(protocol, profile);
   const featured = policy.featuredTags ?? [];
 
   const profileTextCapabilityValid = capabilities.rawProfileText === "supported"
     ? true
     : capabilities.rawProfileText === "unsupported"
-      ? !profileTextExists
+      ? !profileText.present
       : false;
   const featuredCapabilityValid = capabilities.featuredHashtags === "supported"
     ? true
@@ -358,6 +404,7 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
   accountId: string;
   accountUri: string;
   profile: unknown;
+  normalizedProfileText?: string | null;
   pinnedPosts?: unknown;
   keywords: readonly string[];
   policy: RecommendationProfilePinnedAccountPolicy;
@@ -380,12 +427,18 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
   if (policy.capabilities.rawProfileText === "unknown") {
     throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
   }
-  if (policy.capabilities.rawProfileText === "unsupported" && profileTextPresent(input.protocol, input.profile)) {
+
+  const profileText = profileTextState({
+    protocol: input.protocol,
+    accountUri,
+    profile: input.profile,
+    normalizedProfileText: input.normalizedProfileText,
+    requireNormalizedCustomText: policy.capabilities.rawProfileText === "supported"
+  });
+  if (policy.capabilities.rawProfileText === "unsupported" && profileText.present) {
     throw new TypeError("Account is not eligible for profile or pinned-post recommendation signals.");
   }
-  const bio = policy.capabilities.rawProfileText === "supported"
-    ? readProfileText(input.protocol, input.profile)
-    : "";
+  const bio = policy.capabilities.rawProfileText === "supported" ? profileText.text : "";
 
   const pinnedPresent = hasAnyPinnedInput(input.protocol, input.profile, input.pinnedPosts);
   if (policy.capabilities.pinnedPosts === "unknown") {
@@ -400,7 +453,14 @@ export function deriveRecommendationProfilePinnedInterestEvidence(input: {
       : atprotoPinnedPost(input.profile, input.pinnedPosts)
     : Object.freeze([]);
 
-  assertCapabilitiesAndPolicy(policy, input.protocol, input.profile, input.pinnedPosts, [bio, ...pinned.map((item) => item.text)]);
+  assertCapabilitiesAndPolicy(
+    policy,
+    profileText,
+    input.protocol,
+    input.profile,
+    input.pinnedPosts,
+    [bio, ...pinned.map((item) => item.text)]
+  );
 
   const output: RecommendationProfilePinnedInterestEvidence[] = [];
   for (const keyword of keywordMatches(bio, input.keywords)) {
