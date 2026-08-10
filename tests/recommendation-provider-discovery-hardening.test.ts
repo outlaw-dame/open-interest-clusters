@@ -35,6 +35,12 @@ function providerProbeObservation(
   };
 }
 
+function providerOnlyObservation(): RecommendationProviderDiscoveryObservation {
+  const observed = providerProbeObservation({ applicationProfiles: [] });
+  const { applicationId: _applicationId, ...providerOnly } = observed;
+  return providerOnly;
+}
+
 test("weak provider fingerprinting cannot become the sole application identity or compatibility profile", async () => {
   const descriptor = await discoverRecommendationProviderCapabilities({
     providerId: "provider.example",
@@ -102,10 +108,7 @@ test("cache read, delete, and write failures cannot override fresh verified disc
       id: "fresh",
       probe: () => {
         probeCalls += 1;
-        return providerProbeObservation({
-          applicationId: undefined,
-          applicationProfiles: []
-        });
+        return providerOnlyObservation();
       }
     }]
   });
@@ -126,10 +129,7 @@ test("a cache miss does not trigger deletion", async () => {
     providerId: "provider.example",
     now: () => new Date(NOW),
     cache,
-    probes: [{
-      id: "fresh",
-      probe: () => providerProbeObservation({ applicationId: undefined, applicationProfiles: [] })
-    }]
+    probes: [{ id: "fresh", probe: () => providerOnlyObservation() }]
   });
 
   assert.equal(deletes, 0);
@@ -172,7 +172,7 @@ test("cache descriptors with duplicate protocol identities are rejected and self
       id: "fresh",
       probe: () => {
         probeCalls += 1;
-        return providerProbeObservation({ applicationId: undefined, applicationProfiles: [] });
+        return providerOnlyObservation();
       }
     }]
   });
