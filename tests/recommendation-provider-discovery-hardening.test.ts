@@ -16,6 +16,7 @@ function providerProbeObservation(
   return {
     providerId: "provider.example",
     applicationId: "https://untrusted-branding.example/client.json",
+    applicationAuthority: "provider_probe",
     protocolBindings: [{
       protocol: "activitypub",
       endpoint: "https://provider.example/users/alice",
@@ -37,7 +38,11 @@ function providerProbeObservation(
 
 function providerOnlyObservation(): RecommendationProviderDiscoveryObservation {
   const observed = providerProbeObservation({ applicationProfiles: [] });
-  const { applicationId: _applicationId, ...providerOnly } = observed;
+  const {
+    applicationId: _applicationId,
+    applicationAuthority: _applicationAuthority,
+    ...providerOnly
+  } = observed;
   return providerOnly;
 }
 
@@ -77,6 +82,7 @@ test("application profiles require matching strong application identity evidence
         id: "strong",
         probe: () => providerProbeObservation({
           applicationId: "https://trusted-app.example/client.json",
+          applicationAuthority: "protocol_native",
           protocolBindings: [{
             protocol: "activitypub",
             endpoint: "https://provider.example/users/alice",
