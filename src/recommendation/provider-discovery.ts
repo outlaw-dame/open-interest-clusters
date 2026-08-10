@@ -411,7 +411,7 @@ function normalizeDescriptor(value: unknown): RecommendationProviderDescriptor {
 }
 
 function cacheKey(providerId: string, applicationId?: string): string {
-  return `provider-discovery:v1:${providerId}:${applicationId ?? "-"}`;
+  return `provider-discovery:v2:${providerId}:${applicationId ?? "-"}`;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -748,6 +748,13 @@ export async function discoverRecommendationProviderCapabilities(
     applicationProfiles,
     capabilities
   });
-  if (options.cache !== undefined) await bestEffortWrite(options.cache, key, descriptor);
+  if (options.cache !== undefined) {
+    await bestEffortWrite(options.cache, key, descriptor);
+    const postWriteCheckMs = currentTimeMs(now);
+    if (expiresAtMs <= postWriteCheckMs) {
+      await bestEffortDelete(options.cache, key);
+      throw new Error("Recommendation provider discovery observations expired before resolution completed.");
+    }
+  }
   return descriptor;
 }
