@@ -1,8 +1,10 @@
 # Canonical Project Status
 
-This document is the authoritative summary of the current repository state.
+This document is the authoritative architectural summary of the current repository state.
 
-Last reconciled against `main` through merged PR #111 on 2026-08-07.
+**Last reconciled against `main` through merged PR #122 on 2026-08-10.**
+
+For the concise phase ledger, see [`current-roadmap-status.md`](current-roadmap-status.md). For detailed candidate/onboarding acceptance criteria, see [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md) and its normative [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
 ## Mission and boundaries
 
@@ -25,47 +27,44 @@ Generic consent does not permit provider-private records to become affinity evid
 
 Blocks, mutes, domain blocks, keyword filters, safety preferences, and equivalent private moderation state are filtering constraints only. They may suppress, exclude, or explain candidates locally/user-owned, but must not become positive interest evidence.
 
-## State authority and placement
-
-Subject-level recommendation state is permitted only in:
-
-1. `device_owned` local-first storage using the `local_only` processing boundary; or
-2. `user_owned` remote storage using the `server_allowed` processing boundary, such as an authorized ActivityPod/Solid Pod or equivalent user-controlled remote store.
-
-`provider_owned` application, instance, AppView, and service storage is denied for subject-level recommendation personalization. Generic server consent cannot override that authority boundary.
-
-`shared_operator` storage is limited to non-subject aggregate statistics under the aggregate-only boundary.
-
-Public profile-persistence entry points require an explicit storage manifest before read, write, or delete I/O. Onboarding and ActivityPods profile persistence inherit the same enforcement.
+Subject-level recommendation state is permitted only in device-owned local-first storage or explicitly user-owned remote storage. Provider-owned subject-level personalization remains denied. Shared-operator storage is limited to policy-permitted non-subject or aggregate state.
 
 ## Current maturity
 
 | Area | Status |
 | --- | --- |
-| Dataset, schema, normalization, catalog | Mature library capability |
-| Consent, privacy, deletion contracts | Implemented and repository-wide public/user-controlled affinity policy enforced |
-| Onboarding selection/profile bootstrap | Implemented; explicit selections seed consented profile state and optional user-controlled persistence |
+| Dataset, schema, normalization, catalog | Implemented mature library capability |
+| Consent, authorization, privacy, deletion | Implemented; deny-by-default and public/user-controlled affinity boundary enforced |
+| Onboarding selection/profile bootstrap | Implemented |
 | Interest signals and profile application | Implemented |
-| Label semantic classification/effect policy | Implemented conservatively |
-| Idempotency, replay, retractions | Implemented core ledger and profile application semantics |
-| Derived-state invalidation/recovery | Implemented for embeddings, candidate caches, explanation caches, expiration, retractions, and deletion recovery |
-| Embedding, ANN, graph, scoring, reranking | Implemented primitives and adapters |
-| Profile-to-results execution orchestration | Implemented; candidate/scoring-input construction intentionally remains injected |
-| ActivityPub live integration | Generic public actor/outbox, Mastodon timelines, curated sets, follow packs, featured hashtags, and public trends implemented |
-| ATProto live integration | Repository/API normalization plus `queryLabels` and `subscribeLabels` slices implemented |
-| ActivityPods/Solid integration | Public outbox/live notifications plus grant-bound user-controlled profile persistence implemented |
-| Local-first recommendation state placement | Implemented and enforced at profile persistence boundaries |
-| Multi-kind recommendation candidate domain | Not yet implemented as a first-class normalized layer |
-| Cold-start candidate generation | Not yet implemented as reusable engine composition |
-| First-session recommendation orchestration | Not yet implemented; depends on candidate and scoring-input layers |
-| Deployable operator service | Not implemented and not required for local-first use |
+| Label semantics/effect policy | Implemented conservatively |
+| Idempotency, replay, retractions, expiration | Implemented |
+| Derived-state invalidation/recovery | Implemented |
+| Embedding, ANN, graph/entity, scoring, reranking | Implemented primitives/adapters |
+| Profile-to-results execution orchestration | Implemented; scoring-input construction intentionally injected |
+| ActivityPub/Mastodon live integration | Implemented integration slices |
+| ATProto live integration | Implemented repository/API normalization plus `queryLabels`/`subscribeLabels` slices |
+| ActivityPods/Solid integration | Implemented public/live outbox path plus grant-bound user-controlled profile persistence |
+| Local-first/user-owned state placement | Implemented and enforced |
+| Multi-kind recommendation candidate domain | **Implemented** |
+| Candidate-source adapter boundary | **Implemented** |
+| Cold-start candidate generation | **Implemented** |
+| Candidate eligibility/policy composition | **Implemented** |
+| Protocol/application profile capability hardening | **Implemented** |
+| Runtime provider discovery/capability resolution | **Implemented** |
+| Cold-start scoring-input builder | **Not yet implemented — next phase** |
+| First-session recommendation orchestration | Not yet implemented; depends on scoring-input builder |
+| Recommendation action-plan contracts | Not yet implemented |
+| Onboarding lifecycle/refresh composition | Not yet implemented as the higher-level candidate/onboarding lifecycle |
+| Reference onboarding integration/UX examples | Not yet implemented |
+| Turnkey operator service | Not implemented and not required for local-first use |
 
-## Implemented recommendation pipeline
+## Implemented pipeline
 
 ### User-understanding side
 
 ```text
-explicit onboarding selections or allowed public evidence
+explicit onboarding selections or allowed public/user-controlled evidence
   -> authorization / consent / public-signal policy
   -> normalized evidence
   -> semantic derivation
@@ -74,209 +73,222 @@ explicit onboarding selections or allowed public evidence
   -> local or user-owned profile state
 ```
 
+### Candidate preparation side
+
+```text
+profile
+  -> bounded candidate-source fan-out
+  -> normalized multi-kind candidates
+  -> deterministic profile/candidate matching
+  -> identity resolution and verification
+  -> candidate-type eligibility / provider policy / viewer safety
+  -> eligible normalized candidate set
+```
+
 ### Execution side
 
 ```text
-existing profile
-  -> injected scoring-input builder
+prepared scoring inputs
   -> hybrid scoring
-  -> optional metadata-driven diversity/novelty reranking
+  -> optional diversity/novelty reranking
   -> optional candidate-bound explanations
   -> bounded candidate serving
 ```
 
-The missing reusable bridge is therefore:
+The remaining reusable bridge is therefore now:
 
 ```text
-profile
-  -> candidate discovery
-  -> normalized candidate domain
-  -> candidate-type eligibility and policy
-  -> scoring-input construction
+profile + eligible normalized candidates
+  -> cold-start scoring-input construction   [NEXT]
+  -> existing execution orchestrator
 ```
 
-PR #103 intentionally does not fetch candidates or infer provider semantics. That boundary should be preserved.
+PR #103 intentionally does not fetch candidates or infer provider semantics. That separation remains correct.
 
-## Implemented provider and protocol slices
+## Candidate architecture now implemented
 
-### ActivityPub and Mastodon-compatible sources
+### Phase 1 — candidate domain and source contracts
 
-- Generic ActivityPub activity normalization.
-- Provider-neutral public actor/outbox ingestion.
-- Actor identity and outbox binding.
-- ActivityStreams `Collection`, `OrderedCollection`, `CollectionPage`, and `OrderedCollectionPage` traversal.
-- Correct linked/inline `first` and `next` handling, including ActivityStreams `Link.href` target resolution.
-- Page `partOf` validation, bounded traversal, cycle detection, compact resumable cursors, and same-authority URL policy.
-- Explicitly public activity filtering before recommendation-source emission.
-- Mastodon public, home, and list timeline provider adapters.
-- Authorization validation before transport.
-- Curated account-set ingestion for Mastodon Collections, Loops Starter Kits, and explicit Pixelfed documents.
-- Legacy Fediverse follow-pack ingestion.
-- Account eligibility with moved-account resolution, recency, discoverability, noindex/opt-out handling, block/mute/provider policy, and identity binding.
-- Public account featured hashtags and public instance trending hashtags.
+The normalized candidate domain supports:
 
-Private timeline readers may exist for application workflows, but their contents are blocked from positive recommendation-affinity derivation by the shared signal policy.
+- `account`
+- `post`
+- `feed`
+- `list`
+- `starter_pack`
+- `labeler`
+- `community`
+- `hashtag`
+- `topic`
+- `instance`
 
-### ActivityPods/Solid sources and persistence
+Candidate identity is stable and bounded, with exact provider-native/protocol identity preserved. Provenance and verification state remain distinct from viewer endorsement. Candidate-source adapters are separate from generic evidence adapters and declare protocol bindings, candidate kinds, authority, privacy, transport, pagination, abort, and verification capabilities.
 
-- ActivityPods actor/WebID identity binding.
-- Same-Pod outbox, public-key owner, proxy endpoint, and SPARQL endpoint validation.
-- Public ActivityPods outbox adapter built on the generic ActivityPub traversal.
-- Anonymous public reads for recommendation content.
-- Pod-bound application registration, AccessGrant, optional DataGrant, application actor, expiry, revocation, and `apods:ReadOutbox` validation.
-- Dependency-injected Solid Notifications subscription transport.
-- Reauthorization before notification processing.
-- `Add`, `Remove`, `Create`, `Update`, and `Delete` notification normalization.
-- Notification payloads remain control-plane evidence; `Add` requires a public refetch before recommendation use.
-- `Remove` produces retraction work, `Create`/`Update` invalidate snapshots, and `Delete` disables sources.
-- Grant-bound ActivityPods profile persistence using JSON-LD/LDP semantics and conditional mutation contracts.
-- Owner/WebID, application registration, grant, storage-root, container/resource, and access-mode binding.
-- Conditional write/delete conflict handling.
-- Explicit user-owned state-placement manifest on the bundled ActivityPods persistence adapter.
+Remote candidate discovery receives a purpose-limited privacy-redacted request rather than raw profile/subject/moderation context.
 
-ActivityPods is a user-controlled remote-storage exception, not a generic provider-server personalization path.
+### Phase 2 — cold-start candidate generation
 
-### ATProto sources
+The repository can now generate bounded candidate sets from an existing recommendation profile without behavioral history. It supports multi-source fan-out, deterministic duplicate collapse, local profile matching, partial source failures, cancellation, public metadata matching, and preservation of provenance/verification.
 
-- Repository record and provider API normalization.
-- Strict DID, handle, NSID, record-key, AT URI, cursor, and record validation.
-- Live `queryLabels` ingestion.
-- Live `subscribeLabels` ingestion with bounded frame, label, signature, sequence, and checkpoint handling.
-- Labeler DID verification, subscription evidence, expiration, negation tombstones, stale-state protection, and provenance.
-- Label semantic classification and conservative signal-effect policy.
-- Labeler discovery contracts that preserve explicit subscription as a separate user action.
+### Phase 3 — candidate eligibility and policy composition
 
-### Public discovery and provider policy
+Every supported candidate kind now passes an explicit eligibility boundary before expensive scoring/serving. The account path reuses current identity/moved-account resolution, 45-day activity policy, deactivated/suspended/deleted/unresolved rejection, discoverability/noindex/opt-out behavior, provider policy, and viewer safety.
 
-- Curated public account sets and follow packs remain curator/discovery evidence, not viewer endorsement.
-- Public featured hashtags are explicit public account metadata.
-- Public trends are weak contextual evidence and do not become durable preference without corroboration.
-- Optional provider/operator policy sources remain filter/audit evidence only.
-- Existing account eligibility provides the reusable gate for future account-candidate generation.
+Private moderation state remains filter-only and is not copied into affinity features or public explanations.
 
-## Core privacy, safety, and recovery behavior
+## Protocol/application capability architecture
 
-- Ambiguous authorization or consent fails closed.
-- Provider-private data cannot become positive recommendation affinity through the shared signal-normalization boundary.
-- Private moderation state remains filtering-only.
-- User-controlled ActivityPods/Solid Pod state may use the remote path only when storage authority is user-owned and authorization is correctly bound.
-- Provider-owned subject-level profile persistence is denied.
-- Profile persistence requires a placement manifest before I/O.
-- Source records, URLs, identifiers, timestamps, cursors, limits, grants, signatures, and provider records are bounded and runtime-validated.
-- Provider-specific semantics remain outside generic scoring contracts.
-- Unknown or moderation-oriented labels do not silently become positive interests.
-- Replay, stale-state, negation, tombstone, and duplicate handling are conservative.
-- Derived-state invalidation is journaled and repairable rather than rolling back authoritative profile state after an invalidator failure.
-- Semantic profile checkpoints detect missed invalidation work after crash/journal failure.
-- Subject deletion persists deletion intent, retries authoritative deletion during repair, and then invalidates dependent embeddings/caches.
+The repository now separates protocol semantics from application/platform features.
 
-## Completed prerequisites for candidate/onboarding work
+- ActivityPub does not imply Mastodon.
+- ATProto does not imply Bluesky.
+- ActivityPods may expose ActivityPub plus Solid/ACL semantics without ATProto.
+- A provider may expose multiple protocol bindings simultaneously.
 
-The following architectural prerequisites are no longer outstanding blockers:
+Profile/application feature support uses `supported`, `unsupported`, or `unknown`; privacy-relevant unknown state fails closed where required.
 
+Mastodon-compatible and Bluesky-compatible capability profiles are application-specific conveniences, not protocol defaults. Custom ATProto applications can supply adapter-normalized profile text without being parsed as `app.bsky.actor.profile`.
+
+Compound/camel hashtag phrase expansion is conservative and matching-only. It does not rewrite canonical hashtag identity or perform dictionary segmentation of arbitrary lowercase compounds.
+
+## Runtime provider discovery — completed in PR #122
+
+`discoverRecommendationProviderCapabilities` is a thin layer above hardened adapters. It resolves current provider/application capability observations without performing arbitrary network fetching itself.
+
+Key invariants:
+
+- provider/server identity is distinct from application/client identity;
+- protocol bindings are additive rather than flattened;
+- weak provider fingerprinting cannot become application identity/profile authority by itself;
+- conflicting strong application identity evidence fails closed;
+- same-authority capability conflicts resolve to `unknown`;
+- missing capability evidence remains `unknown`;
+- provider identity mismatches are rejected;
+- cache entries are scoped by provider + application identity, validated before reuse, and never resurrected when stale;
+- malformed/stale cache entries trigger fresh discovery rather than stale fallback;
+- cache failures do not override valid fresh discovery;
+- only explicitly classified retryable probe failures use bounded exponential backoff;
+- abort/cancellation is checked around cache/probe/retry boundaries;
+- capability discovery never substitutes for consent, OAuth authorization, ActivityPods/Solid ACL/grant authorization, state-placement policy, or candidate-native identity verification.
+
+See [`recommendation-provider-discovery.md`](recommendation-provider-discovery.md).
+
+## Provider/protocol slices already available
+
+### ActivityPub and Mastodon-compatible
+
+- generic ActivityPub normalization and public actor/outbox traversal;
+- collection/page traversal with identity, same-authority, cycle, pagination, and cursor hardening;
+- Mastodon timeline adapter paths;
+- curated account-set ingestion, legacy follow packs, public featured hashtags, and public trends;
+- account activity/current-identity/opt-out/provider-policy/viewer-safety gates.
+
+### ActivityPods/Solid
+
+- ActivityPods actor/WebID and same-Pod binding;
+- public outbox and live-notification composition;
+- grant reauthorization and public-refetch requirements;
+- user-controlled profile persistence with registration/grant/storage binding and conditional mutation;
+- explicit user-owned storage placement.
+
+ActivityPods is a user-controlled remote-storage exception, not a provider-owned personalization path.
+
+### ATProto
+
+- repository/provider record normalization;
+- strict DID, handle, NSID, record-key, AT URI, cursor, and record validation;
+- `queryLabels` and `subscribeLabels` live slices;
+- labeler verification, tombstones, expiration, stale-state protection, semantic classification/effect policy;
+- labeler discovery with explicit subscription kept separate;
+- application-specific profile parsing/capability handling.
+
+Third-party ATProto directories remain optional untrusted discovery hints and cannot create authority, consent, subscription, or positive interest merely through listing/popularity.
+
+## Completed prerequisites that must not be reimplemented
+
+The following are already satisfied and should not be renamed/rebuilt inside later onboarding phases:
+
+- consent and source authorization;
 - label semantic classification;
 - signal-effect policy;
 - idempotent signal ledger and retractions;
 - profile application orchestration;
 - normalized evidence ingestion;
+- onboarding profile bootstrap;
 - profile-to-results execution orchestration;
-- ATProto live labels;
-- Mastodon/ActivityPub live inputs;
-- curated account sets and legacy follow packs;
+- live ActivityPub/Mastodon/ATProto/ActivityPods slices described above;
 - account eligibility;
-- generic ActivityPub outbox traversal;
-- ActivityPods live outbox and user-controlled profile persistence;
-- public/user-controlled signal invariant;
-- derived-state invalidation and crash recovery;
-- storage-authority modeling;
-- local-first state-placement policy;
-- mandatory profile-persistence placement manifests.
+- derived-state invalidation and recovery;
+- storage-authority and state-placement enforcement;
+- candidate domain/source contracts;
+- cold-start candidate generation;
+- candidate eligibility/policy composition;
+- protocol/application profile capability hardening;
+- runtime provider discovery/capability resolution.
 
-These phases should not be reimplemented under onboarding-specific names.
+## Immediate next phase — Phase 4 cold-start scoring-input builder
 
-## Highest-priority remaining architectural gap
+The repository now understands:
 
-The repository understands:
+1. the user's permitted interest profile;
+2. what candidate entities exist and where they came from;
+3. which candidates are currently eligible;
+4. what protocols/application/provider capabilities are available; and
+5. how to score/rerank/explain/serve already-prepared `HybridScoreInput` values.
 
-1. what the user is interested in through profiles; and
-2. how to score/rerank/explain/serve already-prepared recommendation inputs.
+The missing bridge is to turn the current profile plus eligible normalized candidates into finite, bounded, candidate-bound scorer inputs without application-specific ad hoc feature assembly.
 
-It does not yet have a reusable first-class answer for:
+Phase 4 must:
 
-- what kinds of entities can be recommendation candidates;
-- how candidate identity is normalized across protocols;
-- where candidates come from;
-- how discovery provenance differs from user endorsement;
-- how profile interests generate useful candidates before interaction history exists;
-- how type-specific eligibility is applied before scoring;
-- how normalized candidates become the scoring inputs expected by PR #103.
+- preserve exact candidate identity while mapping to scorer-facing IDs;
+- compute deterministic cold-start features;
+- reuse existing entity, graph, embedding and ANN infrastructure where available;
+- support no behavioral history as a normal state;
+- conservatively omit/neutralize missing bandit/context/session history;
+- reject unknown candidate references, duplicate scorer identities, non-finite features, stale profile/match bindings, and mismatched feature maps;
+- remain bounded and cancellation-aware;
+- avoid exposing profile/subject/private moderation data to remote feature computation;
+- bind every scored result back to exactly one normalized candidate.
 
-That is the immediate dependency before a higher-level first-session onboarding orchestrator.
+See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledger and required Phase 4 test matrix.
 
-## Post-PR #111 execution roadmap
+## Remaining roadmap after Phase 4
 
-The detailed acceptance criteria and non-goals live in [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md).
+1. **Phase 5 — First-session recommendation orchestrator**
+   - onboarding bootstrap -> candidate discovery -> capability-aware source use -> eligibility -> Phase 4 scoring inputs -> existing execution -> bounded recommendations.
+2. **Phase 6 — Recommendation action-plan contracts**
+   - non-executable protocol-neutral plans; every provider mutation remains explicit and user-confirmed.
+3. **Phase 7 — Onboarding lifecycle and refresh**
+   - edit/retract/rerun/expire/refresh/resume using existing ledger/invalidation/recovery machinery.
+4. **Phase 8 — Reference onboarding integration and UX examples**
+   - demonstrate stable engine contracts while keeping UI/framework choices outside the core.
 
-The dependency order is:
+## Other remaining hardening/integration work
 
-1. **Candidate domain and candidate-source contracts**
-   - normalized multi-kind candidate identity;
-   - bounded provenance and verification state;
-   - protocol-neutral candidate-source adapters.
-2. **Cold-start candidate generation**
-   - profile-to-candidate matching without requiring behavioral history;
-   - reuse existing curated/public discovery sources;
-   - ATProto accounts/feeds/lists/starter packs/labelers behind verification boundaries.
-3. **Candidate eligibility and policy composition**
-   - reuse existing account eligibility;
-   - define gates for posts, feeds, lists, starter packs, labelers, communities, hashtags/topics, and instances;
-   - keep viewer-private moderation state filtering-only.
-4. **Cold-start scoring-input builder**
-   - transform profile plus eligible normalized candidates into deterministic/entity/graph/embedding inputs for the existing hybrid scorer;
-   - provide conservative no-history fallbacks.
-5. **First-session recommendation orchestrator**
-   - onboarding bootstrap -> candidate discovery -> eligibility -> scoring inputs -> existing execution orchestrator -> bounded recommendations.
-6. **Recommendation action-plan contracts**
-   - protocol-neutral plans for follow/subscribe/join/follow-hashtag/register operations;
-   - application executed, explicitly user-confirmed.
-7. **Onboarding lifecycle and refresh**
-   - edit selections, rerun, retract, expire, resume, refresh, and invalidate derived state through existing recovery machinery.
-8. **Reference onboarding integration and UX examples**
-   - demonstrate the engine contracts without making UI or framework choices part of the recommendation core.
+Outside the primary candidate/onboarding dependency chain:
 
-A repository-driven correctness, privacy, or security finding may change this order, but the change should be documented before implementation.
-
-## Other remaining work
-
-The candidate/onboarding sequence is the primary product-architecture dependency, but production hardening still includes:
-
-- reference device-local persistence adapters such as IndexedDB/SQLite or equivalent;
-- broader generic Solid Pod reference composition beyond the ActivityPods-specific adapter;
+- reference IndexedDB/SQLite or equivalent device-local persistence;
+- broader generic Solid Pod reference composition beyond ActivityPods-specific support;
+- verified cross-protocol equivalence where independently provable, without privacy laundering;
 - privacy-safe health/freshness observability;
 - property/fuzz/replay/concurrency/cancellation/reconnect tests where applicable;
 - benchmarks and performance budgets;
 - examples and compatibility guidance;
 - release automation;
-- optional operator HTTP/workers for deployments that choose centralized infrastructure, without permitting provider-owned subject-level personalization state.
+- optional operator HTTP/workers restricted to policy-permitted state and never provider-owned subject personalization.
 
-Additional live protocol clients should be added when they plug into or unlock the candidate architecture, not simply to accumulate integrations.
+Additional integrations should plug into the established provider capability, candidate, authorization, and privacy boundaries rather than accumulating special cases.
 
-## Definition of production completeness
+## Production-completeness boundary
 
-The project should not be described as a complete recommendation product or turnkey hosted service until it has:
+The project should not be described as a complete turnkey recommendation product until it has at least:
 
-- a first-class multi-kind candidate domain;
-- tested cold-start candidate generation;
-- explicit eligibility policy for every served candidate kind;
-- a reusable scoring-input builder connecting candidates to the existing execution orchestrator;
-- end-to-end first-session recommendation composition;
-- correct lifecycle/retraction behavior after onboarding edits and source changes;
-- at least one tested device-local persistence reference path;
-- a tested user-controlled remote persistence path (the ActivityPods path exists; broader Solid reference coverage remains desirable);
+- the Phase 4 scoring-input bridge;
+- Phase 5 end-to-end first-session composition;
+- correct action/lifecycle contracts for the intended integrations;
+- at least one reference device-local persistence path;
 - privacy-safe operational health behavior;
-- replay, concurrency, cancellation, reconnect, and crash-recovery coverage appropriate to stateful/networked adapters;
-- accurate integrator documentation and examples.
+- appropriate replay/concurrency/cancellation/reconnect/crash-recovery coverage;
+- accurate integrator examples and compatibility guidance.
 
-A provider-owned durable server is not a production-completeness requirement for subject-level personalization and is prohibited by the current storage-authority policy. Optional operator infrastructure may hold only policy-permitted state such as aggregate statistics or infrastructure that does not assume authority over a user's recommendation profile.
-
-Today the repository is a substantial, reusable recommendation-engine library with strong privacy/state-placement enforcement, real ActivityPub/ATProto/ActivityPods integration slices, onboarding profile seeding, durable derived-state recovery, and a profile-to-serving execution orchestrator. Its largest remaining architectural gap is reusable candidate discovery and cold-start composition between the profile and scoring layers.
+A provider-owned durable server is not a production-completeness requirement for subject-level personalization and remains prohibited by current storage-authority policy.
