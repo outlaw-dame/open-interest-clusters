@@ -26,6 +26,7 @@ export * from "./recommendation/candidate-domain.js";
 export * from "./recommendation/candidate-source-adapter.js";
 export * from "./recommendation/cold-start-candidate-generation.js";
 export * from "./recommendation/cold-start-scoring-input-builder.js";
+export * from "./recommendation/first-session-orchestrator.js";
 export * from "./recommendation/curated-account-set-candidate-source.js";
 export * from "./recommendation/candidate-eligibility.js";
 export * from "./recommendation/protocol-source-contexts.js";
