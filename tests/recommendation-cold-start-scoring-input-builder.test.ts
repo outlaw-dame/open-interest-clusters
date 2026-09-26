@@ -301,12 +301,16 @@ test("Phase 4 feature construction is deterministic despite resolver completion 
 });
 
 test("Phase 4 enforces bounded candidate fan-out before resolver work", async () => {
-  const item = generated();
+  const first = generated();
+  const second = generated("did:plc:other");
   let calls = 0;
 
   await assert.rejects(
     () => buildColdStartScoringInput(
-      { profile: PROFILE, candidates: [bound(PROFILE, item)] },
+      {
+        profile: PROFILE,
+        candidates: [bound(PROFILE, first), bound(PROFILE, second)]
+      },
       {
         maxCandidates: 1,
         resolveFeatures() {
@@ -314,27 +318,9 @@ test("Phase 4 enforces bounded candidate fan-out before resolver work", async ()
           return {};
         }
       }
-    ).then(async () => {
-      await assert.rejects(
-        () => buildColdStartScoringInput(
-          {
-            profile: PROFILE,
-            candidates: [bound(PROFILE, item), bound(PROFILE, generated("did:plc:other"))]
-          },
-          {
-            maxCandidates: 1,
-            resolveFeatures() {
-              calls += 1;
-              return {};
-            }
-          }
-        ),
-        /candidate limit exceeded/u
-      );
-      throw new Error("expected outer rejection sentinel");
-    }),
-    /expected outer rejection sentinel/u
+    ),
+    /candidate limit exceeded/u
   );
 
-  assert.equal(calls, 1);
+  assert.equal(calls, 0);
 });
