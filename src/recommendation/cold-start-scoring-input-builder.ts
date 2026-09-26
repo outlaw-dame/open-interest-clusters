@@ -92,7 +92,10 @@ function sameFingerprint(
 }
 
 function deterministicScore(candidate: RecommendationColdStartGeneratedCandidate): number {
-  const base = candidate.match.profileAffinityWeight;
+  const base = finiteNumber(
+    candidate.match.profileAffinityWeight,
+    "Invalid cold-start profile affinity weight."
+  );
   const languageMultiplier = candidate.match.languageCompatibility === "incompatible" ? 0 :
     candidate.match.languageCompatibility === "compatible" ? 1 :
     0.85;
@@ -179,8 +182,11 @@ export async function buildColdStartScoringInput(
   const embeddingSimilarity = new Map<string, number>();
   const candidateByScoringId = new Map<string, RecommendationColdStartGeneratedCandidate["candidate"]>();
   const seen = new Set<string>();
+  const orderedCandidates = [...context.candidates].sort((left, right) =>
+    left.generated?.candidate?.candidateId?.localeCompare(right.generated?.candidate?.candidateId ?? "") ?? 0
+  );
 
-  for (const item of context.candidates) {
+  for (const item of orderedCandidates) {
     if (item === null || typeof item !== "object") {
       throw new TypeError("Invalid cold-start scoring candidate.");
     }
@@ -208,9 +214,7 @@ export async function buildColdStartScoringInput(
     if (typeof options.resolveFeatures !== "function") {
       throw new TypeError("Invalid cold-start scoring feature resolver.");
     }
-    const ordered = [...context.candidates].sort((left, right) =>
-      left.generated.candidate.candidateId.localeCompare(right.generated.candidate.candidateId)
-    );
+    const ordered = orderedCandidates;
     const resolved = new Array<RecommendationColdStartScoringFeatureSet | undefined>(ordered.length);
     let nextIndex = 0;
     const workerCount = Math.min(concurrency, ordered.length);
