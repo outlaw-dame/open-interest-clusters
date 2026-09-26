@@ -2,7 +2,7 @@
 
 A portable, privacy-preserving recommendation and semantic-interest substrate for local-first applications, federated services, and protocol-neutral recommendation systems.
 
-> **Status:** active pre-1.0 library development. The repository now includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, and runtime provider discovery. The next architectural phase is the cold-start scoring-input builder that connects eligible normalized candidates to the existing execution/scoring pipeline.
+> **Status:** active pre-1.0 library development. The repository includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, runtime provider discovery, and the cold-start scoring-input bridge. The next architectural phase is the first-session recommendation orchestrator that composes these pieces end to end.
 
 ## Design principles
 
@@ -103,7 +103,8 @@ Dataset and canonical normalization
   -> normalized candidate identity/provenance
   -> runtime provider/application capability resolution
   -> candidate eligibility / provider policy / viewer safety
-  -> cold-start scoring-input construction              [NEXT]
+  -> cold-start scoring-input construction              [IMPLEMENTED]
+  -> first-session recommendation orchestration          [NEXT]
   -> existing hybrid scoring / ANN / graph / embeddings
   -> reranking, explanations, and bounded serving
 ```
@@ -119,8 +120,8 @@ The candidate/onboarding dependency chain is now:
 3. **Phase 3 — Candidate eligibility and policy composition — COMPLETE** (`#117`)
 4. **Phase 3.5 — Protocol/application profile capability hardening — COMPLETE** (`#120`, `#121`)
 5. **Phase 3.6 — Runtime provider discovery/capability resolution — COMPLETE** (`#122`, with late-review hardening in the immediate follow-up)
-6. **Phase 4 — Cold-start scoring-input builder — NEXT**
-7. **Phase 5 — First-session recommendation orchestrator — PENDING**
+6. **Phase 4 — Cold-start scoring-input builder — COMPLETE**
+7. **Phase 5 — First-session recommendation orchestrator — NEXT**
 8. **Phase 6 — Generalized recommendation action-plan contracts — PENDING** (existing hashtag-follow plan already implemented)
 9. **Phase 7 — Onboarding lifecycle and refresh — PENDING**
 10. **Phase 8 — Reference onboarding integration and UX examples — PENDING**
@@ -135,7 +136,7 @@ See:
 - [`docs/candidate-roadmap-safety-amendments.md`](docs/candidate-roadmap-safety-amendments.md) for normative privacy/safety amendments;
 - [`docs/recommendation-provider-discovery.md`](docs/recommendation-provider-discovery.md) for the runtime capability layer.
 
-## Immediate next phase: cold-start scoring-input builder
+## Immediate next phase: first-session recommendation orchestrator
 
 The next implementation must turn the current local/user-owned profile plus already-eligible normalized candidates into the bounded `HybridScoreInput` structures consumed by the existing execution orchestrator.
 

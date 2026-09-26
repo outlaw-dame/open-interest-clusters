@@ -52,8 +52,8 @@ Subject-level recommendation state is permitted by policy only in device-owned l
 | Candidate eligibility/policy composition | **Implemented** |
 | Protocol/application profile capability hardening | **Implemented** |
 | Runtime provider discovery/capability resolution | **Implemented; late-review authority/cache/freshness hardening applied in follow-up** |
-| Cold-start scoring-input builder | **Not yet implemented — next phase** |
-| First-session recommendation orchestration | Not yet implemented; depends on scoring-input builder |
+| Cold-start scoring-input builder | **Implemented on current Phase 4 branch** |
+| First-session recommendation orchestration | **Not yet implemented — next phase** |
 | Generalized recommendation action-plan contracts | Existing hashtag-follow plan implemented; generalized candidate-bound action plans not yet implemented |
 | Onboarding lifecycle/refresh composition | Not yet implemented as the higher-level candidate/onboarding lifecycle |
 | Reference onboarding integration/UX examples | Not yet implemented |
@@ -95,13 +95,15 @@ prepared scoring inputs
   -> bounded candidate serving
 ```
 
-The remaining reusable bridge is therefore now:
+The reusable scoring bridge is now implemented:
 
 ```text
 profile + eligible normalized candidates
-  -> cold-start scoring-input construction   [NEXT]
+  -> cold-start scoring-input construction   [IMPLEMENTED]
   -> existing execution orchestrator
 ```
+
+The next missing composition layer is the end-to-end first-session orchestrator.
 
 PR #103 intentionally does not fetch candidates or infer provider semantics. That separation remains correct.
 
@@ -230,7 +232,7 @@ The following are already satisfied and should not be renamed/rebuilt inside lat
 - protocol/application profile capability hardening;
 - runtime provider discovery/capability resolution.
 
-## Immediate next phase — Phase 4 cold-start scoring-input builder
+## Completed current phase — Phase 4 cold-start scoring-input builder
 
 The repository now understands:
 
@@ -240,7 +242,7 @@ The repository now understands:
 4. what protocols/application/provider capabilities are available; and
 5. how to score/rerank/explain/serve already-prepared `HybridScoreInput` values.
 
-The missing bridge is to turn the current profile plus eligible normalized candidates into finite, bounded, candidate-bound scorer inputs without application-specific ad hoc feature assembly.
+The bridge now turns the current profile plus eligible normalized candidates into finite, bounded, candidate-bound scorer inputs without application-specific ad hoc feature assembly.
 
 Phase 4 must:
 
