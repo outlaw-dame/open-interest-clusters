@@ -36,8 +36,8 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 | Phase 3 — Candidate eligibility and policy composition | **Complete** | PR #117; superseded review work from #118/#119 folded into final implementation |
 | Phase 3.5 — Protocol/application capability hardening | **Complete** | PR #120 and PR #121 |
 | Phase 3.6 — Runtime provider discovery/capability resolution | **Complete; late-review hardening applied** | PR #122 plus follow-up authority/cache/freshness fixes |
-| Phase 4 — Cold-start scoring-input builder | **Next** | Not yet implemented as the reusable candidate/profile → scorer-input bridge |
-| Phase 5 — First-session recommendation orchestrator | Pending | Depends on Phase 4 |
+| Phase 4 — Cold-start scoring-input builder | **Complete on current Phase 4 branch** | Candidate-bound scoring bridge with stale-profile protection, bounded optional entity/graph/embedding enrichment, cancellation, and reversible scorer bindings |
+| Phase 5 — First-session recommendation orchestrator | **Next** | Compose onboarding, discovery, eligibility, Phase 4 scoring input, existing execution, explanations, and serving |
 | Phase 6 — Generalized recommendation action-plan contracts | Pending | Existing hashtag-follow action-plan prerequisite is implemented; generalized candidate-bound plans remain |
 | Phase 7 — Onboarding lifecycle and refresh | Pending | Reuses existing retraction/invalidation/recovery architecture |
 | Phase 8 — Reference onboarding integration and UX examples | Pending | Depends on stable engine contracts |
@@ -97,7 +97,7 @@ The repository already exports the versioned `RecommendationHashtagFollowPlan` a
 
 ## Phase 4 — Cold-start scoring-input builder
 
-Phase 4 is now the highest-priority architectural gap.
+Phase 4 is implemented on the current Phase 4 branch. The next architectural priority is Phase 5 end-to-end first-session orchestration.
 
 ### Purpose
 
@@ -145,6 +145,10 @@ At minimum:
 - deterministic result construction independent of asynchronous resolver completion order.
 
 ## Remaining roadmap after Phase 4
+
+Phase 4 now provides a reusable candidate/profile → `HybridScoreInput` bridge with exact candidate binding, profile fingerprint freshness checks, eligibility preconditions, finite feature validation, bounded/cancellable optional feature resolution, and no-history-safe behavior.
+
+
 
 ### Phase 5 — First-session recommendation orchestrator
 
