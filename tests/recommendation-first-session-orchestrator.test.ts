@@ -66,7 +66,7 @@ function source(items: readonly RecommendationCandidate[]): RecommendationCandid
     transport: "local",
     privacy: {
       sourceVisibility: "public",
-      accessBasis: "public",
+      accessBasis: "atproto_public_repo",
       containsPrivateData: false,
       containsThirdPartyData: false,
       serverSideProcessing: false,
