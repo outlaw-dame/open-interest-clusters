@@ -30,7 +30,7 @@ function profileEntry(
     negativeSignalCount: score < 0 ? 1 : 0,
     neutralSignalCount: score === 0 ? 1 : 0,
     privacyBoundaries: ["local_only"],
-    protocols: ["manual"],
+    protocols: ["app_local"],
     sourceVisibilities: ["local_only"],
     updatedAt: NOW
   };
