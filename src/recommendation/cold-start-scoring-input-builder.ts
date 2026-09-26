@@ -1,5 +1,6 @@
 import type { ClusterEntityMatch } from "../entities/types.js";
 import type { HybridScoreInput } from "../scoring/hybrid.js";
+import type { RecommendationCandidate } from "./candidate-domain.js";
 import type { RecommendationCandidateEligibilityResult } from "./candidate-eligibility.js";
 import type { RecommendationColdStartGeneratedCandidate } from "./cold-start-candidate-generation.js";
 import {
@@ -54,6 +55,8 @@ const DEFAULT_MAX_CANDIDATES = 500;
 const MAX_CANDIDATES = 5_000;
 const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 16;
+const MIN_ADDITIVE_FEATURE = -1;
+const MAX_ADDITIVE_FEATURE = 1;
 
 function assertNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
@@ -81,6 +84,14 @@ function finiteNumber(value: unknown, message: string): number {
   return value;
 }
 
+function boundedFeature(value: unknown, message: string): number {
+  const normalized = finiteNumber(value, message);
+  if (normalized < MIN_ADDITIVE_FEATURE || normalized > MAX_ADDITIVE_FEATURE) {
+    throw new RangeError(message);
+  }
+  return normalized;
+}
+
 function sameFingerprint(
   left: RecommendationEmbeddingSourceFingerprint,
   right: RecommendationEmbeddingSourceFingerprint
@@ -89,6 +100,26 @@ function sameFingerprint(
     left.profileUpdatedAt === right.profileUpdatedAt &&
     left.profileSignalCount === right.profileSignalCount &&
     left.profileDigest === right.profileDigest;
+}
+
+function candidateSnapshotKey(candidate: RecommendationCandidate): string {
+  return JSON.stringify({
+    candidateId: candidate.candidateId,
+    kind: candidate.kind,
+    protocol: candidate.protocol,
+    nativeId: candidate.nativeId,
+    provider: candidate.provider ?? null,
+    uri: candidate.uri ?? null,
+    verification: candidate.verification,
+    availability: candidate.availability,
+    observedAt: candidate.observedAt,
+    metadata: candidate.metadata,
+    provenance: candidate.provenance
+  });
+}
+
+function sameCandidateSnapshot(left: RecommendationCandidate, right: RecommendationCandidate): boolean {
+  return candidateSnapshotKey(left) === candidateSnapshotKey(right);
 }
 
 function deterministicScore(candidate: RecommendationColdStartGeneratedCandidate): number {
@@ -111,7 +142,7 @@ function normalizeEntityMatch(
   if (value.clusterId !== expectedCandidateId) {
     throw new TypeError("Cold-start entity match references an unknown candidate.");
   }
-  const score = finiteNumber(value.score, "Invalid cold-start entity score.");
+  const score = boundedFeature(value.score, "Invalid cold-start entity score.");
   if (!Array.isArray(value.matchedEntityIds) || !Array.isArray(value.relationHits)) {
     throw new TypeError("Invalid cold-start entity match.");
   }
@@ -134,7 +165,7 @@ function normalizeFeatureSet(
   const entityMatch = normalizeEntityMatch(value.entityMatch, expectedCandidateId);
   if (entityMatch !== undefined) normalized.entityMatch = entityMatch;
   if (value.graphBoost !== undefined) {
-    normalized.graphBoost = finiteNumber(value.graphBoost, "Invalid cold-start graph boost.");
+    normalized.graphBoost = boundedFeature(value.graphBoost, "Invalid cold-start graph boost.");
   }
   if (value.embeddingSimilarity !== undefined) {
     const similarity = finiteNumber(value.embeddingSimilarity, "Invalid cold-start embedding similarity.");
@@ -199,6 +230,9 @@ export async function buildColdStartScoringInput(
     if (!eligibility.eligible || eligibility.candidate.candidateId !== candidate.candidateId) {
       throw new TypeError("Cold-start scoring requires an eligible candidate bound to the same identity.");
     }
+    if (!sameCandidateSnapshot(eligibility.candidate, candidate)) {
+      throw new TypeError("Cold-start scoring candidate eligibility binding is stale.");
+    }
     if (!sameFingerprint(item.profileFingerprint, profileFingerprint)) {
       throw new TypeError("Cold-start scoring candidate profile binding is stale.");
     }
@@ -217,28 +251,40 @@ export async function buildColdStartScoringInput(
     const ordered = orderedCandidates;
     const resolved = new Array<RecommendationColdStartScoringFeatureSet | undefined>(ordered.length);
     let nextIndex = 0;
+    let failure: unknown;
+    let failed = false;
     const workerCount = Math.min(concurrency, ordered.length);
     const workers = Array.from({ length: workerCount }, async () => {
-      while (true) {
-        assertNotAborted(context.signal);
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= ordered.length) return;
-        const item = ordered[index];
-        if (item === undefined) return;
-        const candidateId = item.generated.candidate.candidateId;
-        const raw = await options.resolveFeatures!({
-          candidateId,
-          candidate: item.generated.candidate,
-          match: item.generated.match,
-          profileFingerprint,
-          ...(context.signal === undefined ? {} : { signal: context.signal })
-        });
-        assertNotAborted(context.signal);
-        resolved[index] = normalizeFeatureSet(raw, candidateId);
+      while (!failed) {
+        try {
+          assertNotAborted(context.signal);
+          const index = nextIndex;
+          nextIndex += 1;
+          if (index >= ordered.length) return;
+          const item = ordered[index];
+          if (item === undefined) return;
+          const candidateId = item.generated.candidate.candidateId;
+          const raw = await options.resolveFeatures!({
+            candidateId,
+            candidate: item.generated.candidate,
+            match: item.generated.match,
+            profileFingerprint,
+            ...(context.signal === undefined ? {} : { signal: context.signal })
+          });
+          assertNotAborted(context.signal);
+          if (failed) return;
+          resolved[index] = normalizeFeatureSet(raw, candidateId);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            failure = error;
+          }
+          return;
+        }
       }
     });
     await Promise.all(workers);
+    if (failed) throw failure;
 
     for (let index = 0; index < ordered.length; index += 1) {
       const item = ordered[index];
