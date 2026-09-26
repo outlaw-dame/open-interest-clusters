@@ -34,7 +34,7 @@ function candidate(kind: RecommendationCandidateKind): RecommendationCandidate {
       kind: kind === "topic" ? "local_catalog" : "provider_discovery",
       sourceId: "test-source",
       observedAt: OBSERVED_AT,
-      trustBoundary: kind === "topic" ? "local_only" : "same_provider"
+      trustBoundary: kind === "topic" ? "user_owned" : "same_provider"
     }]
   };
 }
@@ -70,52 +70,32 @@ test("Phase 6 maps supported candidate kinds to non-executable explicit-confirma
 test("Phase 6 rejects unsupported post and topic mutation plans", () => {
   for (const kind of ["post", "topic"] as const) {
     const value = candidate(kind);
-    assert.throws(
-      () => createRecommendationCandidateActionPlan({ candidate: value, eligibility: eligible(value), createdAt: CREATED_AT }),
-      /no mutation action-plan contract/u
-    );
+    assert.throws(() => createRecommendationCandidateActionPlan({ candidate: value, eligibility: eligible(value), createdAt: CREATED_AT }), /no mutation action-plan contract/u);
   }
 });
 
 test("Phase 6 fails closed for ineligible or non-explicit eligibility", () => {
   const value = candidate("account");
-  assert.throws(() => createRecommendationCandidateActionPlan({
-    candidate: value,
-    eligibility: { ...eligible(value), eligible: false, reasonCodes: ["candidate_unavailable"] },
-    createdAt: CREATED_AT
-  }), /requires current eligibility/u);
-  assert.throws(() => createRecommendationCandidateActionPlan({
-    candidate: value,
-    eligibility: { ...eligible(value), reasonCodes: [] },
-    createdAt: CREATED_AT
-  }), /requires explicit eligible evidence/u);
+  assert.throws(() => createRecommendationCandidateActionPlan({ candidate: value, eligibility: { ...eligible(value), eligible: false, reasonCodes: ["candidate_unavailable"] }, createdAt: CREATED_AT }), /requires current eligibility/u);
+  assert.throws(() => createRecommendationCandidateActionPlan({ candidate: value, eligibility: { ...eligible(value), reasonCodes: [] }, createdAt: CREATED_AT }), /requires explicit eligible evidence/u);
 });
 
 test("Phase 6 binds eligibility to the exact candidate snapshot", () => {
   const value = candidate("account");
   const changed: RecommendationCandidate = { ...value, observedAt: "2026-09-26T06:00:30.000Z" };
-  assert.throws(
-    () => createRecommendationCandidateActionPlan({ candidate: value, eligibility: eligible(changed), createdAt: CREATED_AT }),
-    /exact candidate snapshot/u
-  );
+  assert.throws(() => createRecommendationCandidateActionPlan({ candidate: value, eligibility: eligible(changed), createdAt: CREATED_AT }), /exact candidate snapshot/u);
 });
 
 test("Phase 6 rejects eligibility timestamps newer than the action plan", () => {
   const value = candidate("account");
-  assert.throws(() => createRecommendationCandidateActionPlan({
-    candidate: value,
-    eligibility: { ...eligible(value), evaluatedAt: "2026-09-26T06:03:00.000Z" },
-    createdAt: CREATED_AT
-  }), /eligibility cannot be newer/u);
+  assert.throws(() => createRecommendationCandidateActionPlan({ candidate: value, eligibility: { ...eligible(value), evaluatedAt: "2026-09-26T06:03:00.000Z" }, createdAt: CREATED_AT }), /eligibility cannot be newer/u);
 });
 
 test("Phase 6 bounds starter-pack expansion and scopes the limit to starter packs", () => {
   const pack = candidate("starter_pack");
   assert.equal(createRecommendationCandidateActionPlan({ candidate: pack, eligibility: eligible(pack), createdAt: CREATED_AT }).maxStarterPackMembers, 100);
   assert.equal(createRecommendationCandidateActionPlan({ candidate: pack, eligibility: eligible(pack), createdAt: CREATED_AT, maxStarterPackMembers: 250 }).maxStarterPackMembers, 250);
-  for (const invalid of [0, 1001, 1.5, Number.NaN]) {
-    assert.throws(() => createRecommendationCandidateActionPlan({ candidate: pack, eligibility: eligible(pack), createdAt: CREATED_AT, maxStarterPackMembers: invalid }), /starter-pack action limit/u);
-  }
+  for (const invalid of [0, 1001, 1.5, Number.NaN]) assert.throws(() => createRecommendationCandidateActionPlan({ candidate: pack, eligibility: eligible(pack), createdAt: CREATED_AT, maxStarterPackMembers: invalid }), /starter-pack action limit/u);
   const account = candidate("account");
   assert.throws(() => createRecommendationCandidateActionPlan({ candidate: account, eligibility: eligible(account), createdAt: CREATED_AT, maxStarterPackMembers: 10 }), /only valid for starter-pack/u);
 });
