@@ -296,7 +296,7 @@ test("Phase 4 feature construction is deterministic despite resolver completion 
 
   assert.deepEqual(
     [...(result.scoringInput.graphBoost?.keys() ?? [])],
-    [a.candidate.candidateId, b.candidate.candidateId]
+    [a.candidate.candidateId, b.candidate.candidateId].sort()
   );
 });
 
