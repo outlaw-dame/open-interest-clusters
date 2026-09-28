@@ -49,22 +49,4 @@ jobs:
         run: pnpm validate:dataset
 
       - name: Run tests
-        id: tests
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          pnpm test 2>&1 | tee test-output.log
-
-      - name: Upload test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-diagnostics
-          path: test-output.log
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Fail when tests fail
-        if: steps.tests.outcome == 'failure'
-        run: exit 1
+        run: pnpm test
