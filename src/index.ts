@@ -23,6 +23,7 @@ export * from "./recommendation/consent.js";
 export * from "./recommendation/consent-enforcement.js";
 export * from "./recommendation/source-adapter.js";
 export * from "./recommendation/candidate-domain.js";
+export * from "./recommendation/candidate-action-plan.js";
 export * from "./recommendation/candidate-source-adapter.js";
 export * from "./recommendation/cold-start-candidate-generation.js";
 export * from "./recommendation/cold-start-scoring-input-builder.js";
