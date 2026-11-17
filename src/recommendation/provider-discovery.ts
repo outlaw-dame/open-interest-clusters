@@ -27,7 +27,7 @@ export const RECOMMENDATION_PROVIDER_CAPABILITIES = [
   "blocks",
   "mutes",
   "follows",
-  "collections",
+  "communities",
   "user_owned_storage",
   "acl_authorization"
 ] as const;
