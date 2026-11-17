@@ -33,7 +33,7 @@ These requirements preserve the existing project boundary: recommendation may su
 | list | `lists` |
 | starter pack | `starter_packs` |
 | labeler | `labels` |
-| community | `collections` |
+| community | `communities` |
 | hashtag | `hashtags` |
 | instance | none, but the verified protocol binding is still required |
 

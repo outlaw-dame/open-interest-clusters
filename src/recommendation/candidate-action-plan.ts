@@ -16,7 +16,7 @@ const DEFAULT_MAX_STARTER_PACK_MEMBERS = 100;
 const MAX_STARTER_PACK_MEMBERS = 1_000;
 const MAX_IDENTITY_LENGTH = 2_048;
 const ACTION_BY_KIND: Readonly<Partial<Record<RecommendationCandidateKind, RecommendationCandidateAction>>> = Object.freeze({ account: "follow_account", feed: "subscribe_feed", list: "subscribe_list", starter_pack: "expand_starter_pack", labeler: "subscribe_labeler", community: "follow_community", hashtag: "follow_hashtag", instance: "open_instance_signup" });
-const CAPABILITY_BY_KIND: Readonly<Partial<Record<RecommendationCandidateKind, RecommendationProviderCapability>>> = Object.freeze({ account: "follows", feed: "feeds", list: "lists", starter_pack: "starter_packs", labeler: "labels", community: "collections", hashtag: "hashtags" });
+const CAPABILITY_BY_KIND: Readonly<Partial<Record<RecommendationCandidateKind, RecommendationProviderCapability>>> = Object.freeze({ account: "follows", feed: "feeds", list: "lists", starter_pack: "starter_packs", labeler: "labels", community: "communities", hashtag: "hashtags" });
 
 function starterPackLimit(value: unknown): number { if (value === undefined) return DEFAULT_MAX_STARTER_PACK_MEMBERS; if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_STARTER_PACK_MEMBERS) throw new TypeError("Invalid recommendation starter-pack action limit."); return value; }
 function identityText(value: unknown): string { if (typeof value !== "string" || value.length === 0 || value.length > MAX_IDENTITY_LENGTH || value.trim() !== value || hasUnsafeControlCharacter(value)) throw new TypeError("Invalid recommendation starter-pack member identity."); return value; }

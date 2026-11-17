@@ -1,7 +1,7 @@
 import type { RecommendationCandidateKind, RecommendationProviderCapability, RecommendationProviderDescriptor, RecommendationProtocol } from "../src/index.js";
 
 const CAPABILITY_BY_KIND: Readonly<Partial<Record<RecommendationCandidateKind, RecommendationProviderCapability>>> = {
-  account: "follows", feed: "feeds", list: "lists", starter_pack: "starter_packs", labeler: "labels", community: "collections", hashtag: "hashtags"
+  account: "follows", feed: "feeds", list: "lists", starter_pack: "starter_packs", labeler: "labels", community: "communities", hashtag: "hashtags"
 };
 
 export function actionProvider(kind: RecommendationCandidateKind, protocol: RecommendationProtocol = "activitypub"): RecommendationProviderDescriptor {
