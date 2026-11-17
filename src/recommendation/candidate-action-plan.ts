@@ -1,5 +1,7 @@
 import { normalizeRecommendationCandidate, type RecommendationCandidate, type RecommendationCandidateKind } from "./candidate-domain.js";
 import type { RecommendationCandidateEligibilityResult } from "./candidate-eligibility.js";
+import type { RecommendationCuratedAccountMembershipState } from "./activitypub-curated-account-sets.js";
+import { createRecommendationCuratedAccountSetSourceId } from "./curated-account-set-candidate-source.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import { recommendationProviderCapabilityState, type RecommendationProviderCapability, type RecommendationProviderDescriptor } from "./provider-discovery.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
@@ -7,9 +9,14 @@ import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 export const RECOMMENDATION_CANDIDATE_ACTION_PLAN_SCHEMA_VERSION = "recommendation-candidate-action-plan.v1" as const;
 export const RECOMMENDATION_CANDIDATE_ACTIONS = ["follow_account", "subscribe_feed", "subscribe_list", "expand_starter_pack", "subscribe_labeler", "follow_community", "follow_hashtag", "open_instance_signup"] as const;
 export type RecommendationCandidateAction = typeof RECOMMENDATION_CANDIDATE_ACTIONS[number];
-export interface RecommendationCandidateActionPlanInput { candidate: RecommendationCandidate; eligibility: RecommendationCandidateEligibilityResult; provider: RecommendationProviderDescriptor; createdAt: string; maxStarterPackMembers?: number; starterPackMembers?: readonly RecommendationCandidateEligibilityResult[]; }
-/** One starter-pack member, bound to the account identity its eligibility result resolved. */
-export interface RecommendationStarterPackMemberBinding { candidateId: string; accountId: string; accountUri: string; eligibilityEvaluatedAt: string; }
+export interface RecommendationCandidateActionPlanInput { candidate: RecommendationCandidate; eligibility: RecommendationCandidateEligibilityResult; provider: RecommendationProviderDescriptor; createdAt: string; maxStarterPackMembers?: number; starterPackMembers?: readonly RecommendationStarterPackMemberInput[]; }
+/**
+ * One starter-pack member as supplied by the caller: its eligibility result plus the curated-set
+ * membership state it was read under. The consent fields are caller-supplied and unsigned.
+ */
+export interface RecommendationStarterPackMemberInput { eligibility: RecommendationCandidateEligibilityResult; consent: { state: RecommendationCuratedAccountMembershipState; setProvider: string; setId: string; observedAt: string }; }
+/** One starter-pack member, bound to the account identity its eligibility result resolved and to its accepted membership. */
+export interface RecommendationStarterPackMemberBinding { candidateId: string; accountId: string; accountUri: string; eligibilityEvaluatedAt: string; consentState: "accepted"; consentSetSourceId: string; consentObservedAt: string; }
 export interface RecommendationCandidateActionPlan { schemaVersion: typeof RECOMMENDATION_CANDIDATE_ACTION_PLAN_SCHEMA_VERSION; candidate: RecommendationCandidate; action: RecommendationCandidateAction; createdAt: string; eligibilityEvaluatedAt: string; providerCapabilitiesExpireAt: string; requiresExplicitUserConfirmation: true; requiresIdentityRevalidation: true; requiresEligibilityRevalidation: true; requiresCapabilityRevalidation: true; executable: false; maxStarterPackMembers?: number; members?: readonly RecommendationStarterPackMemberBinding[]; }
 
 const DEFAULT_MAX_STARTER_PACK_MEMBERS = 100;
@@ -26,7 +33,10 @@ function bindStarterPackMembers(value: unknown, limit: number, createdAt: string
   const seenAccounts = new Set<string>(); const seenCandidates = new Set<string>();
   const bindings = value.map((entry: unknown): RecommendationStarterPackMemberBinding => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new TypeError("Invalid recommendation starter-pack member eligibility.");
-    const result = entry as RecommendationCandidateEligibilityResult;
+    const { eligibility, consent } = entry as RecommendationStarterPackMemberInput;
+    if (eligibility === null || typeof eligibility !== "object" || Array.isArray(eligibility)) throw new TypeError("Invalid recommendation starter-pack member eligibility.");
+    if (consent === null || typeof consent !== "object" || Array.isArray(consent)) throw new TypeError("Invalid recommendation starter-pack member consent.");
+    const result = eligibility;
     const member = normalizeRecommendationCandidate(result.candidate);
     if (member.kind !== "account") throw new TypeError("Recommendation starter-pack members must be account candidates.");
     if (result.eligible !== true || !Array.isArray(result.reasonCodes) || result.reasonCodes.length !== 1 || result.reasonCodes[0] !== "eligible") throw new TypeError("Recommendation starter-pack member requires explicit eligible evidence.");
@@ -36,9 +46,16 @@ function bindStarterPackMembers(value: unknown, limit: number, createdAt: string
     const evaluatedAt = normalizeStrictRfc3339Timestamp(result.evaluatedAt, "Invalid recommendation starter-pack member eligibility timestamp.");
     if (Date.parse(evaluatedAt) > Date.parse(createdAt)) throw new TypeError("Recommendation starter-pack member eligibility cannot be newer than the plan.");
     const accountId = identityText(account.id); const accountUri = identityText(account.uri);
+    if (member.nativeId !== accountUri) throw new TypeError("Recommendation starter-pack member candidate must match its resolved account URI.");
+    if (consent.state !== "accepted") throw new TypeError("Recommendation starter-pack member requires accepted membership consent.");
+    const consentSourceId = createRecommendationCuratedAccountSetSourceId(identityText(consent.setProvider), identityText(consent.setId));
+    const consentObservedAt = normalizeStrictRfc3339Timestamp(consent.observedAt, "Invalid recommendation starter-pack member consent timestamp.");
+    if (Date.parse(consentObservedAt) > Date.parse(createdAt)) throw new TypeError("Recommendation starter-pack member consent cannot be newer than the plan.");
+    const bound = member.provenance.some((item) => item.kind === "curated_account_set" && item.sourceId === consentSourceId && item.observedAt === consentObservedAt && typeof item.sourceItemId === "string" && item.sourceItemId.length > 0);
+    if (!bound) throw new TypeError("Recommendation starter-pack member consent must match curated-set provenance on the candidate.");
     if (seenAccounts.has(accountId) || seenCandidates.has(member.candidateId)) throw new TypeError("Recommendation starter-pack members must resolve to distinct accounts.");
     seenAccounts.add(accountId); seenCandidates.add(member.candidateId);
-    return Object.freeze({ candidateId: member.candidateId, accountId, accountUri, eligibilityEvaluatedAt: evaluatedAt });
+    return Object.freeze({ candidateId: member.candidateId, accountId, accountUri, eligibilityEvaluatedAt: evaluatedAt, consentState: "accepted", consentSetSourceId: consentSourceId, consentObservedAt });
   });
   return Object.freeze(bindings);
 }

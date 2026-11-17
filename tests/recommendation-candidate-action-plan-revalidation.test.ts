@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RECOMMENDATION_CANDIDATE_ACTIONS, createRecommendationCandidateActionPlan, createRecommendationCandidateId, type RecommendationCandidate, type RecommendationCandidateEligibilityResult, type RecommendationCandidateKind } from "../src/index.js";
-import { actionProvider } from "./recommendation-candidate-action-plan-fixtures.js";
+import { RECOMMENDATION_CANDIDATE_ACTIONS, createRecommendationCandidateActionPlan, createRecommendationCandidateId, type RecommendationCandidate, type RecommendationCandidateEligibilityResult, type RecommendationCandidateKind, type RecommendationStarterPackMemberInput } from "../src/index.js";
+import { actionProvider, starterPackMember } from "./recommendation-candidate-action-plan-fixtures.js";
 
 const OBSERVED_AT = "2026-09-26T06:00:00.000Z";
 const EVALUATED_AT = "2026-09-26T06:01:00.000Z";
@@ -23,10 +23,7 @@ function candidate(kind: RecommendationCandidateKind, name = "1"): Recommendatio
   };
 }
 function eligible(value: RecommendationCandidate): RecommendationCandidateEligibilityResult { return { candidate: value, eligible: true, reasonCodes: ["eligible"], evaluatedAt: EVALUATED_AT }; }
-function member(name: string): RecommendationCandidateEligibilityResult {
-  const value = candidate("account", name);
-  return { ...eligible(value), resolvedAccount: { id: `acct-${name}`, uri: value.nativeId } };
-}
+function member(name: string): RecommendationStarterPackMemberInput { return starterPackMember(candidate("account", name), `acct-${name}`); }
 function plan(kind: RecommendationCandidateKind, extra: Record<string, unknown> = {}) {
   const value = candidate(kind);
   const members = kind === "starter_pack" ? [member("alice"), member("bob")] : undefined;
@@ -68,7 +65,7 @@ test("spoofed flags on the options object cannot change the plan", () => {
 test("spoofed flags on the candidate and eligibility result cannot change the plan", () => {
   for (const kind of KINDS) {
     const value = { ...candidate(kind), ...SPOOFED };
-    const members = kind === "starter_pack" ? [{ ...member("alice"), ...SPOOFED }] : undefined;
+    const members = kind === "starter_pack" ? [{ ...member("alice"), ...SPOOFED, consent: { ...member("alice").consent, ...SPOOFED } }] : undefined;
     const result = createRecommendationCandidateActionPlan({ candidate: value, eligibility: { ...eligible(value), ...SPOOFED }, provider: { ...actionProvider(kind), ...SPOOFED }, createdAt: CREATED_AT, ...(members === undefined ? {} : { starterPackMembers: members }) } as never);
     assertGuarded(result);
     assert.equal(Object.hasOwn(result.candidate, "executable"), false);
@@ -78,7 +75,7 @@ test("spoofed flags on the candidate and eligibility result cannot change the pl
 test("spoofed flags on starter-pack member bindings do not reach the plan", () => {
   const value = plan("starter_pack", { starterPackMembers: [{ ...member("alice"), ...SPOOFED }] });
   assertGuarded(value);
-  assert.deepEqual(Object.keys(value.members![0]!).sort(), ["accountId", "accountUri", "candidateId", "eligibilityEvaluatedAt"]);
+  assert.deepEqual(Object.keys(value.members![0]!).sort(), ["accountId", "accountUri", "candidateId", "consentObservedAt", "consentSetSourceId", "consentState", "eligibilityEvaluatedAt"]);
 });
 
 test("untyped callers cannot opt out through falsy or truthy option values", () => {
