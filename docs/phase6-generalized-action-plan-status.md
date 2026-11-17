@@ -14,7 +14,8 @@ Implemented:
 - explicit eligible-only evidence validation;
 - eligibility/plan timestamp ordering;
 - mandatory explicit user confirmation;
-- mandatory identity and eligibility revalidation before application-side mutation;
+- mandatory identity, eligibility, and provider-capability revalidation before application-side mutation;
+- provider capability gating: fresh descriptor for the candidate's provider, verified protocol binding, and `supported` state for the matching capability (instance plans need only the verified binding);
 - no provider mutation or credential handling in the engine;
 - unsupported post/topic actions fail closed;
 - public package export and regression coverage.

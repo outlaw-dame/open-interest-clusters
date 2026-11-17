@@ -1,6 +1,6 @@
 # Current recommendation roadmap status
 
-This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through merged PR #123 on 2026-08-10, with late-review hardening from PRs #122/#123 tracked in the immediate follow-up.
+This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127.
 
 It complements the detailed architecture and acceptance criteria in:
 
@@ -10,6 +10,8 @@ It complements the detailed architecture and acceptance criteria in:
 - `recommendation-candidate-domain.md`
 - `recommendation-protocol-platform-capabilities.md`
 - `recommendation-provider-discovery.md`
+- `recommendation-first-session-orchestrator.md`
+- `recommendation-candidate-action-plans.md`
 
 When older branch documents or historical phase labels disagree with this file and current `main`, current `main` wins.
 
@@ -36,10 +38,10 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 | Phase 3 — Candidate eligibility and policy composition | **Complete** | PR #117; superseded review work from #118/#119 folded into final implementation |
 | Phase 3.5 — Protocol/application capability hardening | **Complete** | PR #120 and PR #121 |
 | Phase 3.6 — Runtime provider discovery/capability resolution | **Complete; late-review hardening applied** | PR #122 plus follow-up authority/cache/freshness fixes |
-| Phase 4 — Cold-start scoring-input builder | **Complete on current Phase 4 branch** | Candidate-bound scoring bridge with stale-profile protection, bounded optional entity/graph/embedding enrichment, cancellation, and reversible scorer bindings |
-| Phase 5 — First-session recommendation orchestrator | **Next** | Compose onboarding, discovery, eligibility, Phase 4 scoring input, existing execution, explanations, and serving |
-| Phase 6 — Generalized recommendation action-plan contracts | Pending | Existing hashtag-follow action-plan prerequisite is implemented; generalized candidate-bound plans remain |
-| Phase 7 — Onboarding lifecycle and refresh | Pending | Reuses existing retraction/invalidation/recovery architecture |
+| Phase 4 — Cold-start scoring-input builder | **Complete** (PR #125) | Candidate-bound scoring bridge with stale-profile protection, bounded optional entity/graph/embedding enrichment, cancellation, and reversible scorer bindings |
+| Phase 5 — First-session recommendation orchestrator | **Complete** (PR #126) | `createRecommendationFirstSessionOrchestrator` composes profile read, cold-start discovery, injected eligibility evaluation, Phase 4 scoring input, and the existing execution orchestrator. See `recommendation-first-session-orchestrator.md` |
+| Phase 6 — Generalized recommendation action-plan contracts | **Complete** (commit d66c76b) | `createRecommendationCandidateActionPlan`: non-executable, candidate-bound plans gated on eligibility and verified provider capability. See `recommendation-candidate-action-plans.md`. The onboarding hashtag-follow plan is unchanged |
+| Phase 7 — Onboarding lifecycle and refresh | **Next** | Reuses existing retraction/invalidation/recovery architecture |
 | Phase 8 — Reference onboarding integration and UX examples | Pending | Depends on stable engine contracts |
 
 The idempotent signal ledger and retraction architecture is **not** Phase 4. It was implemented earlier and is a prerequisite already satisfied by the current repository.
@@ -93,11 +95,11 @@ The idempotent signal ledger and retraction architecture is **not** Phase 4. It 
 
 ### Existing action-plan prerequisite
 
-The repository already exports the versioned `RecommendationHashtagFollowPlan` and `createRecommendationHashtagFollowPlan`, and onboarding bootstrap can return that plan. Phase 6 therefore extends an existing safe action-plan primitive; it does not start action planning from zero.
+The repository already exports the versioned `RecommendationHashtagFollowPlan` and `createRecommendationHashtagFollowPlan`, and onboarding bootstrap can return that plan. Phase 6 added the generalized candidate-bound plan next to it and did not replace it.
 
 ## Phase 4 — Cold-start scoring-input builder
 
-Phase 4 is implemented on the current Phase 4 branch. The next architectural priority is Phase 5 end-to-end first-session orchestration.
+Phase 4 is implemented (PR #125). The sections below are kept as the requirements the builder was held to.
 
 ### Purpose
 
@@ -144,15 +146,15 @@ At minimum:
 - bounded feature fan-out;
 - deterministic result construction independent of asynchronous resolver completion order.
 
-## Remaining roadmap after Phase 4
+## Roadmap after Phase 4
 
-Phase 4 now provides a reusable candidate/profile → `HybridScoreInput` bridge with exact candidate binding, profile fingerprint freshness checks, eligibility preconditions, finite feature validation, bounded/cancellable optional feature resolution, and no-history-safe behavior.
+Phase 4 provides a reusable candidate/profile → `HybridScoreInput` bridge with exact candidate binding, profile fingerprint freshness checks, eligibility preconditions, finite feature validation, bounded/cancellable optional feature resolution, and no-history-safe behavior.
 
 
 
-### Phase 5 — First-session recommendation orchestrator
+### Phase 5 — First-session recommendation orchestrator (implemented, PR #126)
 
-Compose existing pieces rather than create another engine:
+Implemented in `src/recommendation/first-session-orchestrator.ts`; see [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md). It reads an existing profile rather than running onboarding bootstrap, and it has no per-kind caps. The flow below is the original design target:
 
 ```text
 explicit onboarding choices
@@ -168,11 +170,11 @@ explicit onboarding choices
   -> bounded first-session recommendations
 ```
 
-### Phase 6 — Generalized recommendation action-plan contracts
+### Phase 6 — Generalized recommendation action-plan contracts (implemented, commit d66c76b)
 
-Extend the existing hashtag-follow plan into protocol-neutral, non-executable, candidate-bound plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
+Implemented in `src/recommendation/candidate-action-plan.ts`; see [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). Plans also require fresh, verified provider capability evidence for the action. The design target was to extend the existing hashtag-follow plan into protocol-neutral, non-executable, candidate-bound plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
 
-### Phase 7 — Onboarding lifecycle and refresh
+### Phase 7 — Onboarding lifecycle and refresh (next)
 
 Support editing/removing selections, deterministic reruns, retraction propagation, source disappearance, moved/deleted identities, verification loss, candidate/explanation cache invalidation, consent revocation, deletion, and persistence-location transitions by reusing the existing ledger/invalidation/recovery architecture.
 

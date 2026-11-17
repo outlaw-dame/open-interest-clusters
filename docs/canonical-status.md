@@ -2,7 +2,7 @@
 
 This document is the authoritative architectural summary of the current repository state.
 
-**Last reconciled against `main` through merged PR #123 on 2026-08-10, with late-review hardening tracked in the follow-up to PRs #122/#123.**
+**Last reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127.**
 
 For the concise phase ledger, see [`current-roadmap-status.md`](current-roadmap-status.md). For detailed candidate/onboarding acceptance criteria, see [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md) and its normative [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
@@ -52,10 +52,10 @@ Subject-level recommendation state is permitted by policy only in device-owned l
 | Candidate eligibility/policy composition | **Implemented** |
 | Protocol/application profile capability hardening | **Implemented** |
 | Runtime provider discovery/capability resolution | **Implemented; late-review authority/cache/freshness hardening applied in follow-up** |
-| Cold-start scoring-input builder | **Implemented on current Phase 4 branch** |
-| First-session recommendation orchestration | **Not yet implemented — next phase** |
-| Generalized recommendation action-plan contracts | Existing hashtag-follow plan implemented; generalized candidate-bound action plans not yet implemented |
-| Onboarding lifecycle/refresh composition | Not yet implemented as the higher-level candidate/onboarding lifecycle |
+| Cold-start scoring-input builder | **Implemented** (PR #125) |
+| First-session recommendation orchestration | **Implemented** (PR #126); see [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md) |
+| Generalized recommendation action-plan contracts | **Implemented** (d66c76b); non-executable, gated on eligibility and verified provider capability. The onboarding hashtag-follow plan remains separate. See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) |
+| Onboarding lifecycle/refresh composition | Not yet implemented; this is Phase 7, the next phase |
 | Reference onboarding integration/UX examples | Not yet implemented |
 | Turnkey operator service | Not implemented and not required for local-first use |
 
@@ -103,7 +103,14 @@ profile + eligible normalized candidates
   -> existing execution orchestrator
 ```
 
-The next missing composition layer is the end-to-end first-session orchestrator.
+The end-to-end composition is implemented as the first-session orchestrator:
+
+```text
+profile + sources + injected eligibility
+  -> first-session orchestrator   [IMPLEMENTED]
+  -> candidate-bound recommendations
+  -> generalized action plans, created by the application   [IMPLEMENTED]
+```
 
 PR #103 intentionally does not fetch candidates or infer provider semantics. That separation remains correct.
 
@@ -230,9 +237,12 @@ The following are already satisfied and should not be renamed/rebuilt inside lat
 - cold-start candidate generation;
 - candidate eligibility/policy composition;
 - protocol/application profile capability hardening;
-- runtime provider discovery/capability resolution.
+- runtime provider discovery/capability resolution;
+- cold-start scoring-input builder (Phase 4);
+- first-session recommendation orchestrator (Phase 5);
+- generalized candidate action-plan contracts (Phase 6).
 
-## Completed current phase — Phase 4 cold-start scoring-input builder
+## Completed phase — Phase 4 cold-start scoring-input builder
 
 The repository now understands:
 
@@ -258,17 +268,16 @@ Phase 4 must:
 
 See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledger and required Phase 4 test matrix.
 
-## Remaining roadmap after Phase 4
+## Phases 5 and 6 — implemented
 
-1. **Phase 5 — First-session recommendation orchestrator**
-   - onboarding bootstrap -> candidate discovery -> capability-aware source use -> eligibility -> Phase 4 scoring inputs -> existing execution -> bounded recommendations.
-2. **Phase 6 — Generalized recommendation action-plan contracts**
-   - extend the already-implemented versioned `RecommendationHashtagFollowPlan` / `createRecommendationHashtagFollowPlan` prerequisite across candidate kinds;
-   - add non-executable candidate-bound plans for account, feed, list, starter-pack, labeler, community, topic/hashtag, and eligible instance actions where provider semantics support them;
-   - every provider mutation remains application-executed, explicitly user-confirmed, and revalidated against current identity/eligibility immediately before execution.
-3. **Phase 7 — Onboarding lifecycle and refresh**
+- **Phase 5, first-session orchestrator** (PR #126): `createRecommendationFirstSessionOrchestrator` reads the profile, generates candidates, evaluates eligibility through an injected callback, builds Phase 4 scoring input, and runs the existing execution orchestrator. It does not run onboarding bootstrap and has no per-kind caps. Details are in [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md).
+- **Phase 6, action plans** (d66c76b): `createRecommendationCandidateActionPlan` produces non-executable plans for account, feed, list, starter-pack, labeler, community, hashtag, and instance candidates. Post and topic candidates have no mutation plan. A plan requires an eligible result for the exact candidate snapshot and fresh provider capability evidence with a verified protocol binding. Every provider mutation stays application-executed, explicitly user-confirmed, and revalidated immediately before execution. The checklist is in [`phase6-review-checklist.md`](phase6-review-checklist.md).
+
+## Remaining roadmap
+
+1. **Phase 7 — Onboarding lifecycle and refresh** (next)
    - edit/retract/rerun/expire/refresh/resume using existing ledger/invalidation/recovery machinery.
-4. **Phase 8 — Reference onboarding integration and UX examples**
+2. **Phase 8 — Reference onboarding integration and UX examples**
    - demonstrate stable engine contracts while keeping UI/framework choices outside the core.
 
 ## Other remaining hardening/integration work
@@ -291,9 +300,9 @@ Additional integrations should plug into the established provider capability, ca
 
 The project should not be described as a complete turnkey recommendation product until it has at least:
 
-- the Phase 4 scoring-input bridge;
-- Phase 5 end-to-end first-session composition;
-- generalized action/lifecycle contracts for the intended integrations;
+- the Phase 4 scoring-input bridge (done);
+- Phase 5 end-to-end first-session composition (done);
+- generalized action contracts (done) and lifecycle/refresh contracts (Phase 7, not done);
 - at least one reference device-local persistence path;
 - privacy-safe operational health behavior;
 - appropriate replay/concurrency/cancellation/reconnect/crash-recovery coverage;
