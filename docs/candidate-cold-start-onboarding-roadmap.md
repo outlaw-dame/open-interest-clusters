@@ -284,6 +284,8 @@ Viewer-private settings may be passed into the eligibility/filter stage only und
 
 ## Phase 4 — Cold-start scoring-input builder
 
+> **Status: implemented** (PR #125).
+
 ### Goal
 
 Build the deterministic/entity/graph/embedding inputs expected by the existing recommendation execution orchestrator from a profile plus normalized eligible candidates.
@@ -317,6 +319,8 @@ The absence of behavioral history must be a supported state, not an error. Initi
 - tests cover cold-start/no-history operation and optional subsystem absence.
 
 ## Phase 5 — First-session recommendation orchestrator
+
+> **Status: implemented** (PR #126). See [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md). Differences from the plan below: the orchestrator reads an existing profile through `engine.readProfile` instead of calling onboarding bootstrap, and it has no per-kind caps. Eligibility evaluation is injected, so provider-specific branching stays out of the generic code.
 
 ### Goal
 
@@ -360,6 +364,8 @@ explicit onboarding choices
 - results do not expose profile contents or private moderation inputs.
 
 ## Phase 6 — Recommendation action-plan contracts
+
+> **Status: implemented** (commit d66c76b). See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). The starter-pack plan carries a member cap only, not a member list, so the member-level binding in the safety amendments is still an application responsibility.
 
 ### Goal
 

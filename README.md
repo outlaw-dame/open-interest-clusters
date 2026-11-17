@@ -2,7 +2,7 @@
 
 A portable, privacy-preserving recommendation and semantic-interest substrate for local-first applications, federated services, and protocol-neutral recommendation systems.
 
-> **Status:** active pre-1.0 library development. The repository includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, runtime provider discovery, and the cold-start scoring-input bridge. The next architectural phase is the first-session recommendation orchestrator that composes these pieces end to end.
+> **Status:** active pre-1.0 library development. The repository includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, runtime provider discovery, the cold-start scoring-input bridge, the first-session recommendation orchestrator, and generalized non-executable candidate action plans. The next architectural phase is onboarding lifecycle and refresh (Phase 7).
 
 ## Design principles
 
@@ -32,6 +32,7 @@ A portable, privacy-preserving recommendation and semantic-interest substrate fo
 - Shared normalized-signal enforcement of the public/user-controlled affinity boundary.
 - Explicit storage-authority and local-first/user-owned state-placement policy at public persistence boundaries; the low-level in-memory aggregate-only caveat remains documented.
 - Existing versioned hashtag-follow action-plan primitives used by onboarding bootstrap.
+- Generalized, non-executable, candidate-bound action plans (`createRecommendationCandidateActionPlan`) gated on eligibility and verified provider capability.
 
 ### Candidate and cold-start architecture
 
@@ -104,9 +105,10 @@ Dataset and canonical normalization
   -> runtime provider/application capability resolution
   -> candidate eligibility / provider policy / viewer safety
   -> cold-start scoring-input construction              [IMPLEMENTED]
-  -> first-session recommendation orchestration          [NEXT]
+  -> first-session recommendation orchestration          [IMPLEMENTED]
   -> existing hybrid scoring / ANN / graph / embeddings
   -> reranking, explanations, and bounded serving
+  -> candidate action plans (application-executed)       [IMPLEMENTED]
 ```
 
 Provider-specific behavior remains behind adapters. Capability discovery does not perform arbitrary network fetching itself; hardened adapters remain responsible for SSRF defenses, redirect/size/content-type bounds, authentication, protocol-native identity validation, OAuth/ACL/grant checks, and provider transport behavior.
@@ -120,33 +122,35 @@ The candidate/onboarding dependency chain is now:
 3. **Phase 3 — Candidate eligibility and policy composition — COMPLETE** (`#117`)
 4. **Phase 3.5 — Protocol/application profile capability hardening — COMPLETE** (`#120`, `#121`)
 5. **Phase 3.6 — Runtime provider discovery/capability resolution — COMPLETE** (`#122`, with late-review hardening in the immediate follow-up)
-6. **Phase 4 — Cold-start scoring-input builder — COMPLETE**
-7. **Phase 5 — First-session recommendation orchestrator — NEXT**
-8. **Phase 6 — Generalized recommendation action-plan contracts — PENDING** (existing hashtag-follow plan already implemented)
-9. **Phase 7 — Onboarding lifecycle and refresh — PENDING**
+6. **Phase 4 — Cold-start scoring-input builder — COMPLETE** (`#125`)
+7. **Phase 5 — First-session recommendation orchestrator — COMPLETE** (`#126`)
+8. **Phase 6 — Generalized recommendation action-plan contracts — COMPLETE** (`d66c76b`; the onboarding hashtag-follow plan is unchanged)
+9. **Phase 7 — Onboarding lifecycle and refresh — NEXT**
 10. **Phase 8 — Reference onboarding integration and UX examples — PENDING**
 
 The idempotent signal ledger/retraction layer predates this sequence and is already implemented; it is not Phase 4.
 
 See:
 
-- [`docs/current-roadmap-status.md`](docs/current-roadmap-status.md) for the concise current ledger and Phase 4 requirements;
+- [`docs/current-roadmap-status.md`](docs/current-roadmap-status.md) for the concise current ledger;
 - [`docs/canonical-status.md`](docs/canonical-status.md) for the authoritative architectural state;
 - [`docs/candidate-cold-start-onboarding-roadmap.md`](docs/candidate-cold-start-onboarding-roadmap.md) for detailed phase acceptance criteria;
 - [`docs/candidate-roadmap-safety-amendments.md`](docs/candidate-roadmap-safety-amendments.md) for normative privacy/safety amendments;
 - [`docs/recommendation-provider-discovery.md`](docs/recommendation-provider-discovery.md) for the runtime capability layer.
 
-## Immediate next phase: first-session recommendation orchestrator
+## Implemented: first-session orchestration and action plans
 
-The next implementation must turn the current local/user-owned profile plus already-eligible normalized candidates into the bounded `HybridScoreInput` structures consumed by the existing execution orchestrator.
+`createRecommendationFirstSessionOrchestrator` reads a local/user-owned profile, discovers candidates, evaluates eligibility through a caller-supplied evaluator, builds scoring input, and runs the existing execution orchestrator. See [`docs/recommendation-first-session-orchestrator.md`](docs/recommendation-first-session-orchestrator.md).
 
-It must preserve exact candidate binding, support no behavioral history, reuse optional entity/graph/embedding infrastructure safely, reject stale/non-finite/mismatched feature bindings, remain deterministic under asynchronous resolver completion order, and keep subject/profile/private moderation state out of remote feature computation.
+`createRecommendationCandidateActionPlan` turns an eligible candidate into a plan an application can offer. Plans are never executable, always require explicit user confirmation, and are only created when fresh provider capability evidence supports the action. See [`docs/recommendation-candidate-action-plans.md`](docs/recommendation-candidate-action-plans.md).
 
-The builder should not introduce another scorer and should not reinterpret provider-native candidate IDs as taxonomy cluster identities. If candidate IDs are used as scorer-facing `clusterId` values, that mapping must be explicit and exactly reversible.
+## Immediate next phase: onboarding lifecycle and refresh
+
+Phase 7 covers editing or removing onboarding selections, deterministic reruns, source disappearance, moved or deleted identities, verification loss, cache invalidation, consent revocation, deletion, and persistence-location transitions. It should reuse the existing ledger, invalidation, and recovery architecture rather than add a new one. Detailed acceptance criteria are in [`docs/candidate-cold-start-onboarding-roadmap.md`](docs/candidate-cold-start-onboarding-roadmap.md).
 
 ## Other remaining work
 
-Outside the primary Phase 4-8 dependency chain:
+Outside the primary Phase 7-8 dependency chain:
 
 - reference IndexedDB/SQLite or equivalent device-local persistence;
 - broader generic Solid Pod reference composition beyond ActivityPods-specific support;

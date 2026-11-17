@@ -10,11 +10,34 @@ Every plan:
 - requires an explicit `eligible` result from the candidate-eligibility layer;
 - records when that eligibility result was evaluated and rejects a result newer than the plan itself;
 - requires explicit user confirmation before any mutation;
-- requires identity and eligibility revalidation immediately before an application performs the provider-side action;
+- requires identity, eligibility, and provider-capability revalidation immediately before an application performs the provider-side action;
+- is created only when current provider capability evidence supports the action (see below);
 - has `executable: false`; the engine does not perform follows, subscriptions, joins, registration, or starter-pack expansion;
 - carries no OAuth token, credential, private moderation state, or subject personalization state.
 
 These requirements preserve the existing project boundary: recommendation may suggest an action, but user/application authority remains responsible for executing it under current provider authorization and policy.
+
+## Provider capability gate
+
+`createRecommendationCandidateActionPlan` takes the candidate's `RecommendationProviderDescriptor` (from runtime provider discovery, see [`recommendation-provider-discovery.md`](recommendation-provider-discovery.md)) and throws unless all of these hold:
+
+- the candidate has a known protocol and a provider, and `provider.providerId` equals `candidate.provider`;
+- `detectedAt` is not after the plan's `createdAt`, and `expiresAt` is after it, so expired or future-dated evidence is rejected;
+- the descriptor has a protocol binding for the candidate's protocol with `verification: "verified"`;
+- the descriptor reports the matching capability as `supported` for that protocol. `unsupported`, `unknown`, and conflicting evidence all fail.
+
+| Candidate kind | Required capability |
+| --- | --- |
+| account | `follows` |
+| feed | `feeds` |
+| list | `lists` |
+| starter pack | `starter_packs` |
+| labeler | `labels` |
+| community | `collections` |
+| hashtag | `hashtags` |
+| instance | none, but the verified protocol binding is still required |
+
+The plan records `providerCapabilitiesExpireAt`. That is the point after which an application must rediscover capabilities, and `requiresCapabilityRevalidation` is always `true`. Passing the gate once does not authorize a later mutation.
 
 ## Candidate actions
 
@@ -32,6 +55,8 @@ These requirements preserve the existing project boundary: recommendation may su
 `post` and `topic` deliberately have no mutation action-plan contract. They remain recommendation/display candidates unless a future phase defines a concrete, privacy-safe user action for them.
 
 Starter-pack expansion is bounded to 100 members by default and cannot exceed 1,000. The bound is part of the plan contract; it is not permission to follow those members automatically.
+
+The plan carries only that cap. It does not list the pack's members, and it does not bind members to resolved account identities or run member-level eligibility. An application that expands a starter pack still has to resolve and check each member itself, as required by [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
 ## Relationship to the onboarding hashtag plan
 
