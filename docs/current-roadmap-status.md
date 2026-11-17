@@ -1,6 +1,6 @@
 # Current recommendation roadmap status
 
-This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4 and 5 landed as PRs #125 and #126. Phase 6 landed as a direct commit with no PR number.
+This document is the concise execution-status ledger for the recommendation-engine roadmap. It is reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127.
 
 It complements the detailed architecture and acceptance criteria in:
 

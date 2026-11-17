@@ -2,7 +2,7 @@
 
 This document is the authoritative architectural summary of the current repository state.
 
-**Last reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4 and 5 landed as PRs #125 and #126; Phase 6 landed as a direct commit.**
+**Last reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127.**
 
 For the concise phase ledger, see [`current-roadmap-status.md`](current-roadmap-status.md). For detailed candidate/onboarding acceptance criteria, see [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md) and its normative [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
