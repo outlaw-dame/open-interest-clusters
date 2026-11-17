@@ -365,7 +365,7 @@ explicit onboarding choices
 
 ## Phase 6 — Recommendation action-plan contracts
 
-> **Status: implemented** (commit d66c76b). See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). The starter-pack plan carries a member cap only, not a member list, so the member-level binding in the safety amendments is still an application responsibility.
+> **Status: implemented** (commit d66c76b). See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). The starter-pack plan requires per-member eligibility results and carries a binding to each member's resolved account identity, capped at `maxStarterPackMembers`.
 
 ### Goal
 
