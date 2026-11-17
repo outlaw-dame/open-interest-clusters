@@ -113,3 +113,32 @@ test("unsafe or non-actionable curated memberships are omitted", async () => {
 
   assert.deepEqual(result.candidates.map((candidate) => candidate.nativeId), ["https://social.example/users/bob"]);
 });
+
+test("only members who accepted inclusion become candidates", async () => {
+  const states = ["pending", "rejected", "revoked", "unknown"] as const;
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({
+    id: "curated.account-sets",
+    sets: [
+      set({
+        id: "consent-states",
+        members: [
+          ...states.map((state) => ({
+            accountId: state,
+            accountUri: `https://social.example/users/${state}`,
+            state
+          })),
+          { accountId: "accepted", accountUri: "https://social.example/users/accepted", state: "accepted" }
+        ]
+      })
+    ]
+  });
+
+  const result = await readRecommendationCandidateSourceAdapter(adapter, {
+    requestId: "curated-consent",
+    candidateKinds: ["account"],
+    canonicalInterestIds: [],
+    limit: 10
+  });
+
+  assert.deepEqual(result.candidates.map((candidate) => candidate.nativeId), ["https://social.example/users/accepted"]);
+});
