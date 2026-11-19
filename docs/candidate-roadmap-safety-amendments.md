@@ -39,4 +39,6 @@ Members that are blocked, muted, inactive beyond policy, deleted, suspended, unr
 
 The action plan must be bounded and bind each included member to the resolved current account identity used by the eligibility result. The application must revalidate stale identities immediately before execution where provider state may have changed.
 
+Curated account sets are covered by this requirement: a Mastodon Collection becomes a `starter_pack` candidate, and its plan still has to bind each accepted member as described above.
+
 This requirement also applies to any future collection/list/community action that expands one recommended container into mutating actions against multiple accounts or entities.

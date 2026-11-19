@@ -20,6 +20,8 @@ Verification states are `unverified_hint`, `source_asserted`, `authority_verifie
 
 Provenance records why a candidate was discovered, including onboarding matches, curated sets, follow packs, starter packs, public metadata/trends/graphs, labeler or provider discovery, directory hints, instance metadata, and local catalog entries.
 
+A curated account set (Mastodon Collection, Loops or Pixelfed starter kit) is represented as a `starter_pack` candidate with `curated_account_set` provenance. It uses the same candidate kind and `starter_packs` capability as other starter packs, so tell them apart by provenance and protocol rather than by capability.
+
 Discovery provenance is not viewer endorsement. Third-party directory hints must retain the `third_party` trust boundary.
 
 ## Candidate-source adapters
