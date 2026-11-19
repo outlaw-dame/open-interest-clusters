@@ -52,4 +52,4 @@ The result does not include profile contents or moderation state, only the signa
 
 ## Tests
 
-`tests/recommendation-first-session-orchestrator.test.ts` covers the happy path through to a ranked recommendation, per-candidate eligibility failure, and cancellation propagation. Mismatched eligibility results, ineligible candidates, and partial source failure are handled in the code but are not directly asserted by this test file.
+`tests/recommendation-first-session-orchestrator.test.ts` covers the happy path through to a ranked recommendation and cancellation propagation. It also asserts each failure path: a throwing eligibility evaluator, an eligibility result for a different candidate (counted in `eligibilityFailureCount`), an ineligible result (dropped, not counted), one failing source alongside a working one, every source failing, sources that return nothing, and identical output regardless of the order sources finish in.

@@ -6,6 +6,7 @@ import {
   createRecommendationFirstSessionOrchestrator,
   type RecommendationCandidate,
   type RecommendationCandidateSourceAdapter,
+  type RecommendationFirstSessionEligibilityEvaluator,
   type RecommendationProfileSnapshot
 } from "../src/index.js";
 
@@ -57,9 +58,13 @@ function candidate(nativeId: string): RecommendationCandidate {
   };
 }
 
-function source(items: readonly RecommendationCandidate[]): RecommendationCandidateSourceAdapter {
+function source(
+  items: readonly RecommendationCandidate[],
+  id = "test-source",
+  read?: RecommendationCandidateSourceAdapter["read"]
+): RecommendationCandidateSourceAdapter {
   return {
-    id: "test-source",
+    id,
     protocols: ["atproto"],
     candidateKinds: ["account"],
     authority: "provider_native",
@@ -73,7 +78,7 @@ function source(items: readonly RecommendationCandidate[]): RecommendationCandid
       providerPolicyAllowsProcessing: true
     },
     capabilities: ["discover", "returns_public_metadata", "returns_authority_verified_identity"],
-    read: () => ({ candidates: items })
+    read: read ?? (() => ({ candidates: items }))
   };
 }
 
@@ -152,4 +157,141 @@ test("Phase 5 propagates explicit cancellation instead of converting it to eligi
     }),
     /cancelled/u
   );
+});
+
+function eligible(target: RecommendationCandidate) {
+  return {
+    candidate: target,
+    eligible: true,
+    reasonCodes: ["eligible"] as const,
+    evaluatedAt: NOW
+  };
+}
+
+const approve: RecommendationFirstSessionEligibilityEvaluator = (context) => eligible(context.candidate.candidate);
+
+test("Phase 5 drops ineligible candidates without counting them as failures", async () => {
+  const alice = candidate("did:plc:alice");
+  const bob = candidate("did:plc:bob");
+  const orchestrator = createRecommendationFirstSessionOrchestrator({
+    engine: { readProfile: async () => PROFILE },
+    sources: [source([alice, bob])],
+    candidateKinds: ["account"],
+    evaluateEligibility: ({ candidate: generated }) =>
+      generated.candidate.candidateId === alice.candidateId
+        ? { candidate: generated.candidate, eligible: false, reasonCodes: ["account_inactive"], evaluatedAt: NOW }
+        : eligible(generated.candidate)
+  });
+
+  const result = await orchestrator.execute({ subjectId: "local-user", requestId: "first-session-4" });
+  assert.equal(result.discoveredCandidateCount, 2);
+  assert.equal(result.eligibleCandidateCount, 1);
+  assert.equal(result.eligibilityFailureCount, 0);
+  assert.deepEqual(result.recommendations.map((item) => item.candidate.candidateId), [bob.candidateId]);
+});
+
+test("Phase 5 counts an eligibility result for a different candidate as a failure", async () => {
+  const alice = candidate("did:plc:alice");
+  const bob = candidate("did:plc:bob");
+  const orchestrator = createRecommendationFirstSessionOrchestrator({
+    engine: { readProfile: async () => PROFILE },
+    sources: [source([alice, bob])],
+    candidateKinds: ["account"],
+    // Alice's evaluation answers with Bob's candidate, which must not be trusted.
+    evaluateEligibility: ({ candidate: generated }) =>
+      eligible(generated.candidate.candidateId === alice.candidateId ? bob : generated.candidate)
+  });
+
+  const result = await orchestrator.execute({ subjectId: "local-user", requestId: "first-session-5" });
+  assert.equal(result.discoveredCandidateCount, 2);
+  assert.equal(result.eligibilityFailureCount, 1);
+  assert.equal(result.eligibleCandidateCount, 1);
+  assert.deepEqual(result.recommendations.map((item) => item.candidate.candidateId), [bob.candidateId]);
+});
+
+test("Phase 5 reports a failing source and still recommends from the others", async () => {
+  const alice = candidate("did:plc:alice");
+  const orchestrator = createRecommendationFirstSessionOrchestrator({
+    engine: { readProfile: async () => PROFILE },
+    sources: [
+      source([], "broken-source", () => { throw new Error("upstream down"); }),
+      source([alice], "working-source")
+    ],
+    candidateKinds: ["account"],
+    evaluateEligibility: approve
+  });
+
+  const result = await orchestrator.execute({ subjectId: "local-user", requestId: "first-session-6" });
+  assert.deepEqual(result.sourceFailures, [{ sourceId: "broken-source", code: "source_read_failed" }]);
+  assert.deepEqual(result.recommendations.map((item) => item.candidate.candidateId), [alice.candidateId]);
+});
+
+test("Phase 5 returns an empty result with every failure reported when all sources fail", async () => {
+  let eligibilityCalls = 0;
+  const fail = () => { throw new Error("upstream down"); };
+  const orchestrator = createRecommendationFirstSessionOrchestrator({
+    engine: { readProfile: async () => PROFILE },
+    sources: [source([], "source-b", fail), source([], "source-a", fail)],
+    candidateKinds: ["account"],
+    evaluateEligibility: (context) => {
+      eligibilityCalls += 1;
+      return eligible(context.candidate.candidate);
+    }
+  });
+
+  const result = await orchestrator.execute({ subjectId: "local-user", requestId: "first-session-7" });
+  assert.deepEqual(result.sourceFailures, [
+    { sourceId: "source-a", code: "source_read_failed" },
+    { sourceId: "source-b", code: "source_read_failed" }
+  ]);
+  assert.equal(result.discoveredCandidateCount, 0);
+  assert.equal(result.eligibleCandidateCount, 0);
+  assert.equal(result.eligibilityFailureCount, 0);
+  assert.equal(result.recommendations.length, 0);
+  assert.equal(eligibilityCalls, 0);
+});
+
+test("Phase 5 handles sources that return zero candidates", async () => {
+  const orchestrator = createRecommendationFirstSessionOrchestrator({
+    engine: { readProfile: async () => PROFILE },
+    sources: [source([])],
+    candidateKinds: ["account"],
+    evaluateEligibility: approve
+  });
+
+  const result = await orchestrator.execute({ subjectId: "local-user", requestId: "first-session-8" });
+  assert.equal(result.discoveredCandidateCount, 0);
+  assert.equal(result.eligibleCandidateCount, 0);
+  assert.deepEqual(result.sourceFailures, []);
+  assert.equal(result.recommendations.length, 0);
+});
+
+test("Phase 5 output does not depend on the order sources finish in", async () => {
+  const alice = candidate("did:plc:alice");
+  const bob = candidate("did:plc:bob");
+  const delayed = (items: readonly RecommendationCandidate[], ms: number): RecommendationCandidateSourceAdapter["read"] =>
+    async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return { candidates: items };
+    };
+  const run = async (aliceDelay: number, bobDelay: number, order: "ab" | "ba") => {
+    const sources = [
+      source([alice], "source-a", delayed([alice], aliceDelay)),
+      source([bob], "source-b", delayed([bob], bobDelay))
+    ];
+    const orchestrator = createRecommendationFirstSessionOrchestrator({
+      engine: { readProfile: async () => PROFILE },
+      sources: order === "ab" ? sources : [...sources].reverse(),
+      candidateKinds: ["account"],
+      evaluateEligibility: approve
+    });
+    return orchestrator.execute({ subjectId: "local-user", requestId: "first-session-9" });
+  };
+
+  const first = await run(30, 1, "ab");
+  const second = await run(1, 30, "ba");
+  const ids = (result: Awaited<ReturnType<typeof run>>) =>
+    result.recommendations.map((item) => [item.candidate.candidateId, item.rank, item.score]);
+  assert.equal(first.recommendations.length, 2);
+  assert.deepEqual(ids(first), ids(second));
 });
