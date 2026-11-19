@@ -117,7 +117,14 @@ function abortIf(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw new RecommendationProfilePersistenceTransitionError("transition.error.aborted", { cause: signal.reason });
 }
 
-const defaultSleep = (milliseconds: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, milliseconds); });
+/** Default wait. The timer is cleared when the signal aborts so it cannot keep the process alive. */
+function defaultSleep(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    const onAbort = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /** Waits out a backoff delay but gives up as soon as the signal aborts. */
 async function abortableSleep(sleep: (milliseconds: number) => Promise<void>, milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
@@ -139,7 +146,7 @@ async function abortableSleep(sleep: (milliseconds: number) => Promise<void>, mi
 async function withBackoff<T>(work: () => Promise<T>, retry: RecommendationProfilePersistenceRetryOptions, signal: AbortSignal | undefined): Promise<T> {
   const maxAttempts = boundedInteger(retry.maxAttempts, DEFAULT_MAX_ATTEMPTS, 1, MAX_ATTEMPTS, "Invalid recommendation profile persistence retry attempts.");
   const baseDelay = boundedInteger(retry.baseDelayMs, DEFAULT_BASE_DELAY_MS, 1, MAX_BASE_DELAY_MS, "Invalid recommendation profile persistence retry delay.");
-  const sleep = retry.sleep ?? defaultSleep;
+  const sleep = retry.sleep ?? ((milliseconds: number) => defaultSleep(milliseconds, signal));
   const random = retry.random ?? Math.random;
   for (let attempt = 1; ; attempt += 1) {
     abortIf(signal);

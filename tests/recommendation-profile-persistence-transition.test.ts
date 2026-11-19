@@ -172,6 +172,23 @@ test("an abort during a backoff sleep ends the transition without waiting or ano
   assert.equal(local.log.includes("delete"), false);
 });
 
+test("the default backoff timer is cleared when an abort ends the wait", async () => {
+  const { local, pod, loc } = setup();
+  pod.failWrites = 99;
+  const controller = new AbortController();
+  const countTimers = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+  const before = countTimers();
+  setTimeout(() => controller.abort(new Error("stop")), 5);
+  const started = Date.now();
+  // A multi-second delay, so a leaked timer would still be pending after the abort.
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, signal: controller.signal, retry: { random: () => 0.99, baseDelayMs: 5_000, maxAttempts: 4 } }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceTransitionError && error.reason === "transition.error.aborted"
+  );
+  assert.ok(Date.now() - started < 2_000);
+  assert.equal(countTimers(), before);
+});
+
 test("denials are final and never retried", async () => {
   const { local, pod, loc, retry } = setup();
   const sleeps: number[] = [];
