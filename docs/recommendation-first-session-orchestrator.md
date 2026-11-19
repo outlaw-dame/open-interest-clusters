@@ -48,7 +48,7 @@ The result does not include profile contents or moderation state, only the signa
 - It does not run onboarding bootstrap. It reads an existing profile through `engine.readProfile`, so the caller applies onboarding selections first.
 - It has no per-kind caps. Limits are global (`maxCandidates`, `maxScoredCandidates`, `limit`).
 - It never follows, subscribes, or joins anything. Turning a recommendation into an action plan is Phase 6 (see [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md)).
-- It does not refresh or invalidate results over time. That is Phase 7.
+- It does not refresh or invalidate results on its own. `lifecycle.refresh` in [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) reruns it after pending invalidation is settled and reported candidates are excluded.
 
 ## Tests
 

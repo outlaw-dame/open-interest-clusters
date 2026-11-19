@@ -55,7 +55,7 @@ Subject-level recommendation state is permitted by policy only in device-owned l
 | Cold-start scoring-input builder | **Implemented** (PR #125) |
 | First-session recommendation orchestration | **Implemented** (PR #126); see [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md) |
 | Generalized recommendation action-plan contracts | **Implemented** (d66c76b); non-executable, gated on eligibility and verified provider capability. The onboarding hashtag-follow plan remains separate. See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) |
-| Onboarding lifecycle/refresh composition | Not yet implemented; this is Phase 7, the next phase |
+| Onboarding lifecycle/refresh composition | **Implemented** on `feat/phase7-onboarding-lifecycle` (not yet merged); see [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) |
 | Reference onboarding integration/UX examples | Not yet implemented |
 | Turnkey operator service | Not implemented and not required for local-first use |
 
@@ -275,8 +275,8 @@ See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledge
 
 ## Remaining roadmap
 
-1. **Phase 7 — Onboarding lifecycle and refresh** (next)
-   - edit/retract/rerun/expire/refresh/resume using existing ledger/invalidation/recovery machinery.
+1. **Phase 7 — Onboarding lifecycle and refresh** (implemented, pending merge)
+   - edit/retract/rerun/expire/refresh/resume using the existing ledger/invalidation/recovery machinery. See [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
 2. **Phase 8 — Reference onboarding integration and UX examples**
    - demonstrate stable engine contracts while keeping UI/framework choices outside the core.
 
@@ -302,7 +302,7 @@ The project should not be described as a complete turnkey recommendation product
 
 - the Phase 4 scoring-input bridge (done);
 - Phase 5 end-to-end first-session composition (done);
-- generalized action contracts (done) and lifecycle/refresh contracts (Phase 7, not done);
+- generalized action contracts (done) and lifecycle/refresh contracts (Phase 7, done pending merge);
 - at least one reference device-local persistence path;
 - privacy-safe operational health behavior;
 - appropriate replay/concurrency/cancellation/reconnect/crash-recovery coverage;

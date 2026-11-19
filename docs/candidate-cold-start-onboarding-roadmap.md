@@ -402,6 +402,8 @@ The exact action vocabulary should be limited to real provider capabilities and 
 
 ## Phase 7 — Onboarding lifecycle and refresh
 
+> **Status:** implemented. Decisions, acceptance-criteria mapping and residual limits are in [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
+
 ### Goal
 
 Make onboarding-derived state maintainable after the first session rather than a one-time seed.

@@ -74,7 +74,7 @@ The source ID helper is the same function the curated-set source uses to stamp p
 
 This is a consistency check, not proof. The consent record and the candidate's provenance are both supplied by the caller and neither is signed. The plan can tell that they agree with each other and with the candidate, but it cannot tell that they came from the curated-set source. A caller who fabricates a matching consent record and matching provenance will not be caught. Members should be built from the source's output, and the application remains responsible for that.
 
-Consent can be withdrawn after a plan is created, so a `revoked` or `rejected` state has to be rechecked together with the identity and eligibility revalidation before anything is executed. Pushing a revocation out to plans that already exist belongs to the Phase 7 lifecycle work and is not built here.
+Consent can be withdrawn after a plan is created, so a `revoked` or `rejected` state has to be rechecked together with the identity and eligibility revalidation before anything is executed. Plans are frozen, so a revocation reported after creation is applied by `assessRecommendationCandidateActionPlan`, which marks the plan invalid or stale without changing it. See [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md). Consent evidence and the reported events are caller-supplied and unsigned.
 
 Plan creation fails when a member's consent or eligibility entry is missing, the member list is missing, empty, longer than `maxStarterPackMembers`, or contains two entries that resolve to the same account. It does not drop members to fit the limit. Members that are ineligible should be left out by the caller, as the safety amendments describe.
 
