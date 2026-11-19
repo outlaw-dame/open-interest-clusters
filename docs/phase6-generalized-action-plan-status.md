@@ -8,7 +8,7 @@ Implemented:
 - feed/list/labeler subscription plans;
 - community follow plans;
 - hashtag follow plans;
-- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result and to accepted curated-set membership consent (caller-supplied and unsigned, so checked for consistency only; revocation after plan creation is rechecked at revalidation and propagation is left to Phase 7);
+- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result and to accepted curated-set membership consent (caller-supplied and unsigned, so checked for consistency only; revocation after plan creation is reported as a lifecycle event and `assessRecommendationCandidateActionPlan` marks the plan invalid, see Phase 7);
 - curated account sets (Mastodon Collections and similar) as `starter_pack` candidates that reuse the `starter_packs` capability;
 - eligible-instance signup navigation plans;
 - exact normalized candidate-snapshot binding, including metadata and provenance;
@@ -23,4 +23,4 @@ Implemented:
 
 The older onboarding `RecommendationHashtagFollowPlan` remains supported and is not silently redefined. The generalized contract is for normalized recommendation candidates after eligibility evaluation.
 
-Phase 7 follows this work and is responsible for lifecycle/refresh behavior: deterministic reruns, edited/removed onboarding selections, source disappearance, moved/deleted identities, verification loss, candidate/action-plan invalidation, consent revocation/deletion propagation, and persistence-location transitions using the existing ledger and invalidation architecture.
+Phase 7 followed this work and is documented in [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md). Its scope was lifecycle/refresh behavior: deterministic reruns, edited/removed onboarding selections, source disappearance, moved/deleted identities, verification loss, candidate/action-plan invalidation, consent revocation/deletion propagation, and persistence-location transitions using the existing ledger and invalidation architecture.
