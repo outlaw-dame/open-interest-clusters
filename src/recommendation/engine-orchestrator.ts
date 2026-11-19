@@ -62,6 +62,12 @@ export interface RecommendationEngineOrchestrator {
   synchronize(input: RecommendationEngineSynchronizeInput): Promise<RecommendationProfileApplicationResult>;
   readProfile(subjectId: string): Promise<RecommendationProfileSnapshot>;
   readLedgerSnapshot(input: RecommendationEngineSynchronizeInput): Promise<RecommendationSignalLedgerSnapshot>;
+  /**
+   * Returns the accepted event history for an active subject, oldest first. Lifecycle code uses it to
+   * work out which events are still live without keeping a second copy of that state. Throws behind a
+   * deletion replay barrier, like the other subject reads.
+   */
+  readEventHistory(subjectId: string): Promise<readonly RecommendationSignalLedgerEventInput[]>;
   deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult>;
 }
 
@@ -289,6 +295,11 @@ export function createRecommendationEngineOrchestrator(
         ledgers.set(id, ledger);
         return ledger.snapshot({ now });
       });
+    },
+
+    async readEventHistory(rawSubjectId: string): Promise<readonly RecommendationSignalLedgerEventInput[]> {
+      const id = subjectId(rawSubjectId);
+      return runSerialized(id, async () => (await requireActiveState(id)).events);
     },
 
     async deleteSubject(rawIntent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult> {
