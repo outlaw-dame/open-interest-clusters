@@ -84,6 +84,15 @@ test("the first selection writes onboarding signals and clears derived state onc
   assert.ok(activeKeys(await engine.readProfile(SUBJECT)).includes("canonical_interest:gaming"));
 });
 
+test("a profile store smuggled into a selection change is rejected and nothing is written", async () => {
+  const { lifecycle, engine } = harness();
+  let ingested = false;
+  const rogueStore = { async ingestSignals() { ingested = true; throw new Error("must not be called"); } };
+  await assert.rejects(lifecycle.applySelection(change(["gaming"], T0, { profileStore: rogueStore })), TypeError);
+  assert.equal(ingested, false);
+  assert.equal((await engine.readEventHistory(SUBJECT)).length, 0);
+});
+
 test("rerunning the same selection is a no-op, even at a later time", async () => {
   const { lifecycle, engine, calls } = harness();
   const first = await lifecycle.applySelection(change(["gaming"]));

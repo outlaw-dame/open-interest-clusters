@@ -193,6 +193,25 @@ test("assessment refuses a plan that claims to be executable or lacks the expect
   assert.throws(() => assess({ ...packPlan(), members: [{}] } as unknown as RecommendationCandidateActionPlan, []), TypeError);
 });
 
+test("a plan with malformed provenance or identity fields is rejected instead of reading as valid", () => {
+  const plan = accountPlan();
+  const withCandidate = (patch: Record<string, unknown>) => ({ ...plan, candidate: { ...plan.candidate, ...patch } }) as unknown as RecommendationCandidateActionPlan;
+  const goneEvent = { kind: "source_disappeared", occurredAt: LATER, sourceId: "test-source" } as const;
+  // Sanity check: a well-formed plan is hit by this event, so the rejections below are not vacuous.
+  assert.equal(assess(plan, [goneEvent], NOW).state, "stale");
+  const badProvenance = [{ ...plan.candidate.provenance[0], observedAt: "not a date" }];
+  assert.throws(() => assess(withCandidate({ provenance: badProvenance }), [goneEvent], NOW), /Invalid recommendation candidate action plan/u);
+  assert.throws(() => assess(withCandidate({ provenance: "nope" }), []), TypeError);
+  assert.throws(() => assess(withCandidate({ provenance: [{ ...plan.candidate.provenance[0], sourceId: "" }] }), []), TypeError);
+  assert.throws(() => assess(withCandidate({ provenance: [null] }), []), TypeError);
+  assert.throws(() => assess(withCandidate({ provider: undefined }), []), TypeError);
+  assert.throws(() => assess(withCandidate({ nativeId: 5 }), []), TypeError);
+  const pack = packPlan();
+  const members = pack.members ?? [];
+  assert.throws(() => assess({ ...pack, members: [{ ...members[0], consentSetSourceId: undefined }] } as unknown as RecommendationCandidateActionPlan, []), TypeError);
+  assert.throws(() => assess({ ...pack, members: [{ ...members[0], accountUri: "" }] } as unknown as RecommendationCandidateActionPlan, []), TypeError);
+});
+
 test("excluded candidate IDs come only from IDs the reporter supplied, sorted and unique", () => {
   const events = normalizeRecommendationCandidateLifecycleEvents([
     { kind: "account_moved", occurredAt: LATER, candidateId: "b" },

@@ -15,7 +15,9 @@ Phase 7 keeps onboarding-derived state correct after the first session. It adds 
 
 ### 1. Selections are ledger events, and edits are retractions
 
-Phase 7 writes onboarding signals through the engine as ordinary ledger events, so removal is a retraction, not a new snapshot. `createRecommendationOnboardingLifecycle(...).applySelection` runs the existing onboarding seed (catalog, sensitivity opt-in and consent checks), then reconciles the result against the live onboarding events in the engine's accepted history:
+Phase 7 writes onboarding signals through the engine as ordinary ledger events, so removal is a retraction, not a new snapshot. `createRecommendationOnboardingLifecycle(...).applySelection` runs the existing onboarding seed checks (catalog, sensitivity opt-in and consent) through `buildRecommendationOnboardingSignals`, which builds the signals without creating a profile store, then reconciles the result against the live onboarding events in the engine's accepted history:
+
+`applySelection` rejects any input that carries a `profileStore`, so the ledger stays the only write path.
 
 - a target that is no longer selected gets a `retract` event (`source_retracted`);
 - a target whose signal changed (strength, confidence, boundary, expiry) gets a `retract` (`corrected`) and a new `apply`;
@@ -50,7 +52,7 @@ A rebuilt plan reuses the existing path: rerun candidate eligibility, which alre
 
 The derived-state orchestrator's checkpoint is a digest of the profile, so a candidate fact cannot trigger it. `invalidateCandidateState({ subjectId })` adds a durable task with reason `candidate_state_changed` and only the `candidate_cache` and `explanation_cache` targets. It first settles any pending or out-of-date profile invalidation, so the checkpoint written at the end can never claim embeddings are current when they are not. It uses the same task store, per-subject serialization and `repair` recovery. Each report is a new fact, so it is not deduplicated.
 
-`lifecycle.reportCandidateEvents` validates the events and then calls it. `lifecycle.refresh` finishes pending invalidation (or reports the new events), then reruns the first-session orchestrator with the reported candidate IDs added to `excludeCandidateIds`. If pending invalidation cannot be finished, `refresh` throws and does not rerun, so stale cache state is never served.
+`lifecycle.reportCandidateEvents` validates the events and then calls it. `lifecycle.refresh` finishes pending invalidation (or reports the new events), then reruns the first-session orchestrator with the reported candidate IDs added to `excludeCandidateIds`. Only events that name a candidate ID exclude anything. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) usually carry only a set source ID, so they exclude no candidate on refresh unless the reporter also supplies candidate IDs. They still invalidate any plan that relied on that set when the plan is assessed. If pending invalidation cannot be finished, `refresh` throws and does not rerun, so stale cache state is never served.
 
 ### 5. Consent revocation and deletion
 
@@ -67,7 +69,7 @@ The derived-state orchestrator's checkpoint is a digest of the profile, so a can
 - if the source is already gone and the destination has the record, the result is `already_moved`;
 - a destination copy with a newer `updatedAt` is kept and only the stale source is removed.
 
-Adapter and verification failures are retried with exponential backoff and full jitter (default 3 attempts, 200 ms base, doubling, capped at 30 s). Consent and placement denials are never retried. Provider-hosted, server-profile, ephemeral and operator placements are refused twice: by target and by the adapter placement manifest. A transition whose two sides resolve to the same adapter and key is rejected so a record cannot delete itself. Per-subject calls are serialized in process.
+Adapter and verification failures are retried with exponential backoff and full jitter (default 3 attempts, 200 ms base, doubling, capped at 30 s). Consent and placement denials are never retried. Provider-hosted, server-profile, ephemeral and operator placements are refused twice: by target and by the adapter placement manifest. A transition whose two sides resolve to the same adapter and key is rejected so a record cannot delete itself. Per-subject calls are serialized in process. An abort signal also interrupts a backoff wait, so a pending retry delay does not hold the call open.
 
 ### 7. Scoring bindings
 
@@ -99,7 +101,8 @@ All additive, but two are source-visible to anyone who implements these interfac
 
 - Candidate lifecycle events and the consent and provenance inside plans are caller-supplied and unsigned. They can only make a plan less usable; they cannot make one more usable, and a consistent fabrication of plan evidence is still not detectable.
 - The lifecycle does not persist reported events. Only the cache invalidation they cause is durable. An application that wants to reassess a plan after a restart has to keep the events it received, or rerun eligibility.
-- `applySelection` reads history from the engine and serializes per subject in process, like the engine itself. Multiple processes writing the same subject are not coordinated.
+- `applySelection` reads history from the engine and serializes per subject in process, like the engine itself. The serializer belongs to one lifecycle instance. Multiple processes, a second lifecycle instance, or direct `derived.process` calls for the same subject are not coordinated, and their read-then-write steps can interleave. Deterministic event IDs turn the worst case into a `Conflicting source event ID` error, not silent corruption, and a retry then sees the other writer's state and converges.
+- Plan assessment rejects a plan whose provenance, identity fields or timestamps are malformed. A plan that is well formed but forged is still not detectable.
 - The profile transition moves the profile record only. The engine's event-history store and derived caches have their own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
 - No per-kind caps or automatic periodic refresh were added. `refresh` runs when the application calls it.

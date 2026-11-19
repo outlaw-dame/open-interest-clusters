@@ -155,6 +155,23 @@ test("a destination that keeps failing leaves the source intact and stops after 
   assert.equal(local.log.includes("delete"), false);
 });
 
+test("an abort during a backoff sleep ends the transition without waiting or another attempt", async () => {
+  const { local, pod, key, loc } = setup();
+  pod.failWrites = 99;
+  const controller = new AbortController();
+  let sleepStarted = false;
+  // This sleep never finishes on its own, so only the abort signal can end the wait.
+  const sleep = () => new Promise<void>(() => { sleepStarted = true; setTimeout(() => controller.abort(new Error("stop")), 0); });
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, signal: controller.signal, retry: { sleep, random: () => 0.5, maxAttempts: 4 } }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceTransitionError && error.reason === "transition.error.aborted"
+  );
+  assert.equal(sleepStarted, true);
+  assert.equal(pod.log.filter((entry) => entry === "write").length, 1);
+  assert.ok(local.records.has(key));
+  assert.equal(local.log.includes("delete"), false);
+});
+
 test("denials are final and never retried", async () => {
   const { local, pod, loc, retry } = setup();
   const sleeps: number[] = [];

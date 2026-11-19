@@ -353,9 +353,22 @@ function appendHashtagSignals(
   }
 }
 
-export async function createRecommendationOnboardingProfileSeed(
-  input: RecommendationOnboardingProfileSeedInput
-): Promise<RecommendationOnboardingProfileSeedResult> {
+export interface RecommendationOnboardingSignalBuild {
+  signals: readonly RecommendationInterestSignal[];
+  canonicalInterestSignalCount: number;
+  hashtagSignalCount: number;
+  consent: PrivacySafeRecommendationConsentEvent;
+  observedAt: string;
+  privacyBoundary: RecommendationInterestPrivacyBoundary;
+}
+
+/**
+ * Runs every seed check (catalog, sensitivity, consent) and builds the signals, without touching any
+ * profile store. Callers that own their own persistence use this so no throwaway store is created.
+ */
+export async function buildRecommendationOnboardingSignals(
+  input: Omit<RecommendationOnboardingProfileSeedInput, "profileStore">
+): Promise<RecommendationOnboardingSignalBuild> {
   if (!isObject(input)) {
     throw new TypeError("Invalid recommendation onboarding profile seed input.");
   }
@@ -410,8 +423,21 @@ export async function createRecommendationOnboardingProfileSeed(
     consent,
     expiresAt
   );
-  const signals = Object.freeze([...accumulator.signals]);
+  return Object.freeze({
+    signals: Object.freeze([...accumulator.signals]),
+    canonicalInterestSignalCount: accumulator.canonicalInterestSignalCount,
+    hashtagSignalCount: accumulator.hashtagSignalCount,
+    consent,
+    observedAt,
+    privacyBoundary
+  });
+}
 
+export async function createRecommendationOnboardingProfileSeed(
+  input: RecommendationOnboardingProfileSeedInput
+): Promise<RecommendationOnboardingProfileSeedResult> {
+  const { signals, canonicalInterestSignalCount, hashtagSignalCount, consent, observedAt, privacyBoundary } =
+    await buildRecommendationOnboardingSignals(input);
   const profileStore = input.profileStore ?? createInMemoryRecommendationProfileStore({
     allowedPrivacyBoundaries: [privacyBoundary],
     now: () => observedAt
@@ -425,8 +451,8 @@ export async function createRecommendationOnboardingProfileSeed(
   return Object.freeze({
     schemaVersion: RECOMMENDATION_ONBOARDING_PROFILE_SEED_SCHEMA_VERSION,
     signalCount: signals.length,
-    canonicalInterestSignalCount: accumulator.canonicalInterestSignalCount,
-    hashtagSignalCount: accumulator.hashtagSignalCount,
+    canonicalInterestSignalCount,
+    hashtagSignalCount,
     profile: ingestResult.profile,
     signals,
     consent

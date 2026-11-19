@@ -222,13 +222,31 @@ function collectSubjects(plan: RecommendationCandidateActionPlan): readonly Subj
   return subjects;
 }
 
+function validTimestamp(value: unknown): boolean {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+function validProvenance(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => isRecord(item) && nonEmptyString(item.sourceId) && validTimestamp(item.observedAt));
+}
+
+function validMember(member: unknown): boolean {
+  return isRecord(member) && nonEmptyString(member.candidateId) && nonEmptyString(member.accountUri) && nonEmptyString(member.consentSetSourceId) &&
+    validTimestamp(member.eligibilityEvaluatedAt) && validTimestamp(member.consentObservedAt);
+}
+
+/** Malformed plans are rejected, because an unparseable timestamp would make every event comparison false and the plan look valid. */
 function assertPlanShape(plan: unknown): asserts plan is RecommendationCandidateActionPlan {
   if (
     !isRecord(plan) || plan.schemaVersion !== "recommendation-candidate-action-plan.v1" || plan.executable !== false ||
     !isRecord(plan.candidate) || typeof plan.candidate.candidateId !== "string" ||
-    !Number.isFinite(Date.parse(String(plan.createdAt))) || !Number.isFinite(Date.parse(String(plan.eligibilityEvaluatedAt))) ||
-    !Number.isFinite(Date.parse(String(plan.providerCapabilitiesExpireAt))) ||
-    (plan.members !== undefined && (!Array.isArray(plan.members) || plan.members.some((member) => !isRecord(member) || !Number.isFinite(Date.parse(String(member.eligibilityEvaluatedAt))) || !Number.isFinite(Date.parse(String(member.consentObservedAt))))))
+    !nonEmptyString(plan.candidate.provider) || !nonEmptyString(plan.candidate.nativeId) || !validProvenance(plan.candidate.provenance) ||
+    !validTimestamp(plan.createdAt) || !validTimestamp(plan.eligibilityEvaluatedAt) || !validTimestamp(plan.providerCapabilitiesExpireAt) ||
+    (plan.members !== undefined && (!Array.isArray(plan.members) || !plan.members.every(validMember)))
   ) {
     throw new TypeError("Invalid recommendation candidate action plan for lifecycle assessment.");
   }

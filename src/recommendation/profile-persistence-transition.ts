@@ -119,6 +119,22 @@ function abortIf(signal: AbortSignal | undefined): void {
 
 const defaultSleep = (milliseconds: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, milliseconds); });
 
+/** Waits out a backoff delay but gives up as soon as the signal aborts. */
+async function abortableSleep(sleep: (milliseconds: number) => Promise<void>, milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return sleep(milliseconds);
+  abortIf(signal);
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new RecommendationProfilePersistenceTransitionError("transition.error.aborted", { cause: signal.reason }));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([sleep(milliseconds), aborted]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
+
 /** Retries only adapter and verification failures. Policy and consent denials are final on the first try. */
 async function withBackoff<T>(work: () => Promise<T>, retry: RecommendationProfilePersistenceRetryOptions, signal: AbortSignal | undefined): Promise<T> {
   const maxAttempts = boundedInteger(retry.maxAttempts, DEFAULT_MAX_ATTEMPTS, 1, MAX_ATTEMPTS, "Invalid recommendation profile persistence retry attempts.");
@@ -133,7 +149,7 @@ async function withBackoff<T>(work: () => Promise<T>, retry: RecommendationProfi
       const retryable = error instanceof RecommendationProfilePersistenceError && RETRYABLE_REASONS.has(error.reason);
       if (!retryable || attempt >= maxAttempts) throw error;
       const ceiling = Math.min(MAX_DELAY_MS, baseDelay * 2 ** (attempt - 1));
-      await sleep(Math.floor(random() * ceiling));
+      await abortableSleep(sleep, Math.floor(random() * ceiling), signal);
     }
   }
 }

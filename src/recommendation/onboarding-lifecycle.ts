@@ -18,7 +18,7 @@ import type {
 import type { RecommendationInterestSignal } from "./interest-signal.js";
 import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import {
-  createRecommendationOnboardingProfileSeed,
+  buildRecommendationOnboardingSignals,
   type RecommendationOnboardingProfileSeedInput
 } from "./onboarding-profile-seed.js";
 import { assertValidRecommendationProfileSubjectId } from "./profile-store-persistence-key.js";
@@ -274,12 +274,15 @@ export function createRecommendationOnboardingLifecycle(
     async applySelection(input: RecommendationOnboardingSelectionChangeInput) {
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding selection change.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
+      // A profile store would give the seed a second write path that the ledger cannot retract.
+      // The type already forbids it, so this guards untyped callers.
+      if ("profileStore" in input) throw new TypeError("Recommendation onboarding selection changes cannot take a profile store.");
       const { now: rawNow, ...seedInput } = input;
       const now = timestamp(rawNow);
       return serializer.run(input.subjectId, async () => {
         // The seed does the catalog, sensitivity and consent checks. Consent is enforced on every
         // call, so a policy that no longer allows personalization stops the change before any write.
-        const seed = await createRecommendationOnboardingProfileSeed(seedInput);
+        const seed = await buildRecommendationOnboardingSignals(seedInput);
         const desired = new Map<string, { signal: RecommendationInterestSignal; digest: string }>();
         for (const signal of seed.signals) {
           const hash = targetHash(signal);
