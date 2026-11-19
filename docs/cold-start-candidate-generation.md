@@ -92,9 +92,32 @@ The bridge:
 - represents membership as `source_asserted`, not authoritative identity verification;
 - preserves curator/set provenance;
 - uses public set hashtags as candidate tags;
-- collapses duplicate members from several sets while preserving bounded provenance.
+- collapses duplicate members from several sets while preserving bounded provenance;
+- also emits the set itself as one `starter_pack` candidate (see below).
 
 Members without a canonical actor URI remain outside the candidate domain rather than creating unstable handle-based candidate identities.
+
+### Curated sets as starter-pack candidates
+
+A qualifying set (discoverable, not sensitive, with 1 to 150 accepted members that have an actor URI) also becomes one `starter_pack` candidate. It reuses the existing starter-pack candidate and the existing `starter_packs` provider capability. No separate capability was added for curated sets.
+
+- Identity: protocol `activitypub`, `nativeId` and `uri` are the set URL, `provider` is the set URL's host.
+- Provenance: one `curated_account_set` entry with the hashed provider and set ID as `sourceId`, the set ID as `sourceItemId`, the curator, the set URL, and the set's trust boundary.
+- Verification: always `source_asserted`. Eligibility refuses a starter pack until the app has verified it with the hosting provider (`identity_verification_required`), and the source never does that itself.
+- Metadata: name, description, and hashtags. The member list is not copied. Accepted members are still emitted as separate account candidates, which is what the plan's `starterPackMembers` binds to.
+- Sets with no accepted member, or more than 150, produce no pack. A set URL or set ID that is malformed throws instead of being skipped, the same as a malformed member URI does.
+- `membershipComplete: false` does not block a pack. The plan binds an explicit member list, so a partial read only means fewer members.
+- The adapter now declares `account` and `starter_pack` and returns only the kinds a query asks for. Callers that asked for `["account"]` see no change. A caller that passes both kinds will see packs and their members in one result.
+
+The same account candidates and pack come from one read, so there is no duplicate identity: they have different kinds and different candidate IDs.
+
+Mastodon tailors a Collection per viewer. Blocked items are left out by the server and `pending` items are only visible to the owner, so the same set can read differently for different viewers. A set read is a snapshot for the viewer who read it and should not be shared across viewers. Mastodon's create limits (name 40, description 100) are not enforced when reading, because other servers and the adapter accept longer text. The 150-item cap is.
+
+A curated set is discovery provenance. It does not mean the viewer endorses it, and a set from a third party stays an unverified hint until the hosting provider verifies it.
+
+#### Why `starter_packs` is reused
+
+A provider capability says what a user can do on that provider (follow a curated bundle of accounts), not which product offers it. The repo already treats `mastodon_collection`, `loops_starter_kit` and `pixelfed_starter_kit` as one curated-account-set type, so one capability and one plan type cover them. The cost is that the capability alone cannot tell a Bluesky starter pack from a Mastodon Collection. An app that needs the difference should read the candidate: `curated_account_set` provenance (with its set ID) and an `activitypub` protocol identify a curated set, while ATProto starter packs come from other sources. A provider that does not report `starter_packs` as `supported` cannot get a plan for one of these candidates.
 
 ## Deliberate non-goals
 
