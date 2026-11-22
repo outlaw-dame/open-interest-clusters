@@ -18,20 +18,19 @@ Changes from PR #136, on top of 0.2.0.
 ### Changed
 
 - `readEventHistory` is no longer a required member of `RecommendationEngineOrchestrator`, and `invalidateCandidateState` is no longer a required member of `RecommendationDerivedStateInvalidationOrchestrator`. Both were required in 0.2.0. Wrappers and test doubles written before 0.2.0 compile again, and code written against 0.2.0 keeps working.
+- The new lifecycle members and result fields live on extending types instead of the 0.2.0 ones. `createRecommendationOnboardingLifecycle` returns `RecommendationOnboardingLifecycleWithCandidateEvents` (adds `listReportedCandidateEvents` and `assessPlan`). `reportCandidateEvents` returns `RecommendationOnboardingCandidateReportResultWithEvidence`, `assessPlan` and the assessment functions return `RecommendationCandidatePlanAssessmentWithEvidence` (both add `evidenceVerification`, `verifierId`, `verifiedKinds` and `storedEventsNotChecked`), and `refresh` returns `RecommendationOnboardingRefreshResultWithSetExclusions` (adds `excludedSetSourceIds`). `RecommendationOnboardingLifecycle`, `RecommendationCandidatePlanAssessment`, `RecommendationOnboardingCandidateReportResult` and `RecommendationOnboardingRefreshResult` keep their 0.2.0 members, and the extended types are assignable to them. Hand-written doubles and hand-built values still compile.
 
 ### Breaking changes
 
-All of these are type-level. Nothing changes at runtime for code that only uses the orchestrators this package builds.
+One, and it is type-level. Nothing changes at runtime.
 
-- `RecommendationOnboardingLifecycle` has two new required methods, `listReportedCandidateEvents` and `assessPlan`. The library builds this object, so only a hand-written double stops compiling. Add the two methods to it.
-- `RecommendationCandidatePlanAssessment` and the report result have three new required fields: `evidenceVerification`, `verifiedKinds` and `storedEventsNotChecked`. Code that builds one by hand must set them. Code that only reads them is fine.
-- Three unions grew: `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gained `candidate_state_changed`, `RECOMMENDATION_STATE_DOMAINS` gained `candidate_lifecycle_events`, and `RecommendationEvidenceVerificationState` gained `partial`. An exhaustive `switch` or `Record<..., ...>` over any of them will not compile until it handles the new value. Give those branches a default that treats an unknown value as the least trusting one.
+- `RECOMMENDATION_STATE_DOMAINS` and `RecommendationStateDomain` gained `candidate_lifecycle_events`. An exhaustive `switch` or `Record<RecommendationStateDomain, ...>` will not compile until it handles the new value. Give those branches a default that treats an unknown domain as the least trusting one. The old union could not be kept, because this is a real domain that the placement policy and the candidate event store use, and a union without it would be wrong about what they return.
 
 Not breaking: the consent `policy` input is only needed when a candidate event store is configured. `RecommendationCandidateEventStore.save` takes an optional third argument and the interface gains the optional `supportsCompareAndSet`.
 
 ### Upgrade order
 
-A derived-state task saved with `candidate_state_changed` is rejected by older versions (`Invalid recommendation derived-state invalidation reason.`). Upgrade readers before writers. Stored candidate event records carry a `schemaVersion`, and a reader that meets a newer one throws instead of guessing.
+A derived-state task saved with `candidate_state_changed` is rejected by versions before 0.2.0 (`Invalid recommendation derived-state invalidation reason.`). Upgrade readers before writers. Stored candidate event records carry a `schemaVersion`, and a reader that meets a newer one throws instead of guessing.
 
 ## 0.2.0
 

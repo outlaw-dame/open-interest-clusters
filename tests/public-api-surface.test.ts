@@ -5,14 +5,20 @@ import * as api from "../src/index.js";
 import type {
   RecommendationCandidateEventRecord,
   RecommendationCandidatePlanAssessment,
+  RecommendationCandidatePlanAssessmentWithEvidence,
   RecommendationCandidateEventStore,
   RecommendationCandidateStateInvalidator,
   RecommendationDerivedStateInvalidationOrchestrator,
   RecommendationEngineEventHistoryReader,
   RecommendationEngineOrchestrator,
   RecommendationEvidenceVerifier,
+  RecommendationOnboardingCandidateReportResult,
+  RecommendationOnboardingCandidateReportResultWithEvidence,
   RecommendationOnboardingLifecycle,
-  RecommendationOnboardingLifecycleOptions
+  RecommendationOnboardingLifecycleOptions,
+  RecommendationOnboardingLifecycleWithCandidateEvents,
+  RecommendationOnboardingRefreshResult,
+  RecommendationOnboardingRefreshResultWithSetExclusions
 } from "../src/index.js";
 
 // Compile-time half. If a member is added to or removed from one of these interfaces, `pnpm lint:types`
@@ -29,7 +35,10 @@ type _EngineHistoryKeys = Assert<Equal<keyof RecommendationEngineEventHistoryRea
 type _DerivedKeys = Assert<Equal<keyof RecommendationDerivedStateInvalidationOrchestrator,
   "process" | "synchronize" | "repair" | "deleteSubject">>;
 type _CandidateInvalidatorKeys = Assert<Equal<keyof RecommendationCandidateStateInvalidator, "invalidateCandidateState">>;
+// The base lifecycle keeps its 0.2.0 members. New ones live on the extending interface.
 type _LifecycleKeys = Assert<Equal<keyof RecommendationOnboardingLifecycle,
+  "applySelection" | "withdrawSelections" | "reportCandidateEvents" | "refresh">>;
+type _LifecycleWithCandidateEventsKeys = Assert<Equal<keyof RecommendationOnboardingLifecycleWithCandidateEvents,
   "applySelection" | "withdrawSelections" | "reportCandidateEvents" | "listReportedCandidateEvents" | "assessPlan" | "refresh">>;
 type _LifecycleOptionKeys = Assert<Equal<keyof RecommendationOnboardingLifecycleOptions,
   "derived" | "engine" | "firstSession" | "now" | "evidenceVerifier" | "candidateEvents">>;
@@ -38,8 +47,23 @@ type _EventStoreKeys = Assert<Equal<keyof RecommendationCandidateEventStore,
 type _VerifierKeys = Assert<Equal<keyof RecommendationEvidenceVerifier, "id" | "verify">>;
 type _VerificationStates = Assert<Equal<api.RecommendationEvidenceVerificationState, "verified" | "partial" | "unverified">>;
 type _PlanAssessmentKeys = Assert<Equal<keyof RecommendationCandidatePlanAssessment,
-  "schemaVersion" | "state" | "usable" | "executable" | "requiresRevalidation" | "assessedAt" | "evidenceVerification" |
-  "verifierId" | "verifiedKinds" | "storedEventsNotChecked" | "reasons" | "affectedMemberCandidateIds" | "unaffectedMemberCandidateIds">>;
+  "schemaVersion" | "state" | "usable" | "executable" | "requiresRevalidation" | "assessedAt" |
+  "reasons" | "affectedMemberCandidateIds" | "unaffectedMemberCandidateIds">>;
+type _PlanAssessmentWithEvidenceKeys = Assert<Equal<keyof RecommendationCandidatePlanAssessmentWithEvidence,
+  keyof RecommendationCandidatePlanAssessment | "evidenceVerification" | "verifierId" | "verifiedKinds" | "storedEventsNotChecked">>;
+type _ReportResultKeys = Assert<Equal<keyof RecommendationOnboardingCandidateReportResult,
+  "subjectId" | "acceptedEventCount" | "excludedCandidateIds" | "propagation">>;
+type _ReportResultWithEvidenceKeys = Assert<Equal<keyof RecommendationOnboardingCandidateReportResultWithEvidence,
+  keyof RecommendationOnboardingCandidateReportResult | "evidenceVerification" | "verifierId" | "verifiedKinds" | "storedEventsNotChecked">>;
+type _RefreshResultKeys = Assert<Equal<keyof RecommendationOnboardingRefreshResult,
+  "result" | "excludedCandidateIds" | "propagation">>;
+type _RefreshResultWithSetExclusionsKeys = Assert<Equal<keyof RecommendationOnboardingRefreshResultWithSetExclusions,
+  keyof RecommendationOnboardingRefreshResult | "excludedSetSourceIds">>;
+// The extended types must stay assignable to the base types, or the factories would break old consumers.
+type _LifecycleExtends = Assert<RecommendationOnboardingLifecycleWithCandidateEvents extends RecommendationOnboardingLifecycle ? true : false>;
+type _AssessmentExtends = Assert<RecommendationCandidatePlanAssessmentWithEvidence extends RecommendationCandidatePlanAssessment ? true : false>;
+type _ReportExtends = Assert<RecommendationOnboardingCandidateReportResultWithEvidence extends RecommendationOnboardingCandidateReportResult ? true : false>;
+type _RefreshExtends = Assert<RecommendationOnboardingRefreshResultWithSetExclusions extends RecommendationOnboardingRefreshResult ? true : false>;
 type _EventRecordKeys = Assert<Equal<keyof RecommendationCandidateEventRecord,
   "schemaVersion" | "subjectId" | "updatedAt" | "entries" | "digest">>;
 
@@ -63,6 +87,23 @@ const lifecycleOptionsWithoutExtensions: RecommendationOnboardingLifecycleOption
 };
 void lifecycleOptionsWithoutExtensions;
 
+// A lifecycle double and result values written against the 0.2.0 shapes must keep compiling.
+const handWrittenLifecycle: RecommendationOnboardingLifecycle = {
+  applySelection: async () => { throw new Error("unused"); },
+  withdrawSelections: async () => { throw new Error("unused"); },
+  reportCandidateEvents: async ({ subjectId }) => ({ subjectId, acceptedEventCount: 0, excludedCandidateIds: [], propagation: undefined }),
+  refresh: async () => { throw new Error("unused"); }
+};
+const handBuiltReport: RecommendationOnboardingCandidateReportResult = {
+  subjectId: "subject-1", acceptedEventCount: 0, excludedCandidateIds: [], propagation: undefined
+};
+const handBuiltAssessment: RecommendationCandidatePlanAssessment = {
+  schemaVersion: "recommendation-candidate-plan-assessment.v1",
+  state: "valid", usable: true, executable: false, requiresRevalidation: true,
+  assessedAt: "2026-01-01T00:00:00.000Z", reasons: [], affectedMemberCandidateIds: [], unaffectedMemberCandidateIds: []
+};
+void handWrittenLifecycle; void handBuiltReport; void handBuiltAssessment;
+
 // Runtime half. Exported names and every exported ALL_CAPS list (reasons, domains, capabilities...) are
 // compared with a checked-in fixture. To accept an intentional change:
 //   pnpm build && UPDATE_API_SURFACE=1 node --test dist/tests/public-api-surface.test.js
@@ -81,7 +122,8 @@ function currentSurface(): { exports: string[]; lists: Record<string, unknown[]>
 
 // The update switch skips the comparison, so it must never be able to pass quietly in CI.
 function assertUpdateAllowed(env: Record<string, string | undefined>): void {
-  if (env.CI !== undefined && env.CI !== "" && env.CI !== "false" && env.CI !== "0") {
+  // Any non-empty value counts, "false" and "0" included: a CI system that sets CI=false is still a CI system.
+  if (env.CI !== undefined && env.CI !== "") {
     throw new Error("UPDATE_API_SURFACE cannot be used when CI is set.");
   }
 }
@@ -115,9 +157,27 @@ test("the snapshot covers the Phase 7 additions and the extension seams", () => 
   assert.ok(lists.RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS?.includes("candidate_state_changed"));
 });
 
-test("the update switch is refused in CI and allowed locally", () => {
-  assert.throws(() => assertUpdateAllowed({ CI: "true" }), /CI is set/u);
-  assert.throws(() => assertUpdateAllowed({ CI: "1" }), /CI is set/u);
+test("the update switch is refused whenever CI is set to anything, and allowed locally", () => {
+  for (const value of ["true", "1", "false", "0"]) {
+    assert.throws(() => assertUpdateAllowed({ CI: value }), /CI is set/u, `CI=${value}`);
+  }
   assert.doesNotThrow(() => assertUpdateAllowed({}));
-  assert.doesNotThrow(() => assertUpdateAllowed({ CI: "false" }));
+  assert.doesNotThrow(() => assertUpdateAllowed({ CI: undefined }));
+  assert.doesNotThrow(() => assertUpdateAllowed({ CI: "" }));
+});
+
+test("the library lifecycle works through the 0.2.0 interface and still returns the richer results", async () => {
+  const lifecycle = api.createRecommendationOnboardingLifecycle({
+    derived: handWrittenDerived,
+    engine: handWrittenEngine,
+    now: () => "2026-01-01T00:00:00.000Z"
+  });
+  const asOldInterface: RecommendationOnboardingLifecycle = lifecycle;
+  const oldResult: RecommendationOnboardingCandidateReportResult = await asOldInterface.reportCandidateEvents({ subjectId: "subject-1", events: [] });
+  assert.equal(oldResult.acceptedEventCount, 0);
+  // The same object still carries the evidence fields for callers that ask for the richer type.
+  const richer = await lifecycle.reportCandidateEvents({ subjectId: "subject-1", events: [] });
+  assert.equal(richer.evidenceVerification, "unverified");
+  assert.deepEqual(richer.verifiedKinds, []);
+  assert.equal(richer.storedEventsNotChecked, 0);
 });

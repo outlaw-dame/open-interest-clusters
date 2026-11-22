@@ -27,7 +27,7 @@ import {
 import {
   assertRecommendationTimestampNotAhead,
   assessRecommendationCandidateActionPlanWithEvidence,
-  type RecommendationCandidatePlanAssessment,
+  type RecommendationCandidatePlanAssessmentWithEvidence,
   listRecommendationLifecycleExcludedCandidateIds,
   listRecommendationLifecycleExcludedSetSourceIds,
   normalizeRecommendationCandidateLifecycleEvents,
@@ -85,12 +85,16 @@ export interface RecommendationOnboardingWithdrawalInput {
   now?: string;
 }
 
-export interface RecommendationOnboardingCandidateReportResult extends RecommendationEvidenceVerification {
+export interface RecommendationOnboardingCandidateReportResult {
   subjectId: string;
   acceptedEventCount: number;
   excludedCandidateIds: readonly string[];
   propagation: RecommendationDerivedStatePropagationResult | undefined;
 }
+
+/** What `reportCandidateEvents` returns from the library's lifecycle: the 0.2.0 result plus what the verifier checked. */
+export interface RecommendationOnboardingCandidateReportResultWithEvidence
+  extends RecommendationOnboardingCandidateReportResult, RecommendationEvidenceVerification {}
 
 export interface RecommendationOnboardingCandidateReportInput {
   subjectId: string;
@@ -117,9 +121,13 @@ export interface RecommendationOnboardingRefreshResult {
   result: RecommendationFirstSessionResult;
   /** Includes candidates excluded by events stored from earlier reports, when a store is configured. */
   excludedCandidateIds: readonly string[];
+  propagation: RecommendationDerivedStatePropagationResult;
+}
+
+/** What `refresh` returns from the library's lifecycle: the 0.2.0 result plus the set-level exclusions it applied. */
+export interface RecommendationOnboardingRefreshResultWithSetExclusions extends RecommendationOnboardingRefreshResult {
   /** Curated-set source IDs left out because a set-level event was reported for them. */
   excludedSetSourceIds: readonly string[];
-  propagation: RecommendationDerivedStatePropagationResult;
 }
 
 export interface RecommendationOnboardingLifecycleOptions {
@@ -182,18 +190,29 @@ export interface RecommendationOnboardingLifecycle {
   applySelection(input: RecommendationOnboardingSelectionChangeInput): Promise<RecommendationOnboardingSelectionChangeResult>;
   /** Retracts every live onboarding signal. Use `consent_revoked` when the user withdrew consent. */
   withdrawSelections(input: RecommendationOnboardingWithdrawalInput): Promise<RecommendationOnboardingSelectionChangeResult>;
+  /** Records changed candidate facts: durably clears the candidate and explanation caches. */
+  reportCandidateEvents(input: { subjectId: string; events: readonly RecommendationCandidateLifecycleEvent[]; now?: string }): Promise<RecommendationOnboardingCandidateReportResult>;
+  /** Settles pending invalidation, reports candidate facts, then reruns the first session without the withdrawn candidates. */
+  refresh(input: RecommendationOnboardingRefreshInput): Promise<RecommendationOnboardingRefreshResult>;
+}
+
+/**
+ * What `createRecommendationOnboardingLifecycle` returns. It is `RecommendationOnboardingLifecycle`
+ * plus the candidate event store and plan assessment methods, with richer results. It is a separate
+ * interface so a hand-written `RecommendationOnboardingLifecycle` written before these methods existed
+ * still compiles. This type is assignable to the base one.
+ */
+export interface RecommendationOnboardingLifecycleWithCandidateEvents extends RecommendationOnboardingLifecycle {
   /**
-   * Records changed candidate facts: durably clears the candidate and explanation caches. With a
-   * candidate event store, the events are saved first and the call fails if they cannot be, so a
+   * With a candidate event store, the events are saved first and the call fails if they cannot be, so a
    * success never claims more than was kept.
    */
-  reportCandidateEvents(input: RecommendationOnboardingCandidateReportInput): Promise<RecommendationOnboardingCandidateReportResult>;
+  reportCandidateEvents(input: RecommendationOnboardingCandidateReportInput): Promise<RecommendationOnboardingCandidateReportResultWithEvidence>;
   /** Stored events that have not expired, oldest first. Throws when no candidate event store is configured. */
   listReportedCandidateEvents(input: { subjectId: string; now?: string }): Promise<readonly RecommendationCandidateLifecycleEvent[]>;
   /** Assesses a plan against the stored events plus any extra ones. Throws when no candidate event store is configured. */
-  assessPlan(input: RecommendationOnboardingPlanAssessmentInput): Promise<RecommendationCandidatePlanAssessment>;
-  /** Settles pending invalidation, reports candidate facts, then reruns the first session without the withdrawn candidates. */
-  refresh(input: RecommendationOnboardingRefreshInput): Promise<RecommendationOnboardingRefreshResult>;
+  assessPlan(input: RecommendationOnboardingPlanAssessmentInput): Promise<RecommendationCandidatePlanAssessmentWithEvidence>;
+  refresh(input: RecommendationOnboardingRefreshInput): Promise<RecommendationOnboardingRefreshResultWithSetExclusions>;
 }
 
 /** A few quick replans with jittered backoff. A lost race normally settles on the first one. */
@@ -300,7 +319,7 @@ function applyEvent(sourceEventId: string, signal: RecommendationInterestSignal,
 
 export function createRecommendationOnboardingLifecycle(
   options: RecommendationOnboardingLifecycleOptions
-): RecommendationOnboardingLifecycle {
+): RecommendationOnboardingLifecycleWithCandidateEvents {
   if (
     !isRecord(options) || !isRecord(options.derived) || !isRecord(options.engine) ||
     typeof options.derived.process !== "function" || typeof options.derived.repair !== "function" ||
@@ -497,7 +516,7 @@ export function createRecommendationOnboardingLifecycle(
     rawEvents: readonly RecommendationCandidateLifecycleEvent[],
     now: string,
     policy?: RecommendationConsentPolicy
-  ): Promise<RecommendationOnboardingCandidateReportResult> {
+  ): Promise<RecommendationOnboardingCandidateReportResultWithEvidence> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
       return Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });

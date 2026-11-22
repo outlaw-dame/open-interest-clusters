@@ -5,8 +5,7 @@ import {
   combineRecommendationEvidenceVerification,
   verifyRecommendationEvidence,
   type NormalizedRecommendationEvidenceVerifier,
-  type RecommendationEvidenceKind,
-  type RecommendationEvidenceVerificationState
+  type RecommendationEvidenceVerification
 } from "./evidence-verifier.js";
 import { assertValidRecommendationProfileSubjectId } from "./profile-store-persistence-key.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
@@ -85,22 +84,20 @@ export interface RecommendationCandidatePlanAssessment {
   executable: false;
   requiresRevalidation: true;
   assessedAt: string;
-  /**
-   * `verified` when an evidence verifier accepted everything this call used. `partial` when it
-   * accepted what it was asked about but stored events were relied on unchecked (see
-   * `storedEventsNotChecked`). `unverified` when nothing was checked. `verifiedKinds` lists which
-   * kinds of evidence were accepted. Verification can only reject evidence, so it never makes a plan more usable.
-   */
-  evidenceVerification: RecommendationEvidenceVerificationState;
-  verifierId?: string;
-  verifiedKinds: readonly RecommendationEvidenceKind[];
-  storedEventsNotChecked: number;
   reasons: readonly RecommendationCandidatePlanAssessmentReason[];
   /** Members hit by at least one reason. A new plan must not include them without fresh evidence. */
   affectedMemberCandidateIds: readonly string[];
   /** Members no event mentioned. They still need revalidation; this only says nothing was reported. */
   unaffectedMemberCandidateIds: readonly string[];
 }
+
+/**
+ * `RecommendationCandidatePlanAssessment` plus what an evidence verifier checked. The library's
+ * assessment functions return this. It is a separate interface so an assessment built by hand against
+ * the earlier shape still compiles. Verification can only reject evidence, so it never makes a plan more usable.
+ */
+export interface RecommendationCandidatePlanAssessmentWithEvidence
+  extends RecommendationCandidatePlanAssessment, RecommendationEvidenceVerification {}
 
 export interface RecommendationCandidatePlanAssessmentOptions {
   now: string;
@@ -315,7 +312,7 @@ export function assessRecommendationCandidateActionPlan(
   planInput: RecommendationCandidateActionPlan,
   eventsInput: readonly RecommendationCandidateLifecycleEvent[],
   options: RecommendationCandidatePlanAssessmentOptions
-): RecommendationCandidatePlanAssessment {
+): RecommendationCandidatePlanAssessmentWithEvidence {
   assertPlanShape(planInput);
   const plan = planInput;
   if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
@@ -432,7 +429,7 @@ export async function assessRecommendationCandidateActionPlanWithEvidence(
   planInput: RecommendationCandidateActionPlan,
   eventsInput: readonly RecommendationCandidateLifecycleEvent[],
   options: RecommendationCandidatePlanEvidenceAssessmentOptions
-): Promise<RecommendationCandidatePlanAssessment> {
+): Promise<RecommendationCandidatePlanAssessmentWithEvidence> {
   if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
   const { subjectId, evidenceVerifier, storedEvents, ...assessOptions } = options;
   assertPlanShape(planInput);

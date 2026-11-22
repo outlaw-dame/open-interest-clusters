@@ -27,6 +27,7 @@ import {
   type RecommendationEvidenceVerifierOptions,
   RecommendationEvidenceVerificationError,
   type RecommendationOnboardingLifecycle,
+  type RecommendationOnboardingLifecycleWithCandidateEvents,
   type RecommendationSignalLedgerEventInput
 } from "../src/index.js";
 
@@ -72,7 +73,7 @@ function harness(options: { failures?: RecommendationDerivedStateTarget[]; first
     candidateKinds: options.candidateKinds ?? ["account"],
     evaluateEligibility: ({ candidate }) => { firstSessionCalls.push(candidate.candidate.candidateId); return { candidate: candidate.candidate, eligible: true, reasonCodes: ["eligible"], evaluatedAt: T0 }; }
   });
-  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock, ...(options.evidenceVerifier === undefined ? {} : { evidenceVerifier: options.evidenceVerifier }) });
+  const lifecycle: RecommendationOnboardingLifecycleWithCandidateEvents = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock, ...(options.evidenceVerifier === undefined ? {} : { evidenceVerifier: options.evidenceVerifier }) });
   return { engine, derived, lifecycle, calls, tasks, firstSessionCalls };
 }
 
@@ -538,7 +539,7 @@ test("lifecycle instances on one engine queue behind each other for the same sub
 });
 
 /** A lifecycle whose first history read is followed by a write from outside the lifecycle queue. */
-function lifecycleWithRival(h: Harness, rival: () => Promise<unknown>): RecommendationOnboardingLifecycle {
+function lifecycleWithRival(h: Harness, rival: () => Promise<unknown>): RecommendationOnboardingLifecycleWithCandidateEvents {
   let armed = true;
   const engine = spyEngine(h, async () => { if (armed) { armed = false; await rival(); } });
   return createRecommendationOnboardingLifecycle({ derived: h.derived, engine, now: () => lifecycleClock });
