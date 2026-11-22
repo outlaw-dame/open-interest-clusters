@@ -56,7 +56,11 @@ The plan records `providerCapabilitiesExpireAt`. That is the point after which a
 
 Starter-pack expansion is bounded to 100 members by default and cannot exceed 1,000. The bound is part of the plan contract; it is not permission to follow those members automatically.
 
-The plan carries only that cap. It does not list the pack's members, and it does not bind members to resolved account identities or run member-level eligibility. An application that expands a starter pack still has to resolve and check each member itself, as required by [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
+A starter-pack plan also requires `starterPackMembers`: one `RecommendationCandidateEligibilityResult` per member, produced by the account eligibility path. Each one must be an account candidate with `eligible: true`, `reasonCodes` of exactly `["eligible"]`, an evaluation time no later than the plan, and a `resolvedAccount` that is not deactivated, suspended, or deleted. The plan keeps only a binding for each member (`candidateId`, `accountId`, `accountUri`, `eligibilityEvaluatedAt`) under `members`, so a later execution step can compare against the identity that was actually checked. Nothing else from the eligibility result is copied.
+
+Plan creation fails when the member list is missing, empty, longer than `maxStarterPackMembers`, or contains two entries that resolve to the same account. It does not drop members to fit the limit. Members that are ineligible should be left out by the caller, as the safety amendments describe.
+
+The engine does not run the member-level checks itself and does not fetch pack contents. It only refuses to build a plan unless each member arrives with passing evidence. The application still has to revalidate each bound identity before executing anything, see [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md). Provider capability evidence covers the pack's provider only, not the providers of individual members.
 
 ## Relationship to the onboarding hashtag plan
 
