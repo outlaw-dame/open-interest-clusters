@@ -4,6 +4,7 @@ import {
   RECOMMENDATION_GLOBAL_CATALOG_V1,
   RecommendationConsentDeniedError,
   RecommendationSubjectLockError,
+  createInMemoryRecommendationCandidateEventStore,
   createInMemoryRecommendationProfileSignalReplacementStore,
   createRecommendationCatalogIndex,
   createRecommendationDerivedStateInvalidationOrchestrator,
@@ -239,5 +240,58 @@ test("malformed lock options are rejected when the lifecycle is created", () => 
   const good = async () => () => undefined;
   for (const bad of [null, "lock", {}, { acquire: good, timeoutMs: 0 }, { acquire: good, timeoutMs: 60_001 }, { acquire: good, timeoutMs: 1.5 }, { acquire: good, signal: {} }, { acquire: good, onReleaseError: 1 }]) {
     assert.throws(() => setup(bad as unknown as RecommendationSubjectLockOptions), TypeError);
+  }
+});
+
+// The other three wrapped methods. Each one has to take the lock, give it back, and fail closed
+// without touching anything when the lock cannot be had.
+function setupWithStoreAndFirstSession(subjectLock: RecommendationSubjectLockOptions, log: string[]) {
+  const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T0 });
+  const noop = { async invalidate(request: RecommendationDerivedStateInvalidationRequest) { log.push(`invalidate:${request.subjectId}`); } };
+  const derived = createRecommendationDerivedStateInvalidationOrchestrator({
+    engine, now: () => T0, invalidators: { embeddings: noop, candidate_cache: noop, explanation_cache: noop }
+  });
+  const store = createInMemoryRecommendationCandidateEventStore();
+  const saves: string[] = [];
+  const loggedStore = { ...store, manifest: store.manifest, load: (id: string) => store.load(id), delete: (id: string) => store.delete(id), async save(id: string, record: never, saveOptions?: never) { saves.push(id); return store.save(id, record, saveOptions); } };
+  const firstSession = { async execute() { log.push("first-session"); return { recommendations: [] } as never; } };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine, firstSession, subjectLock, now: () => T0, candidateEvents: { store: loggedStore } });
+  return { lifecycle, saves };
+}
+
+const SET_DELETED = { kind: "set_deleted", occurredAt: T0, setSourceId: "curated-set:v1:x", candidateId: "pack-1" } as const;
+function lockedCalls(lifecycle: ReturnType<typeof setupWithStoreAndFirstSession>["lifecycle"]): Record<string, () => Promise<unknown>> {
+  return {
+    reportCandidateEvents: () => lifecycle.reportCandidateEvents({ subjectId: "user-a", events: [SET_DELETED], policy: policyFor("user-a"), now: T0 }),
+    assessPlan: () => lifecycle.assessPlan({ subjectId: "user-a", plan: undefined as never, policy: policyFor("user-a"), now: T0 }),
+    refresh: () => lifecycle.refresh({ request: { subjectId: "user-a", requestId: "r1", languages: ["en"], limit: 5 }, now: T0 })
+  };
+}
+
+test("reportCandidateEvents, assessPlan and refresh each take the lock and give it back, even when they throw", async () => {
+  for (const name of ["reportCandidateEvents", "assessPlan", "refresh"]) {
+    const log: string[] = [];
+    const { lifecycle } = setupWithStoreAndFirstSession(fakeLock(log), log);
+    // assessPlan gets no usable plan here, so it throws after the lock is taken. That is the point: release still happens.
+    await lockedCalls(lifecycle)[name]!().catch(() => undefined);
+    const lockLog = log.filter((entry) => /^(acquire|held|release):/u.test(entry));
+    assert.deepEqual(lockLog, ["acquire:user-a", "held:user-a", "release:user-a"], name);
+    if (name === "refresh") assert.ok(log.indexOf("first-session") > log.indexOf("held:user-a") && log.indexOf("first-session") < log.indexOf("release:user-a"), "first session runs inside the lock");
+    if (name === "reportCandidateEvents") assert.ok(log.indexOf("invalidate:user-a") > log.indexOf("held:user-a") && log.indexOf("invalidate:user-a") < log.indexOf("release:user-a"), "cache clearing runs inside the lock");
+  }
+});
+
+test("reportCandidateEvents, assessPlan and refresh fail closed when the lock cannot be had", async () => {
+  for (const name of ["reportCandidateEvents", "assessPlan", "refresh"]) {
+    const log: string[] = [];
+    const { lifecycle, saves } = setupWithStoreAndFirstSession({ async acquire() { throw new Error("db down"); } }, log);
+    const error = await lockedCalls(lifecycle)[name]!().then(() => undefined, (e: unknown) => e);
+    assert.ok(error instanceof RecommendationSubjectLockError, name);
+    assert.equal(error.reason, "acquire_failed", name);
+    assert.ok(!error.message.includes("user-a"), name);
+    // Nothing ran: no event saved, no cache cleared, no first-session call.
+    assert.deepEqual(saves, [], name);
+    assert.deepEqual(log, [], name);
+    assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: "user-a" }), [], name);
   }
 });
