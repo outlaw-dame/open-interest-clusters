@@ -3,6 +3,7 @@ import {
   createRecommendationProfileApplicationOrchestrator,
   type RecommendationProfileApplicationResult
 } from "./profile-application-orchestrator.js";
+import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import type { RecommendationProfileSignalReplacementStore } from "./profile-replacement-store.js";
 import {
@@ -182,7 +183,7 @@ export function createRecommendationEngineOrchestrator(
   const allowEmptyInitialization = options.allowEmptySubjectInitialization === true;
   const states = new Map<string, RecommendationEnginePersistedSubjectState>();
   const ledgers = new Map<string, RecommendationSignalLedger>();
-  const tails = new Map<string, Promise<void>>();
+  const serializer = createRecommendationKeyedSerializer();
   const application = createRecommendationProfileApplicationOrchestrator({
     profileStore: options.profileStore,
     now: nowProvider
@@ -225,22 +226,6 @@ export function createRecommendationEngineOrchestrator(
     return state;
   }
 
-  async function runSerialized<T>(id: string, work: () => Promise<T>): Promise<T> {
-    const prior = tails.get(id) ?? Promise.resolve();
-    const ready = prior.catch(() => undefined);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const tail = ready.then(() => gate);
-    tails.set(id, tail);
-    await ready;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (tails.get(id) === tail) tails.delete(id);
-    }
-  }
-
   function resolveNow(value: unknown): string {
     return timestamp(value ?? nowProvider());
   }
@@ -254,7 +239,7 @@ export function createRecommendationEngineOrchestrator(
       if (input.events.length > batchLimit) throw new RangeError("Recommendation engine event batch limit exceeded.");
       const now = resolveNow(input.now);
 
-      return runSerialized(id, async () => {
+      return serializer.run(id, async () => {
         const state = await requireActiveState(id);
         const candidate = buildLedger(state.events);
         const ingestion = candidate.ingestBatch(input.events);
@@ -272,7 +257,7 @@ export function createRecommendationEngineOrchestrator(
       if (!isPlainRecord(input)) throw new TypeError("Invalid recommendation engine synchronize input.");
       const id = subjectId(input.subjectId);
       const now = resolveNow(input.now);
-      return runSerialized(id, async () => {
+      return serializer.run(id, async () => {
         const state = await requireActiveState(id);
         const ledger = ledgers.get(id) ?? buildLedger(state.events);
         ledgers.set(id, ledger);
@@ -282,14 +267,14 @@ export function createRecommendationEngineOrchestrator(
 
     async readProfile(rawSubjectId: string): Promise<RecommendationProfileSnapshot> {
       const id = subjectId(rawSubjectId);
-      return runSerialized(id, () => options.profileStore.readProfile(id));
+      return serializer.run(id, () => options.profileStore.readProfile(id));
     },
 
     async readLedgerSnapshot(input: RecommendationEngineSynchronizeInput): Promise<RecommendationSignalLedgerSnapshot> {
       if (!isPlainRecord(input)) throw new TypeError("Invalid recommendation engine ledger snapshot input.");
       const id = subjectId(input.subjectId);
       const now = resolveNow(input.now);
-      return runSerialized(id, async () => {
+      return serializer.run(id, async () => {
         const state = await requireActiveState(id);
         const ledger = ledgers.get(id) ?? buildLedger(state.events);
         ledgers.set(id, ledger);
@@ -299,12 +284,12 @@ export function createRecommendationEngineOrchestrator(
 
     async readEventHistory(rawSubjectId: string): Promise<readonly RecommendationSignalLedgerEventInput[]> {
       const id = subjectId(rawSubjectId);
-      return runSerialized(id, async () => (await requireActiveState(id)).events);
+      return serializer.run(id, async () => (await requireActiveState(id)).events);
     },
 
     async deleteSubject(rawIntent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult> {
       const intent = validateDeletionIntent(rawIntent);
-      return runSerialized(intent.subjectId, async () => {
+      return serializer.run(intent.subjectId, async () => {
         const barrier = freezeState({ events: [], deletedAt: intent.requestedAt });
         await stateStore.save(intent.subjectId, barrier);
         states.set(intent.subjectId, barrier);

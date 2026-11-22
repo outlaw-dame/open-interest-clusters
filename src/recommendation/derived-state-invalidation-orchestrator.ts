@@ -7,6 +7,7 @@ import type {
   RecommendationEngineSynchronizeInput
 } from "./engine-orchestrator.js";
 import type { RecommendationProfileApplicationResult } from "./profile-application-orchestrator.js";
+import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import { sha256Hex } from "../runtime/hash.js";
@@ -359,27 +360,10 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
   if (typeof nowProvider !== "function") {
     throw new TypeError("Invalid recommendation derived-state clock.");
   }
-  const tails = new Map<string, Promise<void>>();
+  const serializer = createRecommendationKeyedSerializer();
 
   async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
-    const id = validateSubjectId(subjectId);
-    const prior = tails.get(id) ?? Promise.resolve();
-    const ready = prior.catch(() => undefined);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = ready.then(() => gate);
-    tails.set(id, tail);
-    await ready;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (tails.get(id) === tail) {
-        tails.delete(id);
-      }
-    }
+    return serializer.run(validateSubjectId(subjectId), work);
   }
 
   async function drainDerived(
