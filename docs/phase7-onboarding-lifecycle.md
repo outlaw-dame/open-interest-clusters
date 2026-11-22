@@ -80,6 +80,7 @@ Stored candidate events move in the same call when both locations set `candidate
 - The destination is read back and checked against the digest of what was written. A compare-and-set store is written with `expectedDigest`, and a conflict is retried with the same backoff.
 - Source events are deleted after the destination is verified and before the source profile, so the profile stays as the marker for a rerun. If the delete fails the error is `source_cleanup_pending` and the same call finishes it without a second write.
 - With a store on only one side, events are left alone and the result carries `candidateEvents: "skipped_store_missing"`. Without any event store the field is absent.
+- If the destination store has no compare-and-set, the write is last-write-wins. The read-back check catches another process overwriting between the write and the check, and the move retries, but a write that lands after the check passes can still replace what was moved. Use a compare-and-set store for the destination, or keep other writers away from it during a move.
 - The move runs inside both stores' per-subject queues, so a report that is mid-save finishes first. Store methods must not call back into the lifecycle for the same subject, because that waits on the same queue. Passing one store object on both sides is refused.
 
 Only profile records and candidate events move. The engine's event-history store and derived caches have their own placement.
@@ -181,6 +182,7 @@ Gaps that remain by design or by scope:
 
 - The profile transition moves the profile record and, when both sides pass a `candidateEventStore`, reported candidate events. It does not move the engine's event-history store or derived caches. Each has its own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
+- The deletion registry is per process. The orchestrator clears only event stores registered by a lifecycle built in the same process on the same orchestrator. Build the lifecycle before recovering or running pending deletion tasks at startup. A `candidate_cache` task that completes before that has nothing registered and leaves stored events in place. Apps that cannot guarantee the order should also give the orchestrator an invalidator built with `createRecommendationCandidateEventDeletionInvalidator`, which does not depend on registration order.
 - Deletion waits for an in-flight save only within one process and one store object (see the race note above).
 - Event stores that do not implement compare-and-set, or that fail `checkRecommendationCandidateEventStoreCompareAndSet`, stay single-writer. There is no lease or lock across processes (see "Several processes and scheduled refresh").
 - Verification outcomes are not cached, so a failed save followed by a retry verifies again (see "Retries" under evidence verification).
@@ -259,6 +261,8 @@ Residual limit, exactly: the library checks that evidence is well formed, bounde
 - has the required proof class (`origin` or `signature`) and at least the minimum authority.
 
 Anything else, including a lookup that throws or hangs, is rejected by the hook's normal fail-closed rules. The mechanisms are `https_origin` and `authenticated_fetch` (proof class `origin`) and `protocol_signature` and `application_signature` (proof class `signature`). The class is derived from the mechanism and cannot be passed in. Origin mechanisms cannot claim more than `protocol_native` authority. A Mastodon Collection read over REST is therefore an `https_origin` or `authenticated_fetch` attestation, and a verifier configured with `requiredProof: "signature"` refuses it.
+
+An attestation is not bound to the evidence content. It covers the subject, kind and source ids, so any evidence naming the same three passes with the same attestation until it ages out. Keep `maxAgeMs` short, and look attestations up per report. A content digest in the attestation would close this and should be added before an adapter starts issuing them.
 
 What this does not do: it verifies no signature. The issuing function is public, so whoever calls it is vouching that the check happened. It stops forged or copied data and mix-ups between subjects and sources. It does not make an unchecked claim true. No crypto or CBOR dependency was added.
 
