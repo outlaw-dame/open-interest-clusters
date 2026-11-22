@@ -28,6 +28,7 @@ import {
   createRecommendationProfileStoreRecord,
   normalizeRecommendationProfileStoreRecord
 } from "./profile-store-persistence-record.js";
+import { privacyBoundaryForProfileTarget, relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
 import { createEmptyRecommendationProfileSnapshot } from "./profile-store-persistence-snapshot.js";
 import type { RecommendationProfileEntry, RecommendationProfileSnapshot } from "./profile-store.js";
 import type { RecommendationStateStorageAdapterManifest } from "./state-placement-policy.js";
@@ -97,7 +98,6 @@ export class RecommendationProfilePersistenceError extends Error {
 
 const DEFAULT_STORAGE_TARGET: RecommendationProfilePersistenceStorageTarget = "local_app";
 const DEFAULT_DATA_USE: RecommendationDataUse = "local_personalization";
-const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_only";
 const PERSISTENCE_PROTOCOL: RecommendationProtocol = "app_local";
 const PERSISTENCE_VISIBILITY: RecommendationSourceVisibility = "local_only";
 const STORAGE_TARGET_SET = new Set<string>(RECOMMENDATION_PROFILE_PERSISTENCE_STORAGE_TARGETS);
@@ -168,6 +168,20 @@ function normalizePrivacyBoundary(value: unknown): RecommendationInterestPrivacy
   if (typeof value !== "string" || !PRIVACY_BOUNDARY_SET.has(value)) throw new TypeError("Invalid recommendation profile persistence privacy boundary.");
   return value as RecommendationInterestPrivacyBoundary;
 }
+/**
+ * The label that fits where the profile is written: `server_allowed` for the user's pod, `local_only`
+ * otherwise. A choice that does not fit is refused, never replaced. `aggregate_only` is left for the
+ * caller to refuse with its own reason.
+ */
+function resolveWritePrivacyBoundary(value: unknown, target: RecommendationProfilePersistenceStorageTarget): RecommendationInterestPrivacyBoundary {
+  const fitting = privacyBoundaryForProfileTarget(target === "user_pod" ? "user_pod" : "local_app");
+  if (value === undefined) return fitting;
+  const explicit = normalizePrivacyBoundary(value);
+  if ((target === "user_pod" || target === "local_app") && explicit !== "aggregate_only" && explicit !== fitting) {
+    throw new TypeError(`Recommendation profile persistence to the ${target} storage target must use the ${fitting} privacy boundary.`);
+  }
+  return explicit;
+}
 function assertProfileDeletionIntent(intent: RecommendationDerivedDataDeletionIntent): void {
   if (!isObject(intent) || !isNonEmptyString(intent.subjectId) || intent.scope !== "recommendation_derived_data" ||
       !Array.isArray(intent.targets) || !intent.targets.includes("profile")) {
@@ -203,7 +217,7 @@ async function enforceWriteConsent(input: HardenedRecommendationProfilePersisten
   if (target === "ephemeral_session") throw createPersistenceError("write", "persistence.deny.ephemeral_durable_write", target);
   assertNoAggregateOnlyProfileState(profile, target);
   const dataUse = normalizeDataUse(input.dataUse ?? DEFAULT_DATA_USE);
-  const privacyBoundary = normalizePrivacyBoundary(input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY);
+  const privacyBoundary = resolveWritePrivacyBoundary(input.privacyBoundary, target);
   if (privacyBoundary === "aggregate_only") throw createPersistenceError("write", "persistence.deny.aggregate_subject_profile", target);
   const serverSideProcessing = requiresServerSideConsent(target) || privacyBoundary === "server_allowed";
   if (input.policy === undefined || input.policy === null) {
@@ -247,7 +261,11 @@ export async function writeRecommendationProfileStoreRecordSafely(adapter: Recom
   const consistency = normalizeVerificationConsistency(input.verificationConsistency, storageTarget);
   const verifyWrite = optionalBoolean(input.verifyWrite, "Invalid recommendation profile persistence verification option.");
   const deleteOnFailure = optionalBoolean(input.deleteOnVerificationFailure, "Invalid recommendation profile persistence cleanup option.");
-  const record = createRecommendationProfileStoreRecord(input);
+  const validated = createRecommendationProfileStoreRecord(input);
+  // A profile written to the pod carries the pod's label. Interests stored as local_only (what 0.2.0
+  // and 0.3.0 wrote into a pod) are relabelled here, so the next write heals them.
+  const relabelled = storageTarget === "user_pod" ? relabelRecommendationProfileForTarget(validated.profile, "user_pod") : validated.profile;
+  const record = relabelled === validated.profile ? validated : createRecommendationProfileStoreRecord({ ...input, profile: relabelled });
   const consent = await enforceWriteConsent(input, storageTarget, record.profile);
   assertManifestMatchesTarget(manifest, storageTarget, "write");
   try { await adapter.writeProfileRecord(record); }

@@ -20,6 +20,7 @@ import {
   writeRecommendationProfileStoreRecordSafely,
   type RecommendationProfilePersistenceReasonCode
 } from "./profile-store-persistence-hardening.js";
+import { relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
 import { assertValidRecommendationProfileSubjectId, createRecommendationProfileSubjectKey } from "./profile-store-persistence-key.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
@@ -56,6 +57,10 @@ export interface RecommendationProfilePersistenceTransitionInput {
   /** Required whenever the destination is a user-owned remote store. */
   policy: RecommendationConsentPolicy | null | undefined;
   dataUse?: RecommendationDataUse;
+  /**
+   * Leave this out. The destination decides the label: `server_allowed` for a pod, `local_only` for the
+   * device. A value that does not fit the destination is refused, not replaced.
+   */
   privacyBoundary?: RecommendationInterestPrivacyBoundary;
   /** Timestamp for the source deletion intent. Defaults to the current time. */
   now?: string;
@@ -281,7 +286,15 @@ function moveCandidateEvents(move: CandidateEventMove): Promise<RecommendationPr
 /**
  * Moves a subject's profile record between device-owned and user-owned storage. The order is fixed so
  * a crash at any point loses nothing: copy, verify by reading back, and only then delete the source.
- * Running it again after a failure is safe. Provider-owned and operator-owned placements are refused
+ * Running it again after a failure is safe.
+ *
+ * The interests change label with the move, because the label says where they are processed. Going to
+ * the pod, `local_only` becomes `server_allowed`, and that needs the user's server-side consent. Coming
+ * back, `server_allowed` becomes `local_only`. Each store only ever holds its own label: the copy is
+ * relabelled before it is written, and the source keeps its own label until it is deleted. A
+ * destination that is already in place with the wrong label is relabelled in place, so rerunning after
+ * a crash repairs it. Candidate events carry no label, so they move as they are, into a store that
+ * has to match the destination placement. Provider-owned and operator-owned placements are refused
  * by the target check here and again by the adapter placement policy.
  *
  * Stored candidate events move too when both locations carry a `candidateEventStore`: they are merged
@@ -348,28 +361,41 @@ export async function transitionRecommendationProfilePersistence(
     }
     const source = await readFrom(from);
     const existing = await readFrom(to);
+    // The destination's label comes from where it sits. This writes a record to the destination with
+    // that label, verified by reading it back. The pod write relabels again, which changes nothing.
+    const writeLabelled = (record: RecommendationProfileStoreRecord) => withBackoff(() => writeRecommendationProfileStoreRecordSafely(to.adapter, {
+      subjectId: input.subjectId,
+      profile: relabelRecommendationProfileForTarget(record.profile, to.storageTarget),
+      writtenAt: record.writtenAt,
+      storageTarget: to.storageTarget,
+      policy: input.policy,
+      verifyWrite: true,
+      ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      ...(to.namespace === undefined ? {} : { namespace: to.namespace }),
+      ...(to.salt === undefined ? {} : { salt: to.salt }),
+      ...(input.dataUse === undefined ? {} : { dataUse: input.dataUse }),
+      ...(input.privacyBoundary === undefined ? {} : { privacyBoundary: input.privacyBoundary })
+    }), retry, signal);
+    // A destination that is already in place but carries the other side's label (a pod record written as
+    // local_only by an older release, or a device record that kept server_allowed) is fixed in place.
+    const healDestination = async (): Promise<void> => {
+      if (existing === null || relabelRecommendationProfileForTarget(existing.profile, to.storageTarget) === existing.profile) return;
+      abortIf(signal);
+      await writeLabelled(existing);
+    };
     if (source === null) {
       if (existing === null) throw new RecommendationProfilePersistenceTransitionError("transition.error.source_missing");
+      await healDestination();
       const events = await moveEvents();
       return Object.freeze({ outcome: "already_moved" as const, from: from.storageTarget, to: to.storageTarget, ...events });
     }
 
     const keepDestination = existing !== null && newer(existing, source);
-    if (!keepDestination) {
+    if (keepDestination) {
+      await healDestination();
+    } else {
       abortIf(signal);
-      await withBackoff(() => writeRecommendationProfileStoreRecordSafely(to.adapter, {
-        subjectId: input.subjectId,
-        profile: source.profile,
-        writtenAt: source.writtenAt,
-        storageTarget: to.storageTarget,
-        policy: input.policy,
-        verifyWrite: true,
-        ...(source.expiresAt === undefined ? {} : { expiresAt: source.expiresAt }),
-        ...(to.namespace === undefined ? {} : { namespace: to.namespace }),
-        ...(to.salt === undefined ? {} : { salt: to.salt }),
-        ...(input.dataUse === undefined ? {} : { dataUse: input.dataUse }),
-        ...(input.privacyBoundary === undefined ? {} : { privacyBoundary: input.privacyBoundary })
-      }), retry, signal);
+      await writeLabelled(source);
     }
 
     // Events go before the source profile is deleted, so a failure here leaves the profile as the retry marker.

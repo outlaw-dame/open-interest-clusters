@@ -319,3 +319,24 @@ test("bad candidate event limits are rejected before any storage call", async ()
   await assert.rejects(run({ candidateEventLimits: { retentionMs: 1 } }), TypeError);
   assert.deepEqual([...local.calls, ...pod.calls], []);
 });
+
+test("events carry no label, so they move unchanged while the profile is relabelled, and a crash between the two is repaired by rerunning", async () => {
+  const { local, pod, localProfile, podProfile, key, run } = setup();
+  const seeded = await seed(local.store, [bobRevoked, setDeleted]);
+  pod.state.failSaves = 99;
+  await assert.rejects(run());
+  // The pod profile is already labelled for the pod and the source is untouched, so nothing is mislabelled.
+  const inPod = podProfile.records.get(key) as RecommendationProfileStoreRecord;
+  assert.deepEqual(inPod.profile.entries[0]!.privacyBoundaries, ["server_allowed"]);
+  assert.deepEqual((localProfile.records.get(key) as RecommendationProfileStoreRecord).profile.entries[0]!.privacyBoundaries, ["local_only"]);
+  assert.ok(await local.inner.load(SUBJECT));
+  assert.equal(await pod.inner.load(SUBJECT), undefined);
+
+  pod.state.failSaves = 0;
+  const finished = await run();
+  assert.deepEqual([finished.outcome, finished.candidateEvents], ["moved", "moved"]);
+  const held = await pod.inner.load(SUBJECT) as RecommendationCandidateEventRecord;
+  assert.deepEqual(held.entries.map((entry) => entry.event), seeded.entries.map((entry) => entry.event));
+  assert.equal(localProfile.records.has(key), false);
+  assert.deepEqual((podProfile.records.get(key) as RecommendationProfileStoreRecord).profile.entries[0]!.privacyBoundaries, ["server_allowed"]);
+});

@@ -37,10 +37,11 @@ import {
 import { createRecommendationAtprotoQueryLabelsClient } from "../src/recommendation/atproto-query-labels-client.js";
 import type { RecommendationDiscoveredLabeler } from "../src/recommendation/labeler-discovery.js";
 
-// Two different things are called "local_only" in this library. A signal's privacyBoundary says who may
-// be told about the interest (nobody but the user's own apps and stores). A store manifest's
-// processingBoundary says where the store itself runs (on the device, or on a server). These tests pin
-// down that the two never get mixed up.
+// A signal's privacyBoundary and a store manifest's processingBoundary use the same words and have to
+// agree. `local_only` means the interests are processed on the user's device, and the store is device
+// owned. `server_allowed` means a server processes them, and the only server that may hold subject-level
+// interests is one the user owns, such as a pod. These tests pin down that pairing, that provider and
+// operator stores never hold subject-level state, and that remote requests carry no profile content.
 
 const SUBJECT = "user-123";
 const NOW = new Date().toISOString();
@@ -178,7 +179,7 @@ test("the profile move refuses a provider-owned destination or source, including
   }
 });
 
-test("signals stay local_only through device to user pod and back, and the pod copy is the same record", async () => {
+test("signals are relabelled server_allowed for the pod and local_only for the device, and the content is untouched", async () => {
   const local = new MemoryAdapter(LOCAL);
   const pod = new MemoryAdapter(POD);
   const key = createRecommendationProfileSubjectKey({ subjectId: SUBJECT });
@@ -189,6 +190,7 @@ test("signals stay local_only through device to user pod and back, and the pod c
   });
   assert.equal(boot.persisted, true);
   const boundariesOf = (record: unknown) => (record as RecommendationProfileStoreRecord).profile.entries.flatMap((entry) => entry.privacyBoundaries);
+  const withoutLabels = (record: unknown) => (record as RecommendationProfileStoreRecord).profile.entries.map(({ privacyBoundaries: _labels, ...rest }) => rest);
   const original = local.records.get(key) as RecommendationProfileStoreRecord;
   assert.ok(original.profile.entries.length > 0);
   assert.ok(boundariesOf(original).every((boundary) => boundary === "local_only"));
@@ -197,8 +199,8 @@ test("signals stay local_only through device to user pod and back, and the pod c
   const up = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: { adapter: local, storageTarget: "local_app" }, to: { adapter: pod, storageTarget: "user_pod" }, policy: POLICY, now: NOW, retry });
   assert.equal(up.outcome, "moved");
   const inPod = pod.records.get(key) as RecommendationProfileStoreRecord;
-  assert.ok(boundariesOf(inPod).every((boundary) => boundary === "local_only"), "no entry was relabelled server_allowed for the pod");
-  assert.deepEqual(inPod.profile, original.profile);
+  assert.ok(boundariesOf(inPod).every((boundary) => boundary === "server_allowed"), "every entry carries the pod's label");
+  assert.deepEqual(withoutLabels(inPod), withoutLabels(original));
 
   const down = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: { adapter: pod, storageTarget: "user_pod" }, to: { adapter: local, storageTarget: "local_app" }, policy: null, now: NOW, retry });
   assert.equal(down.outcome, "moved");
