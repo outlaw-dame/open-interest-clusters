@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   RecommendationCandidateEventConflictError,
   RecommendationConsentDeniedError,
+  RecommendationDerivedStateInvalidationPendingError,
   createInMemoryRecommendationCandidateEventStore,
   createInMemoryRecommendationProfileSignalReplacementStore,
   createRecommendationCandidateActionPlan,
@@ -533,4 +534,89 @@ test("a stored record with duplicate set slots from before coalescing is repaire
   const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T2 });
   assert.equal(kept.filter((event) => event.kind === "set_deleted").length, 1);
   assert.equal(kept.find((event) => event.kind === "set_deleted")!.occurredAt, T1);
+});
+
+/** A lifecycle on the library's derived orchestrator with plain invalidators, so nothing is wrapped by hand. */
+function buildUnwrapped(store: RecommendationCandidateEventStore | undefined, invalidators?: Partial<Record<"embeddings" | "candidate_cache" | "explanation_cache", { invalidate(request: RecommendationDerivedStateInvalidationRequest): Promise<void> }>>) {
+  const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
+  const calls: RecommendationDerivedStateInvalidationRequest[] = [];
+  const plain = { async invalidate(request: RecommendationDerivedStateInvalidationRequest) { calls.push(request); } };
+  const derived = createRecommendationDerivedStateInvalidationOrchestrator({
+    engine, now: () => T1,
+    invalidators: { embeddings: plain, candidate_cache: plain, explanation_cache: plain, ...invalidators }
+  });
+  const lifecycle = createRecommendationOnboardingLifecycle({
+    derived, engine, now: () => NOW,
+    ...(store === undefined ? {} : { candidateEvents: { store, retry: { retrySleeper: NO_SLEEP } } })
+  });
+  return { lifecycle, derived, engine, calls };
+}
+const DELETE = { requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] } as const;
+
+test("deleteSubject clears stored events by default when the lifecycle has a store", async () => {
+  const { store, raw, counts } = rawStore();
+  const { lifecycle, derived, calls } = buildUnwrapped(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [bobRevoked], policy: POLICY(B), now: T2 });
+  await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(raw.has(A), false);
+  assert.equal(raw.has(B), true, "only the deleted subject is cleared");
+  assert.equal(counts.delete, 1);
+  assert.ok(calls.some((call) => call.reason === "deletion_requested" && call.target === "candidate_cache"), "the app's own invalidator still runs");
+  // Two lifecycles sharing the store on one orchestrator still delete once.
+  createRecommendationOnboardingLifecycle({ derived, engine: buildUnwrapped(undefined).engine, candidateEvents: { store } });
+  await derived.deleteSubject({ subjectId: B, ...DELETE });
+  assert.equal(counts.delete, 2);
+  assert.equal(raw.has(B), false);
+});
+
+test("a store the app already wrapped is not deleted twice", async () => {
+  const { store, raw, counts } = rawStore();
+  const { lifecycle, derived } = build(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(raw.has(A), false);
+  assert.equal(counts.delete, 1);
+});
+
+test("a failed default deletion surfaces as pending and the next call finishes it", async () => {
+  const { store, raw, fail } = rawStore();
+  const { lifecycle, derived } = buildUnwrapped(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  fail.delete = 1;
+  await assert.rejects(derived.deleteSubject({ subjectId: A, ...DELETE }), (error: unknown) => {
+    assert.ok(error instanceof RecommendationDerivedStateInvalidationPendingError);
+    assert.ok(error.pendingTargets.includes("candidate_cache"));
+    return true;
+  });
+  assert.equal(raw.has(A), true, "nothing claims the events are gone");
+  await derived.repair(A);
+  assert.equal(raw.has(A), false, "recovery retries the pending deletion");
+});
+
+test("a lifecycle without a store leaves deletion exactly as before", async () => {
+  const unrelated = rawStore();
+  const { lifecycle, derived, calls } = buildUnwrapped(undefined);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], now: T2 });
+  const result = await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.deepEqual([...result.propagation.invalidatedTargets].sort(), ["candidate_cache", "embeddings", "explanation_cache"]);
+  assert.equal(calls.filter((call) => call.reason === "deletion_requested").length, 3);
+  assert.equal(unrelated.counts.delete, 0);
+});
+
+test("a derived port that is not the library's orchestrator is not changed by the lifecycle", async () => {
+  const { store, raw, counts } = rawStore();
+  const inner = buildUnwrapped(undefined);
+  const wrapper = {
+    process: inner.derived.process.bind(inner.derived),
+    synchronize: inner.derived.synchronize.bind(inner.derived),
+    repair: inner.derived.repair.bind(inner.derived),
+    deleteSubject: inner.derived.deleteSubject.bind(inner.derived),
+    invalidateCandidateState: inner.derived.invalidateCandidateState.bind(inner.derived)
+  };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived: wrapper, engine: inner.engine, now: () => NOW, candidateEvents: { store } });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await wrapper.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(counts.delete, 0, "the app has to wire the deletion invalidator itself for its own port");
+  assert.equal(raw.has(A), true);
 });

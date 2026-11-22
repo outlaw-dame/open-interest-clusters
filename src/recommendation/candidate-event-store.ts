@@ -1,4 +1,4 @@
-import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import { deleteStoredRecommendationCandidateEvents, markRecommendationCandidateEventDeletionInvalidator } from "./candidate-event-deletion-registry.js";
 import { sha256Hex } from "../runtime/hash.js";
 import {
   MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS,
@@ -335,7 +335,9 @@ export function createInMemoryRecommendationCandidateEventStore(
 
 /**
  * Wraps an invalidator so a deletion request also clears the subject's stored candidate events. Attach
- * it to one derived-state target (the candidate cache is the natural one). The orchestrator already
+ * it to one derived-state target (the candidate cache is the natural one). When the lifecycle is given
+ * the library's own derived-state orchestrator, it does this for you; use this helper when `derived`
+ * is your own port or a wrapper around it. The orchestrator already
  * keeps a durable deletion task and retries a failed target, so a crash mid-delete finishes on
  * recovery. Other invalidation reasons pass straight through, because a profile change does not
  * make a reported candidate fact any less true.
@@ -345,11 +347,14 @@ export function createRecommendationCandidateEventDeletionInvalidator(
   inner?: RecommendationDerivedStateInvalidator
 ): RecommendationDerivedStateInvalidator {
   assertRecommendationCandidateEventStore(store);
-  return Object.freeze({
+  const invalidator = Object.freeze({
     async invalidate(request: Parameters<RecommendationDerivedStateInvalidator["invalidate"]>[0]) {
       // Same queue the lifecycle saves through, so a report that is mid-save finishes first and this delete clears it.
-      if (request.reason === "deletion_requested") await getSharedRecommendationKeyedSerializer(store).run(request.subjectId, () => store.delete(request.subjectId));
+      if (request.reason === "deletion_requested") await deleteStoredRecommendationCandidateEvents(store, request.subjectId);
       if (inner !== undefined) await inner.invalidate(request);
     }
   });
+  // Lets the library's orchestrator see that this store is already handled, so it does not clear it twice.
+  markRecommendationCandidateEventDeletionInvalidator(invalidator, store);
+  return invalidator;
 }

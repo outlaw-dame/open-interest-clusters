@@ -48,6 +48,7 @@ import type {
 import type { RecommendationInterestSignal } from "./interest-signal.js";
 import { hasExcludedProvenanceSource } from "./provenance-source-exclusion.js";
 import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import { deleteStoredRecommendationCandidateEvents, registerRecommendationCandidateEventStoreForDeletion } from "./candidate-event-deletion-registry.js";
 import {
   buildRecommendationOnboardingSignals,
   type RecommendationOnboardingProfileSeedInput
@@ -364,6 +365,9 @@ export function createRecommendationOnboardingLifecycle(
     if (!isRecord(options.candidateEvents)) throw new TypeError("Invalid recommendation onboarding lifecycle options.");
     assertRecommendationCandidateEventStore(options.candidateEvents.store);
     eventLimits = normalizeRecommendationCandidateEventStoreLimits(options.candidateEvents);
+    // With the library's own derived orchestrator, deleteSubject now clears these events by default.
+    // Any other derived port ignores this, and the app wires createRecommendationCandidateEventDeletionInvalidator itself.
+    registerRecommendationCandidateEventStoreForDeletion(options.derived, options.candidateEvents.store);
   }
   // Writes and deletes against the store share one queue per subject, keyed by the store object, so a
   // deletion that arrives while a report is saving waits for the save and then clears what it wrote.
@@ -409,7 +413,7 @@ export function createRecommendationOnboardingLifecycle(
 
   /** Revoked or denied consent removes what was kept. If the removal fails, the call fails with it. */
   async function clearStoredEvents(subjectId: string): Promise<void> {
-    if (storeQueue !== undefined) await storeQueue.run(subjectId, () => storeIo((store) => store.delete(subjectId)));
+    if (eventStore !== undefined) await storeIo((store) => deleteStoredRecommendationCandidateEvents(store, subjectId));
   }
 
   async function requireStoreConsent(subjectId: string, policy: RecommendationConsentPolicy | undefined): Promise<void> {
