@@ -60,6 +60,8 @@ A starter-pack plan also requires `starterPackMembers`: one `RecommendationStart
 
 `starterPackMembers` is required because a plan that expands a curated set of accounts has to record exactly which vetted accounts it covers, which follows the spirit of Mastodon's Collections feature (Mastodon's take on starter packs, added in Mastodon 4.6.0).
 
+A Mastodon Collection (or Loops or Pixelfed starter kit) reaches this plan as a `starter_pack` candidate produced by the curated-set source, and it is gated by the same `starter_packs` capability as any other starter pack. See "Curated sets as starter-pack candidates" in [`cold-start-candidate-generation.md`](cold-start-candidate-generation.md) for the shape of that candidate and why the capability is shared.
+
 Mastodon Collections list each account with a consent state of `pending`, `accepted`, `rejected`, or `revoked`. The curated-set candidate source only turns `accepted` members into candidates, and only for sets marked `discoverable` and not `sensitive`. Members in any other state, including `unknown`, are dropped before eligibility runs.
 
 The plan now checks this itself. Each member's `consent` is `{ state, setProvider, setId, observedAt }`, where `state` is a `RecommendationCuratedAccountMembershipState`. Plan creation throws unless:

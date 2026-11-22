@@ -25,6 +25,8 @@ const MAX_SETS = 1_000;
 const MAX_CANDIDATES = 10_000;
 const MAX_METADATA_VALUES = 128;
 const MAX_PROVENANCE = 32;
+// Mastodon allows at most 150 items per collection. A set above that is not a pack we can bind.
+const MAX_STARTER_PACK_MEMBERS = 150;
 
 function boundedId(value: unknown): string {
   if (
@@ -39,15 +41,15 @@ function boundedId(value: unknown): string {
   return value;
 }
 
-function providerForActorUri(uri: string): string {
+function hostForHttpsUri(uri: string, message: string): string {
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
-    throw new TypeError("Invalid curated account-set member actor URI.");
+    throw new TypeError(message);
   }
   if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
-    throw new TypeError("Invalid curated account-set member actor URI.");
+    throw new TypeError(message);
   }
   return parsed.hostname.toLocaleLowerCase("en-US");
 }
@@ -109,6 +111,7 @@ function mergeCandidate(
   );
   const observedAt = current.observedAt >= incoming.observedAt ? current.observedAt : incoming.observedAt;
   const displayName = current.metadata.displayName ?? incoming.metadata.displayName;
+  const summary = current.metadata.summary ?? incoming.metadata.summary;
 
   return normalizeRecommendationCandidate({
     candidateId: current.candidateId,
@@ -125,7 +128,8 @@ function mergeCandidate(
       tags,
       entityIds: [],
       languages: [],
-      ...(displayName === undefined ? {} : { displayName })
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(summary === undefined ? {} : { summary })
     },
     provenance
   });
@@ -136,7 +140,7 @@ function candidateForMember(
   member: RecommendationCuratedAccountMember
 ): RecommendationCandidate | undefined {
   if (member.state !== "accepted" || member.accountUri === undefined) return undefined;
-  const provider = providerForActorUri(member.accountUri);
+  const provider = hostForHttpsUri(member.accountUri, "Invalid curated account-set member actor URI.");
   const candidateId = createRecommendationCandidateId({
     kind: "account",
     protocol: "activitypub",
@@ -164,6 +168,55 @@ function candidateForMember(
   });
 }
 
+function acceptedMemberCount(set: RecommendationCuratedAccountSet): number {
+  return set.members.filter((member) => member.state === "accepted" && member.accountUri !== undefined).length;
+}
+
+/**
+ * The set itself as a starter-pack candidate. It stays a source-asserted hint: only the provider
+ * hosting the set can verify it, and the member list is not copied here (members are separate
+ * account candidates that carry their own consent provenance).
+ */
+function starterPackForSet(set: RecommendationCuratedAccountSet): RecommendationCandidate | undefined {
+  const accepted = acceptedMemberCount(set);
+  if (accepted === 0 || accepted > MAX_STARTER_PACK_MEMBERS) return undefined;
+  const provider = hostForHttpsUri(set.url, "Invalid curated account-set URL.");
+  const candidateId = createRecommendationCandidateId({
+    kind: "starter_pack",
+    protocol: "activitypub",
+    nativeId: set.url,
+    provider
+  });
+  return normalizeRecommendationCandidate({
+    candidateId,
+    kind: "starter_pack",
+    protocol: "activitypub",
+    nativeId: set.url,
+    provider,
+    uri: set.url,
+    verification: { state: "source_asserted" },
+    availability: "unknown",
+    observedAt: set.observedAt,
+    metadata: {
+      canonicalInterestIds: [],
+      tags: set.hashtags,
+      entityIds: [],
+      languages: [],
+      displayName: set.name,
+      ...(set.description === undefined ? {} : { summary: set.description })
+    },
+    provenance: [{
+      kind: "curated_account_set",
+      sourceId: createRecommendationCuratedAccountSetSourceId(set.provider, set.id),
+      sourceItemId: set.id,
+      curator: set.curatorId,
+      sourceUrl: set.url,
+      observedAt: set.observedAt,
+      trustBoundary: set.trustBoundary
+    }]
+  });
+}
+
 function buildCandidates(sets: readonly RecommendationCuratedAccountSet[]): readonly RecommendationCandidate[] {
   if (!Array.isArray(sets) || sets.length > MAX_SETS) {
     throw new TypeError("Invalid curated account-set candidate source sets.");
@@ -180,6 +233,8 @@ function buildCandidates(sets: readonly RecommendationCuratedAccountSet[]): read
     ) {
       continue;
     }
+    const pack = starterPackForSet(set);
+    if (pack !== undefined) byId.set(pack.candidateId, mergeCandidate(byId.get(pack.candidateId), pack));
     for (const member of set.members) {
       const candidate = candidateForMember(set, member);
       if (candidate === undefined) continue;
@@ -196,13 +251,14 @@ function readCandidates(
   candidates: readonly RecommendationCandidate[],
   query: RecommendationCandidateSourceAdapterQuery
 ): { candidates: readonly RecommendationCandidate[] } {
-  if (!query.candidateKinds.includes("account")) return { candidates: Object.freeze([]) };
+  const kinds = new Set<string>(query.candidateKinds);
+  const ofRequestedKind = candidates.filter((candidate) => kinds.has(candidate.kind));
   const requestedLanguages = query.languages === undefined
     ? undefined
     : new Set(query.languages.map((value) => value.toLocaleLowerCase("en-US")));
   const filtered = requestedLanguages === undefined
-    ? candidates
-    : candidates.filter((candidate) =>
+    ? ofRequestedKind
+    : ofRequestedKind.filter((candidate) =>
         candidate.metadata.languages.length === 0 ||
         candidate.metadata.languages.some((language) => requestedLanguages.has(language.toLocaleLowerCase("en-US")))
       );
@@ -221,7 +277,7 @@ export function createRecommendationCuratedAccountSetCandidateSourceAdapter(
   const adapter: RecommendationCandidateSourceAdapter = {
     id,
     protocols: Object.freeze(["activitypub"] as const),
-    candidateKinds: Object.freeze(["account"] as const),
+    candidateKinds: Object.freeze(["account", "starter_pack"] as const),
     authority: "curated_public",
     transport: "local",
     privacy: Object.freeze({
