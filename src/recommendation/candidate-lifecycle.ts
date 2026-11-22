@@ -1,5 +1,12 @@
 import type { RecommendationCandidateActionPlan, RecommendationStarterPackMemberBinding } from "./candidate-action-plan.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
+import {
+  RECOMMENDATION_EVIDENCE_UNVERIFIED,
+  combineRecommendationEvidenceVerification,
+  verifyRecommendationEvidence,
+  type NormalizedRecommendationEvidenceVerifier,
+  type RecommendationEvidenceVerificationState
+} from "./evidence-verifier.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
 export const RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENT_SCHEMA_VERSION = "recommendation-candidate-lifecycle-event.v1" as const;
@@ -76,6 +83,13 @@ export interface RecommendationCandidatePlanAssessment {
   executable: false;
   requiresRevalidation: true;
   assessedAt: string;
+  /**
+   * `verified` only when an evidence verifier accepted the extra events and the plan's starter-pack
+   * consent and provenance in this call. Otherwise `unverified`: the evidence is as trustworthy as the
+   * caller that supplied it. Verification can only reject evidence, so it never makes a plan more usable.
+   */
+  evidenceVerification: RecommendationEvidenceVerificationState;
+  verifierId?: string;
   reasons: readonly RecommendationCandidatePlanAssessmentReason[];
   /** Members hit by at least one reason. A new plan must not include them without fresh evidence. */
   affectedMemberCandidateIds: readonly string[];
@@ -388,8 +402,43 @@ export function assessRecommendationCandidateActionPlan(
     executable: false as const,
     requiresRevalidation: true as const,
     assessedAt,
+    ...RECOMMENDATION_EVIDENCE_UNVERIFIED,
     reasons: Object.freeze(reasons),
     affectedMemberCandidateIds: Object.freeze(affected),
     unaffectedMemberCandidateIds: Object.freeze([...memberIds].filter((id) => !affectedMembers.has(id)).sort())
   });
+}
+
+export interface RecommendationCandidatePlanEvidenceAssessmentOptions extends RecommendationCandidatePlanAssessmentOptions {
+  subjectId: string;
+  evidenceVerifier?: NormalizedRecommendationEvidenceVerifier;
+  /** Events read back from the candidate event store. They were checked when they were reported, so they are not checked again. */
+  storedEvents?: readonly RecommendationCandidateLifecycleEvent[];
+}
+
+/**
+ * Same decision as `assessRecommendationCandidateActionPlan`, but first asks the verifier (if any) about
+ * the extra events, each starter-pack member's consent and the candidate's curated-set provenance.
+ * A verifier that rejects, throws, times out or returns something malformed makes this throw, so the
+ * plan is not reported usable on unchecked evidence. Without a verifier nothing changes and the result
+ * stays `unverified`.
+ */
+export async function assessRecommendationCandidateActionPlanWithEvidence(
+  planInput: RecommendationCandidateActionPlan,
+  eventsInput: readonly RecommendationCandidateLifecycleEvent[],
+  options: RecommendationCandidatePlanEvidenceAssessmentOptions
+): Promise<RecommendationCandidatePlanAssessment> {
+  const { subjectId, evidenceVerifier, storedEvents, ...assessOptions } = options;
+  assertPlanShape(planInput);
+  if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
+  const now = normalizeStrictRfc3339Timestamp(options.now, "Invalid recommendation plan assessment timestamp.");
+  const events = normalizeRecommendationCandidateLifecycleEvents(eventsInput, { now });
+  const provenance = planInput.candidate.provenance.filter((item) => item.kind === "curated_account_set");
+  const verification = combineRecommendationEvidenceVerification([
+    await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members ?? [], "starter_pack_consent", subjectId, now),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members === undefined ? [] : provenance, "starter_pack_provenance", subjectId, now)
+  ]);
+  const assessment = assessRecommendationCandidateActionPlan(planInput, [...(storedEvents ?? []), ...events], assessOptions);
+  return Object.freeze({ ...assessment, ...verification });
 }

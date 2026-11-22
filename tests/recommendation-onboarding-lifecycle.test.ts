@@ -24,6 +24,8 @@ import {
   type RecommendationDerivedStateInvalidationRequest,
   type RecommendationDerivedStateInvalidationTask,
   type RecommendationDerivedStateTarget,
+  type RecommendationEvidenceVerifierOptions,
+  RecommendationEvidenceVerificationError,
   type RecommendationOnboardingLifecycle,
   type RecommendationSignalLedgerEventInput
 } from "../src/index.js";
@@ -45,7 +47,7 @@ function change(topics: readonly string[], now = T0, extra: Record<string, unkno
 // The lifecycle clock sits at the latest time these tests pass in, so explicit times are never ahead of it.
 let lifecycleClock = T2;
 
-function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[]; candidateKinds?: readonly RecommendationCandidateKind[] } = {}) {
+function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[]; candidateKinds?: readonly RecommendationCandidateKind[]; evidenceVerifier?: RecommendationEvidenceVerifierOptions } = {}) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T0 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
   const tasks = new Map<string, RecommendationDerivedStateInvalidationTask>();
@@ -70,7 +72,7 @@ function harness(options: { failures?: RecommendationDerivedStateTarget[]; first
     candidateKinds: options.candidateKinds ?? ["account"],
     evaluateEligibility: ({ candidate }) => { firstSessionCalls.push(candidate.candidate.candidateId); return { candidate: candidate.candidate, eligible: true, reasonCodes: ["eligible"], evaluatedAt: T0 }; }
   });
-  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock });
+  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock, ...(options.evidenceVerifier === undefined ? {} : { evidenceVerifier: options.evidenceVerifier }) });
   return { engine, derived, lifecycle, calls, tasks, firstSessionCalls };
 }
 
@@ -566,4 +568,72 @@ test("a ledger error that is not caused by a moved history is not retried", asyn
   const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: h.engine, now: () => lifecycleClock });
   await assert.rejects(lifecycle.applySelection(change(["gaming"], T0)), /not a race/u);
   assert.equal(writes, 1);
+});
+
+const REPORTED = { kind: "account_deleted" as const, occurredAt: T1, accountUri: "https://example.test/users/alice" };
+
+test("reported events are marked unverified when no verifier is configured", async () => {
+  const h = harness();
+  const result = await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 });
+  assert.equal(result.evidenceVerification, "unverified");
+  assert.equal(result.verifierId, undefined);
+  assert.equal(result.acceptedEventCount, 1);
+});
+
+test("a verifier that accepts marks the report verified and sees the subject, kind and time", async () => {
+  const seen: unknown[] = [];
+  const h = harness({ evidenceVerifier: { verifier: { id: "test-keys", verify: (evidence, context) => { seen.push([evidence, context.subjectId, context.kind, context.now]); return { verified: true }; } } } });
+  const result = await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 });
+  assert.equal(result.evidenceVerification, "verified");
+  assert.equal(result.verifierId, "test-keys");
+  assert.deepEqual(seen, [[REPORTED, SUBJECT, "lifecycle_event", T1]]);
+});
+
+test("a rejected, thrown, malformed or slow verification stops the report before any cache is cleared", async () => {
+  const cases: [string, () => unknown, string][] = [
+    ["rejected", () => ({ verified: false }), "rejected"],
+    ["throws", () => { throw new Error("boom"); }, "error"],
+    ["async throw", async () => { throw new Error("boom"); }, "error"],
+    ["truthy but not boolean", () => ({ verified: "yes" }), "malformed"],
+    ["bare true", () => true, "malformed"],
+    ["nothing", () => undefined, "malformed"],
+    ["never answers", () => new Promise(() => undefined), "timeout"]
+  ];
+  for (const [name, verify, failure] of cases) {
+    const h = harness({ evidenceVerifier: { verifier: { id: "test-keys", verify: verify as never }, timeoutMs: 20 } });
+    await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === failure, name);
+    assert.equal(h.calls.length, 0, name);
+  }
+});
+
+test("the timeout aborts the signal handed to the verifier", async () => {
+  let aborted = false;
+  const h = harness({ evidenceVerifier: { verifier: { id: "slow", verify: (_e, context) => new Promise(() => { context.signal.addEventListener("abort", () => { aborted = true; }); }) }, timeoutMs: 10 } });
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  assert.equal(aborted, true);
+});
+
+test("a verifier bound to a subject refuses evidence replayed for another subject, and a replayed nonce", async () => {
+  const issued = new Map<string, string>([["alice-event", SUBJECT]]);
+  const used = new Set<string>();
+  // Stand-in for a signature check: the proof table says which subject each event was issued for.
+  const verifier = { id: "bound", verify: (evidence: unknown, context: { subjectId: string }) => {
+    const id = (evidence as { accountUri: string }).accountUri.endsWith("alice") ? "alice-event" : "unknown";
+    if (issued.get(id) !== context.subjectId) return { verified: false };
+    const key = `${context.subjectId}:${id}`;
+    if (used.has(key)) return { verified: false };
+    used.add(key);
+    return { verified: true };
+  } };
+  const h = harness({ evidenceVerifier: { verifier } });
+  assert.equal((await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 })).evidenceVerification, "verified");
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: "user-456", events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [{ ...REPORTED, accountUri: "https://example.test/users/mallory" }], now: T1 }), RecommendationEvidenceVerificationError);
+});
+
+test("an invalid verifier configuration is refused when the lifecycle is created", () => {
+  for (const bad of [{ verifier: { id: "", verify: () => ({ verified: true }) } }, { verifier: { id: "x" } }, { verifier: { id: "x", verify: () => ({ verified: true }) }, timeoutMs: 0 }, { verifier: { id: "x", verify: () => ({ verified: true }) }, timeoutMs: 31_000 }, null]) {
+    assert.throws(() => harness({ evidenceVerifier: bad as never }), TypeError);
+  }
 });

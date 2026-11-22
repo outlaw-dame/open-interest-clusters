@@ -13,8 +13,16 @@ import type { RecommendationCandidateActionPlan } from "./candidate-action-plan.
 import { RecommendationConsentDeniedError, requireRecommendationConsent } from "./consent-enforcement.js";
 import type { RecommendationConsentPolicy } from "./consent.js";
 import {
+  RECOMMENDATION_EVIDENCE_UNVERIFIED,
+  normalizeRecommendationEvidenceVerifierOptions,
+  verifyRecommendationEvidence,
+  type NormalizedRecommendationEvidenceVerifier,
+  type RecommendationEvidenceVerification,
+  type RecommendationEvidenceVerifierOptions
+} from "./evidence-verifier.js";
+import {
   assertRecommendationTimestampNotAhead,
-  assessRecommendationCandidateActionPlan,
+  assessRecommendationCandidateActionPlanWithEvidence,
   type RecommendationCandidatePlanAssessment,
   listRecommendationLifecycleExcludedCandidateIds,
   listRecommendationLifecycleExcludedSetSourceIds,
@@ -72,7 +80,7 @@ export interface RecommendationOnboardingWithdrawalInput {
   now?: string;
 }
 
-export interface RecommendationOnboardingCandidateReportResult {
+export interface RecommendationOnboardingCandidateReportResult extends RecommendationEvidenceVerification {
   subjectId: string;
   acceptedEventCount: number;
   excludedCandidateIds: readonly string[];
@@ -112,6 +120,12 @@ export interface RecommendationOnboardingLifecycleOptions {
   engine: Pick<RecommendationEngineOrchestrator, "readEventHistory">;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
   now?: () => string;
+  /**
+   * Optional check that reported events and plan consent and provenance are real. Without it they are
+   * used as supplied and results say `unverified`. With it, evidence the verifier does not accept
+   * is refused before anything is stored or any cache is cleared.
+   */
+  evidenceVerifier?: RecommendationEvidenceVerifierOptions;
   /**
    * Optional durable home for reported candidate events. Leave it out and events are only used for
    * the call that reports them, as before. The store must be device-owned or user-owned.
@@ -272,6 +286,8 @@ export function createRecommendationOnboardingLifecycle(
   // Keyed by the engine, so every lifecycle built on one engine queues per subject in one line.
   const serializer = getSharedRecommendationKeyedSerializer(options.engine);
 
+  const evidenceVerifier: NormalizedRecommendationEvidenceVerifier | undefined =
+    options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerifierOptions(options.evidenceVerifier);
   const eventStore = options.candidateEvents?.store;
   let eventLimits: RecommendationCandidateEventStoreLimits | undefined;
   if (options.candidateEvents !== undefined) {
@@ -426,8 +442,10 @@ export function createRecommendationOnboardingLifecycle(
   ): Promise<RecommendationOnboardingCandidateReportResult> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
-      return Object.freeze({ subjectId, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+      return Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
     }
+    // Refuse unverified-by-a-configured-verifier events before storing them or clearing any cache.
+    const verification = await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now);
     // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is harmless
     // because an event that is already stored is not stored twice.
     if (eventStore !== undefined) {
@@ -437,6 +455,7 @@ export function createRecommendationOnboardingLifecycle(
     const propagation = await options.derived.invalidateCandidateState({ subjectId, occurredAt: now });
     return Object.freeze({
       subjectId,
+      ...verification,
       acceptedEventCount: events.length,
       excludedCandidateIds: listRecommendationLifecycleExcludedCandidateIds(events),
       propagation
@@ -506,8 +525,11 @@ export function createRecommendationOnboardingLifecycle(
       const now = timestamp(input.now);
       return serializer.run(input.subjectId, async () => {
         const stored = await readStoredEvents(input.subjectId, now);
-        return assessRecommendationCandidateActionPlan(input.plan, [...stored, ...(input.events ?? [])], {
+        return assessRecommendationCandidateActionPlanWithEvidence(input.plan, input.events ?? [], {
           now,
+          subjectId: input.subjectId,
+          storedEvents: stored,
+          ...(evidenceVerifier === undefined ? {} : { evidenceVerifier }),
           ...(input.maxEligibilityAgeMs === undefined ? {} : { maxEligibilityAgeMs: input.maxEligibilityAgeMs })
         });
       });
