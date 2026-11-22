@@ -73,6 +73,8 @@ const ONBOARDING_EVIDENCE_PROTOCOL: RecommendationProtocol = "app_local";
 const ONBOARDING_EVIDENCE_VISIBILITY: RecommendationSourceVisibility = "local_only";
 const ONBOARDING_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "user_owned";
 const USER_OWNED_POD_PREFERENCE_TARGETS: ReadonlySet<string> = new Set(["activitypods_pod", "solid_pod"]);
+/** A private space on the user's own PDS. There is deliberately no target for a public repo. */
+const USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET = "atproto_private_space";
 const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_SIGNAL_COUNT = 10_000;
 
@@ -129,6 +131,10 @@ function assertSubjectLevelPrivacyBoundary(privacyBoundary: RecommendationIntere
   }
 }
 
+function isUserOwnedServerTarget(storageTarget: string): boolean {
+  return USER_OWNED_POD_PREFERENCE_TARGETS.has(storageTarget) || storageTarget === USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET;
+}
+
 /**
  * With no explicit choice, a selection kept in the user's own pod is labelled `server_allowed` and
  * anything else `local_only`. An explicit `local_only` for a pod selection is refused rather than
@@ -138,10 +144,10 @@ function resolvePrivacyBoundary(
   explicit: RecommendationInterestPrivacyBoundary | undefined,
   selection: RecommendationOnboardingSelectionRecord
 ): RecommendationInterestPrivacyBoundary {
-  const inUserPod = USER_OWNED_POD_PREFERENCE_TARGETS.has(selection.storageTarget);
+  const inUserPod = isUserOwnedServerTarget(selection.storageTarget);
   if (explicit === undefined) return inUserPod ? "server_allowed" : DEFAULT_PRIVACY_BOUNDARY;
   if (inUserPod && explicit === "local_only") {
-    throw new TypeError("Recommendation onboarding profile seed for a user-owned pod must use the server_allowed privacy boundary.");
+    throw new TypeError("Recommendation onboarding profile seed for a user-owned pod or space must use the server_allowed privacy boundary.");
   }
   return explicit;
 }
@@ -149,7 +155,7 @@ function resolvePrivacyBoundary(
 /**
  * Where the selection is kept decides what the evidence says. A selection kept on the device is app-local
  * owner evidence. A selection kept in the user's own pod is evidence read from that pod under the user's
- * own access control, which is the only server-side evidence the signal policy accepts for
+ * own access control (a private ATProto space on the user's PDS gets the matching ATProto evidence), which is the only server-side evidence the signal policy accepts for
  * `server_allowed` interests. Any other pairing keeps the app-local evidence, so the policy refuses it.
  */
 function createOnboardingEvidence(
@@ -157,6 +163,16 @@ function createOnboardingEvidence(
   privacyBoundary: RecommendationInterestPrivacyBoundary,
   selection: RecommendationOnboardingSelectionRecord
 ): RecommendationInterestEvidence {
+  if (privacyBoundary === "server_allowed" && selection.storageTarget === USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET) {
+    return Object.freeze({
+      sourceItemKind: "collection",
+      protocol: "atproto",
+      sourceVisibility: "atproto_private_space",
+      accessBasis: "atproto_space_authority",
+      trustBoundary: ONBOARDING_TRUST_BOUNDARY,
+      observedAt
+    });
+  }
   if (privacyBoundary === "server_allowed" && USER_OWNED_POD_PREFERENCE_TARGETS.has(selection.storageTarget)) {
     return Object.freeze({
       sourceItemKind: "collection",

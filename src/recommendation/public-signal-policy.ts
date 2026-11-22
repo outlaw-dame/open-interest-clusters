@@ -67,6 +67,21 @@ function signalEffect(input: RecommendationPublicSignalPolicyInput): Recommendat
   return "affinity";
 }
 
+/**
+ * Evidence for interests kept somewhere only the user controls: a pod under the user's ACL, or a private
+ * ATProto space where the user's DID is the space authority. A public repo never matches. Spaces give
+ * access control, not confidentiality, so this says who may read, not that the data is hidden from the host.
+ */
+function isUserControlledRemoteSource(evidence: RecommendationInterestEvidence): boolean {
+  if (evidence.trustBoundary !== "user_owned") return false;
+  if (evidence.protocol === "activitypods") {
+    return evidence.sourceVisibility === "acl_controlled" && evidence.accessBasis === "solid_acl_control";
+  }
+  return evidence.protocol === "atproto" &&
+    evidence.sourceVisibility === "atproto_private_space" &&
+    evidence.accessBasis === "atproto_space_authority";
+}
+
 function resolvedStorageAuthority(
   input: RecommendationPublicSignalPolicyInput
 ): RecommendationStorageAuthority {
@@ -79,10 +94,7 @@ function resolvedStorageAuthority(
 
   if (
     input.privacyBoundary === "server_allowed" &&
-    input.evidence.protocol === "activitypods" &&
-    input.evidence.sourceVisibility === "acl_controlled" &&
-    input.evidence.accessBasis === "solid_acl_control" &&
-    input.evidence.trustBoundary === "user_owned"
+    isUserControlledRemoteSource(input.evidence)
   ) {
     return "user_owned";
   }
@@ -138,10 +150,7 @@ function isUserControlledRemoteEvidence(
 ): boolean {
   return (
     storageAuthority === "user_owned" &&
-    input.evidence.protocol === "activitypods" &&
-    input.evidence.sourceVisibility === "acl_controlled" &&
-    input.evidence.accessBasis === "solid_acl_control" &&
-    input.evidence.trustBoundary === "user_owned" &&
+    isUserControlledRemoteSource(input.evidence) &&
     input.privacyBoundary === "server_allowed" &&
     input.consent.containsPrivateData === true &&
     input.consent.containsThirdPartyData === false &&

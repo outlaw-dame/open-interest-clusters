@@ -25,6 +25,7 @@ export const RECOMMENDATION_PREFERENCE_STORAGE_TARGETS = [
   "local_app",
   "activitypods_pod",
   "solid_pod",
+  "atproto_private_space",
   "encrypted_sync",
   "provider_storage"
 ] as const;

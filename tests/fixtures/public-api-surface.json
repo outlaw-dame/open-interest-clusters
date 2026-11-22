@@ -579,6 +579,7 @@
       "solid_acl_read",
       "solid_acl_control",
       "atproto_public_repo",
+      "atproto_space_authority",
       "oauth_scope",
       "provider_policy",
       "unknown"
@@ -1087,6 +1088,7 @@
       "local_app",
       "activitypods_pod",
       "solid_pod",
+      "atproto_private_space",
       "encrypted_sync",
       "provider_storage"
     ],
@@ -1254,6 +1256,7 @@
       "local_only",
       "acl_controlled",
       "atproto_public_repo",
+      "atproto_private_space",
       "unknown"
     ],
     "RECOMMENDATION_STATE_DOMAINS": [

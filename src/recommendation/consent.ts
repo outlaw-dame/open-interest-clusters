@@ -17,6 +17,7 @@ export const RECOMMENDATION_SOURCE_VISIBILITIES = [
   "local_only",
   "acl_controlled",
   "atproto_public_repo",
+  "atproto_private_space",
   "unknown"
 ] as const;
 
@@ -32,6 +33,7 @@ export const RECOMMENDATION_ACCESS_BASES = [
   "solid_acl_read",
   "solid_acl_control",
   "atproto_public_repo",
+  "atproto_space_authority",
   "oauth_scope",
   "provider_policy",
   "unknown"
@@ -259,6 +261,10 @@ function visibilityAllowsAccess(
         accessBasis === "owner"
         ? "allow"
         : "access.deny.acl_required";
+    case "atproto_private_space":
+      return accessBasis === "atproto_space_authority" || accessBasis === "owner"
+        ? "allow"
+        : "access.deny.visibility_scope";
   }
 }
 

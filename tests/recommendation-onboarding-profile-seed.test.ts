@@ -419,7 +419,7 @@ test("a selection kept in a user pod is labelled server_allowed with pod evidenc
 
   await assert.rejects(
     createRecommendationOnboardingProfileSeed({ subjectId: SUBJECT_ID, catalogIndex, selection, policy, privacyBoundary: "local_only" }),
-    /user-owned pod must use the server_allowed/u
+    /user-owned pod or space must use the server_allowed/u
   );
   // The server label needs server-side consent even for the user's own pod.
   await assert.rejects(
