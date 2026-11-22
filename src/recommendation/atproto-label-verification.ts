@@ -19,6 +19,7 @@ export const RECOMMENDATION_ATPROTO_LABEL_VERIFICATION_FAILURES = [
   "high_s_signature",
   "signature_mismatch",
   "expired",
+  "future_label",
   "invalid_clock"
 ] as const;
 
@@ -60,6 +61,8 @@ export interface RecommendationAtprotoLabelVerificationInput {
 }
 
 const LABEL_KEY_FRAGMENT = "#atproto_label";
+// A label may be dated slightly ahead of the caller's clock. Anything beyond this is refused.
+const LABEL_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_FIELD_BYTES = 8_192;
 const MAX_MULTIKEY_CHARS = 128;
 const MAX_SIGNATURE_BASE64_CHARS = 128;
@@ -307,7 +310,10 @@ function findLabelKey(didDocument: unknown, labelerDid: string): unknown {
 /**
  * Checks a label's signature against the labeler's current `#atproto_label` key. It never throws on
  * bad input. A verified result with `negated: true` is a signed retraction, not a positive label.
- * An authentic label whose `exp` has passed returns `expired`. There is no fallback to the repo
+ * An authentic label whose `exp` has passed returns `expired`, and one whose `cts` is more than five
+ * minutes ahead of `now` returns `future_label`. A positive result says nothing about whether the
+ * labeler signed a later `neg` label for the same subject and value: this function sees one label.
+ * Callers need to look for that themselves. There is no fallback to the repo
  * signing key: a DID document without an `#atproto_label` key fails closed.
  */
 export function verifyRecommendationAtprotoLabelSignature(
@@ -334,6 +340,8 @@ export function verifyRecommendationAtprotoLabelSignature(
     }
     if (!valid) reject("signature_mismatch");
 
+    // Checked after the signature so a forged label cannot probe for this reason.
+    if (Date.parse(label.cts) > nowMs + LABEL_CLOCK_SKEW_MS) reject("future_label");
     const expiresAt = label.exp === undefined ? undefined : Date.parse(label.exp);
     if (expiresAt !== undefined && expiresAt <= nowMs) reject("expired");
     return { verified: true, keyType: curve.name, negated: label.neg === true, hasExpiry: expiresAt !== undefined };

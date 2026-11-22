@@ -643,6 +643,7 @@
     ],
     "RECOMMENDATION_ATPROTO_LABEL_ATTESTATION_REFUSALS": [
       "negated_label",
+      "label_too_old",
       "invalid_attestation_input"
     ],
     "RECOMMENDATION_ATPROTO_LABEL_PROVENANCES": [
@@ -663,6 +664,7 @@
       "high_s_signature",
       "signature_mismatch",
       "expired",
+      "future_label",
       "invalid_clock"
     ],
     "RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS": [

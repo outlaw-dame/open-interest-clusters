@@ -219,3 +219,20 @@ test("the core entrypoint pulls in no @atproto or @ipld packages", () => {
   const offenders = files.filter((file) => /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)["']@(?:atproto|ipld)\//u.test(readFileSync(file, "utf8")));
   assert.deepEqual(offenders, []);
 });
+
+test("maxLabelAgeMs refuses an old label, and a future-dated label is never attested", () => {
+  // The vector label was created at 2024-01-02T03:04:05.000Z.
+  const cts = Date.parse("2024-01-02T03:04:05.000Z");
+  const now = (offsetMs: number) => new Date(cts + offsetMs).toISOString();
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(createRecommendationAtprotoLabelAttestation(issueInput({ now: now(day), maxLabelAgeMs: day })).issued, true);
+  assert.deepEqual(createRecommendationAtprotoLabelAttestation(issueInput({ now: now(day + 1), maxLabelAgeMs: day })), { issued: false, reason: "label_too_old" });
+  // Without the option an old label still issues, which is why the docs tell callers to look for negations.
+  assert.equal(createRecommendationAtprotoLabelAttestation(issueInput({ now: now(400 * day) })).issued, true);
+  assert.deepEqual(createRecommendationAtprotoLabelAttestation(issueInput({ now: now(-day) })), { issued: false, reason: "future_label" });
+  for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "5" as unknown as number]) {
+    assert.deepEqual(createRecommendationAtprotoLabelAttestation(issueInput({ maxLabelAgeMs: bad })), { issued: false, reason: "invalid_attestation_input" }, String(bad));
+  }
+  // A bad age option is not reached for labels that already fail verification.
+  assert.deepEqual(createRecommendationAtprotoLabelAttestation(issueInput({ label: { ...label(), val: "other" }, maxLabelAgeMs: 0 })), { issued: false, reason: "signature_mismatch" });
+});

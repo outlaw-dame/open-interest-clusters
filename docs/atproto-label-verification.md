@@ -26,7 +26,9 @@ The package declares `node >= 20.11`. Node 20 ships OpenSSL 3 with the same secp
 5. Rejects `s > n / 2`, then verifies the signature over the SHA-256 of those bytes.
 6. Only after the signature is good, rejects a label whose `exp` is at or before the injected `now`. A forged and expired label reports `signature_mismatch`, an authentic expired one reports `expired`.
 
-A verified negation returns `negated: true`. A caller must treat it as a retraction.
+7. Rejects a label whose `cts` is more than five minutes after `now` with `future_label`. This also runs after the signature check.
+
+A verified negation returns `negated: true`. A caller must treat it as a retraction. A positive result only describes the one label you passed. It cannot tell you that the labeler signed a `neg` label for the same subject and value afterwards, so check the labeler's newer labels yourself before relying on a label with no `exp`.
 
 The result is `{ verified: true, keyType, negated, hasExpiry }` or `{ verified: false, reason }`. Reasons are listed in `RECOMMENDATION_ATPROTO_LABEL_VERIFICATION_FAILURES`. Hostile input never throws.
 
@@ -37,6 +39,7 @@ The caller resolves the DID document and decides how fresh it must be. Key rotat
 `createRecommendationAtprotoLabelAttestation({ label, didDocument, now, subjectId, sourceIds, kind, claim, verifierId, evidence? })` runs the verification above and returns `{ issued: true, attestation }` or `{ issued: false, reason }`. It issues only when the signature verified. The attestation has mechanism `atproto_label_signature`, proof class `signature` and authority `protocol_native`, and `verifiedAt` is the `now` you passed.
 
 - A signed negation is refused with `negated_label`. An attestation reads as a positive claim, and a retraction is not one. An expired label is refused with `expired`.
+- A label with no `exp` stays attestable for as long as you keep passing it. Set `maxLabelAgeMs` to refuse a label whose `cts` is older than that (`label_too_old`). A non-positive or non-integer value gives `invalid_attestation_input`. It limits age only. It does not find a later negation.
 - If the label has an `exp`, the attestation carries it as `expiresAt` and stops being accepted at that time, even inside `maxAgeMs`.
 - The attestation always has a `contentDigest`. By default it is the digest of the label as given (including `sig`), so a verifier built with `bindContent: true` accepts only that exact label. Pass `evidence` to bind something derived from the label instead. You are then vouching for the derivation.
 - A label with getters or non-plain values is refused (`malformed_label`) so that what was verified is what was digested. Bad subject, source, claim or verifier fields give `invalid_attestation_input`. The function does not throw.

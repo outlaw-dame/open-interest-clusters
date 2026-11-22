@@ -355,3 +355,13 @@ test("key rotation: only the key in the current DID document counts", () => {
   assert.deepEqual(verifyWith(signedByOld, both), { verified: false, reason: "ambiguous_key" });
   assert.deepEqual(verifyWith(signedByNew, both), { verified: false, reason: "ambiguous_key" });
 });
+
+test("a label dated after the caller's clock is refused, with a small allowance for skew", () => {
+  const base = signed("secp256k1"); // cts 2024-01-02T03:04:05.000Z
+  const doc = didDoc(KEYS.secp256k1);
+  assert.equal(verifyWith(base, doc, "2024-01-02T02:59:05.000Z").verified, true); // 5 minutes ahead exactly
+  assert.deepEqual(verifyWith(base, doc, "2024-01-02T02:59:04.999Z"), { verified: false, reason: "future_label" });
+  assert.deepEqual(verifyWith(base, doc, "2023-01-01T00:00:00Z"), { verified: false, reason: "future_label" });
+  // A forged label does not get to learn anything about its date.
+  assert.deepEqual(verifyWith({ ...base, val: "other" }, doc, "2023-01-01T00:00:00Z"), { verified: false, reason: "signature_mismatch" });
+});
