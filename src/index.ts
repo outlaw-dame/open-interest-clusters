@@ -35,6 +35,7 @@ export * from "./recommendation/evidence-attestation.js";
 export * from "./recommendation/onboarding-lifecycle.js";
 export * from "./recommendation/profile-persistence-transition.js";
 export * from "./recommendation/curated-account-set-candidate-source.js";
+export * from "./recommendation/curated-account-set-change-diff.js";
 export * from "./recommendation/candidate-eligibility.js";
 export * from "./recommendation/protocol-source-contexts.js";
 export * from "./recommendation/protocol-source-normalizers.js";

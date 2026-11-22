@@ -80,7 +80,9 @@ const MAX_URL = 2_048;
 const MAX_ID = 512;
 const MAX_NAME = 256;
 const MAX_DESCRIPTION = 4_096;
-const MAX_MEMBERS = 150;
+/** Providers cap a set at 150 members (Mastodon allows 150 items per collection). */
+export const MAX_RECOMMENDATION_CURATED_ACCOUNT_SET_MEMBERS = 150;
+const MAX_MEMBERS = MAX_RECOMMENDATION_CURATED_ACCOUNT_SET_MEMBERS;
 const MAX_PROVIDER_ITEMS = 150;
 const MEMBER_STATES = new Set<string>(["accepted", "pending", "rejected", "revoked", "unknown"]);
 const SOURCE_VISIBILITIES = new Set<string>(RECOMMENDATION_SOURCE_VISIBILITIES);

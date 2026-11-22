@@ -59,6 +59,16 @@ export function createRecommendationCuratedAccountSetSourceId(provider: string, 
   return `curated-set:v1:${sha256Hex(`${provider}:${setId}`)}`;
 }
 
+/** Candidate ID of the account candidate built for a curated-set member with this actor URI. */
+export function createRecommendationCuratedAccountSetMemberCandidateId(accountUri: string): string {
+  return createRecommendationCandidateId({
+    kind: "account",
+    protocol: "activitypub",
+    nativeId: accountUri,
+    provider: hostForHttpsUri(accountUri, "Invalid curated account-set member actor URI.")
+  });
+}
+
 function provenanceForMember(
   set: RecommendationCuratedAccountSet,
   member: RecommendationCuratedAccountMember
@@ -141,12 +151,7 @@ function candidateForMember(
 ): RecommendationCandidate | undefined {
   if (member.state !== "accepted" || member.accountUri === undefined) return undefined;
   const provider = hostForHttpsUri(member.accountUri, "Invalid curated account-set member actor URI.");
-  const candidateId = createRecommendationCandidateId({
-    kind: "account",
-    protocol: "activitypub",
-    nativeId: member.accountUri,
-    provider
-  });
+  const candidateId = createRecommendationCuratedAccountSetMemberCandidateId(member.accountUri);
   return normalizeRecommendationCandidate({
     candidateId,
     kind: "account",

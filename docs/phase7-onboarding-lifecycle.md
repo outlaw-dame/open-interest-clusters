@@ -152,6 +152,33 @@ The lifecycle reads its own clock (`now` option, defaulting to the system time).
 
 The seed's `observedAt` and the lifecycle's `now` are separate clocks. `observedAt` defaults to `selection.selectedAt` and records when the user made the choice. `now` is when the lifecycle runs and stamps `occurredAt` on the events it writes. A selection made well before `now` therefore has signals whose evidence time is older than their event time. That is intended, and expiry is judged against `now`.
 
+## Noticing that a curated set changed
+
+The library never polls, so something in your app has to look at a curated account set again (when the user opens onboarding, or from your own scheduler) and say what it saw. `diffRecommendationCuratedAccountSet` turns "last snapshot plus fresh read" into lifecycle events. It is pure: no network, no timers, and the only time it uses is the `observedAt` you supply with the reads.
+
+```ts
+const report = diffRecommendationCuratedAccountSet({
+  subjectId,
+  previous: lastSnapshot,          // the RecommendationCuratedAccountSet you saved earlier
+  fresh: await readAgain()         // { status: "found", set } | { status: "not_found", provider, setId, observedAt } | { status: "unknown" }
+});
+if (report.events.length > 0) {
+  await lifecycle.reportCandidateEvents({ subjectId: report.subjectId, events: report.events, policy });
+  // or pass the events to lifecycle.refresh
+}
+// Save fresh.set as the new snapshot only after the report went through.
+```
+
+What it reports, always as events that make a plan less usable:
+
+- `not_found` gives `set_deleted`. A set that stops being discoverable gives `set_not_discoverable`, and one that becomes sensitive gives `set_sensitive`.
+- A member that moved to `revoked` or `rejected` gives `member_consent_revoked` or `member_consent_rejected`, with the member's candidate ID. A member that is no longer listed also gives `member_consent_revoked`, but only when the fresh set says `membershipComplete`. A partial list cannot show who is missing.
+- Only members that were accepted and had an actor URI in the previous snapshot can be reported, because only those became candidates. A member that fell back to pending or unknown has no matching event kind, so nothing is reported for it.
+
+What it will not do. `unknown` means the read failed or told you nothing (timeout, 5xx, rate limit, parse error). It returns no events, so an outage cannot hide a set. Your code must map only a real "gone" answer from the provider to `not_found`. Sets getting better (discoverable again, gaining members) never produce events, because an event can never reopen a plan. It also throws instead of guessing when the provider or set ID differs from the previous snapshot, when `observedAt` runs backwards, when either set has more than 150 members, or when a snapshot is malformed. Events are in canonical order, de-duplicated, and tied to the `subjectId` and `setSourceId` in the report. Row order and duplicate rows in the read do not change the result, and a duplicate accepted row cannot cancel a revoked one.
+
+The library still never polls. The diff does nothing until your code calls it, and `reportCandidateEvents` or `refresh` is still what clears caches and applies the exclusion.
+
 ## Persisted candidate events
 
 By default `reportCandidateEvents` only clears caches. Pass `candidateEvents: { store }` to `createRecommendationOnboardingLifecycle` and the events are also kept, so `assessPlan` and `refresh` still honor them after a restart. Leaving the option out keeps the old behavior exactly.
