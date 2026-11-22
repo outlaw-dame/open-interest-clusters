@@ -9,6 +9,7 @@ import {
   recommendationCandidateEventRecordDigest,
   selectNewRecommendationCandidateEvents,
   RecommendationCandidateEventConflictError,
+  checkRecommendationCandidateEventStoreCompareAndSet,
   type RecommendationCandidateEventStore,
   type RecommendationCandidateEventStoreLimits
 } from "./candidate-event-store.js";
@@ -394,11 +395,26 @@ export function createRecommendationOnboardingLifecycle(
     return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
   }
 
+  // A store that claims compare-and-set is checked once. Only a definite answer is remembered, so a
+  // store that was briefly down is checked again on the next write instead of being trusted or doubted for good.
+  let casCheck: Promise<boolean> | undefined;
+  function storeHonorsCompareAndSet(): Promise<boolean> {
+    if (eventStore!.supportsCompareAndSet !== true) return Promise.resolve(false);
+    if (casCheck !== undefined) return casCheck;
+    const attempt = checkRecommendationCandidateEventStoreCompareAndSet(eventStore!).then((result) => {
+      if (result.status === "inconclusive") casCheck = undefined;
+      return result.status === "passed";
+    }, () => { casCheck = undefined; return false; });
+    casCheck = attempt;
+    return attempt;
+  }
+
   /**
    * Loads, merges and saves. A store that supports compare-and-set is told which record version the
    * merge was built from, so a write from another process or device in between is noticed: the save is
    * refused, and this reloads and merges again instead of overwriting it. A store that does not
-   * declare support is single-writer, and last write wins.
+   * declare support, or declares it but fails the conformance check, is treated as single-writer:
+   * writes from this process are still serialized per subject, but another process can overwrite.
    */
   async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string): Promise<void> {
     const retry: RetryPolicyOptions = {
@@ -407,12 +423,13 @@ export function createRecommendationOnboardingLifecycle(
       ...(eventRetry.retrySleeper === undefined ? {} : { retrySleeper: eventRetry.retrySleeper }),
       shouldRetry: ({ error }) => error instanceof RecommendationCandidateEventConflictError
     };
+    const useCompareAndSet = await storeHonorsCompareAndSet();
     await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
       const raw = await storeIo((store) => store.load(subjectId));
       const merged = mergeRecommendationCandidateEventEntries(readRecommendationCandidateEventRecord(raw, subjectId, eventLimits!, now), events, eventLimits!, now);
       if (!merged.changed) return;
       const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
-      const expected = eventStore!.supportsCompareAndSet === true ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
+      const expected = useCompareAndSet ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
       await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected));
     }, retry));
   }

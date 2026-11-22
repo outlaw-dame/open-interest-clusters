@@ -208,6 +208,7 @@
     "buildRecommendationCandidateEventRecord",
     "buildRecommendationOnboardingSignals",
     "checkPGliteAnnHealth",
+    "checkRecommendationCandidateEventStoreCompareAndSet",
     "classifyRecommendationLabelSemantics",
     "classifyRecommendationLabelSemanticsBatch",
     "cloneAnnConfigSnapshot",

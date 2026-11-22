@@ -1,4 +1,5 @@
 import { deleteStoredRecommendationCandidateEvents, markRecommendationCandidateEventDeletionInvalidator } from "./candidate-event-deletion-registry.js";
+import { randomUUID } from "node:crypto";
 import { sha256Hex } from "../runtime/hash.js";
 import {
   MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS,
@@ -302,6 +303,58 @@ export function buildRecommendationCandidateEventRecord(
     entries: Object.freeze(entries.map((entry) => Object.freeze({ recordedAt: entry.recordedAt, event: { ...entry.event } }))),
     digest: digestOf(subjectId, updatedAt, entries)
   });
+}
+
+/** Outcome of `checkRecommendationCandidateEventStoreCompareAndSet`. Reasons are fixed strings; store errors are never copied in. */
+export type RecommendationCandidateEventCompareAndSetCheck =
+  | { status: "passed" }
+  | { status: "failed"; reason: "not_declared" | "accepted_stale_write" | "refused_current_write" }
+  | { status: "inconclusive"; reason: "store_error" };
+
+/**
+ * Exercises a store's compare-and-set claim against a throwaway subject, so a store that says
+ * `supportsCompareAndSet` but ignores `expectedDigest` is caught before anyone relies on it.
+ * It writes a few empty records under a random probe subject id and deletes it afterwards, so run it
+ * against the real store you will use, not a mock. `failed` means the store gave a definite wrong
+ * answer. `inconclusive` means the store threw something other than a conflict, so nothing was learned.
+ */
+export async function checkRecommendationCandidateEventStoreCompareAndSet(
+  store: RecommendationCandidateEventStore,
+  options: { now?: () => number; probeSubjectId?: string } = {}
+): Promise<RecommendationCandidateEventCompareAndSetCheck> {
+  assertRecommendationCandidateEventStore(store);
+  if (store.supportsCompareAndSet !== true) return { status: "failed", reason: "not_declared" };
+  const subjectId = options.probeSubjectId ?? `cas-conformance-probe-${randomUUID()}`;
+  assertValidRecommendationProfileSubjectId(subjectId);
+  const base = (options.now ?? Date.now)();
+  const at = (offset: number) => new Date(base + offset).toISOString();
+  const first = buildRecommendationCandidateEventRecord(subjectId, [], at(0));
+  const second = buildRecommendationCandidateEventRecord(subjectId, [], at(1));
+  const third = buildRecommendationCandidateEventRecord(subjectId, [], at(2));
+  const rejects = async (record: RecommendationCandidateEventRecord, expectedDigest: string | null): Promise<boolean> => {
+    try {
+      await store.save(subjectId, record, { expectedDigest });
+      return false;
+    } catch (error) {
+      if (error instanceof RecommendationCandidateEventConflictError) return true;
+      throw error;
+    }
+  };
+  try {
+    // The first write expects no record and must land. A store that refuses it refuses everything.
+    if (await rejects(first, null)) return { status: "failed", reason: "refused_current_write" };
+    // The store now holds `first`, so "expect nothing" is stale and has to be refused.
+    if (!await rejects(second, null)) return { status: "failed", reason: "accepted_stale_write" };
+    // The current digest must still be accepted, otherwise the store just rejects every write.
+    if (await rejects(second, first.digest)) return { status: "failed", reason: "refused_current_write" };
+    // And the old digest is stale now.
+    if (!await rejects(third, first.digest)) return { status: "failed", reason: "accepted_stale_write" };
+    return { status: "passed" };
+  } catch {
+    return { status: "inconclusive", reason: "store_error" };
+  } finally {
+    try { await store.delete(subjectId); } catch { /* best effort; the probe id is random and holds no events */ }
+  }
 }
 
 const DEVICE_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
