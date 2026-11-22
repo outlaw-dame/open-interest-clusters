@@ -187,6 +187,26 @@ test("denied consent moves nothing, events included", async () => {
   }
 });
 
+test("a rerun after the profile already moved still needs consent before events reach the pod", async () => {
+  // The source profile is gone and the pod has one, so no profile write happens. The consent check
+  // at the top of the transition is the only thing standing between the events and the pod store.
+  for (const policy of [null, undefined, { ...POLICY, subjectId: "someone-else" }, { ...POLICY, revokedAt: "2026-10-01T12:00:00.000Z" }, { ...POLICY, serverSideDataUses: [] }] as const) {
+    const { local, pod, podProfile, key, run } = setup({ profile: false });
+    podProfile.records.set(key, createRecommendationProfileStoreRecord({ subjectId: SUBJECT, profile: snapshot(), writtenAt: "2026-10-01T00:00:01.000Z" }));
+    await seed(local.store, [bobRevoked]);
+    await assert.rejects(run({ policy }), (error: unknown) => error instanceof RecommendationProfilePersistenceError || error instanceof RecommendationConsentDeniedError);
+    assert.ok(await local.inner.load(SUBJECT), "events stay at the source");
+    assert.equal(pod.calls.length, 0, "the pod event store is never touched");
+    assert.equal(await pod.inner.load(SUBJECT), undefined);
+  }
+  const { local, pod, podProfile, key, run } = setup({ profile: false });
+  podProfile.records.set(key, createRecommendationProfileStoreRecord({ subjectId: SUBJECT, profile: snapshot(), writtenAt: "2026-10-01T00:00:01.000Z" }));
+  await seed(local.store, [bobRevoked]);
+  const allowed = await run();
+  assert.deepEqual([allowed.outcome, allowed.candidateEvents], ["already_moved", "moved"]);
+  assert.ok(await pod.inner.load(SUBJECT));
+});
+
 test("moving back to the device needs no server consent", async () => {
   const localProfile = new ProfileAdapter(PROFILE_MANIFEST);
   const podProfile = new ProfileAdapter(POD_PROFILE_MANIFEST);
