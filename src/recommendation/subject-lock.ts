@@ -27,20 +27,41 @@ export interface RecommendationSubjectLockOptions extends RecommendationSubjectL
    * write it followed, so this is the only place the failure shows up. Errors thrown here are ignored.
    */
   onReleaseError?: (error: RecommendationSubjectLockError) => void;
+  /**
+   * Longest time the work may run while the lock is held. Default 60000 ms, at most 300000 ms. When it
+   * passes, the signal given to the work aborts, `onHoldExceeded` is told, and the lock is still kept
+   * until the work has actually stopped. Only then is the call failed with `hold_exceeded`. The lock is
+   * never released at the deadline, because that would let a second writer start while a write is
+   * still in flight.
+   */
+  maxHoldMs?: number;
+  /**
+   * Told once when the hold deadline passes, before the work has necessarily stopped. If the work
+   * ignores the abort and never settles, the lock stays held and this is the only signal the app gets,
+   * so use it to alert or to ask the user to reload. Errors it throws are ignored.
+   */
+  onHoldExceeded?: (error: RecommendationSubjectLockError) => void;
 }
 
 export const RECOMMENDATION_SUBJECT_LOCK_DEFAULT_TIMEOUT_MS = 5_000;
 export const RECOMMENDATION_SUBJECT_LOCK_MAX_TIMEOUT_MS = 60_000;
+export const RECOMMENDATION_SUBJECT_LOCK_DEFAULT_HOLD_MS = 60_000;
+export const RECOMMENDATION_SUBJECT_LOCK_MAX_HOLD_MS = 300_000;
 
 export type RecommendationSubjectLockFailureReason =
   | "acquire_failed"
   | "acquire_timeout"
   | "aborted"
+  | "hold_exceeded"
   | "invalid_release"
   | "release_failed"
   | "release_timeout";
 
-/** Raised when the lock could not be had. Nothing was written. The message never contains the subject ID. */
+/**
+ * Raised when the lock could not be had, or when the work ran past `maxHoldMs` (`hold_exceeded`). In the
+ * first case nothing was written. In the second the work was told to stop and has settled, but part of
+ * it may have been written, so read the state again before retrying. The message never contains the subject ID.
+ */
 export class RecommendationSubjectLockError extends Error {
   readonly reason: RecommendationSubjectLockFailureReason;
   constructor(reason: RecommendationSubjectLockFailureReason, cause?: unknown) {
@@ -55,21 +76,27 @@ export interface NormalizedRecommendationSubjectLock {
   readonly timeoutMs: number;
   readonly signal: AbortSignal | undefined;
   readonly onReleaseError: ((error: RecommendationSubjectLockError) => void) | undefined;
+  readonly maxHoldMs: number;
+  readonly onHoldExceeded: ((error: RecommendationSubjectLockError) => void) | undefined;
 }
 
 export function normalizeRecommendationSubjectLockOptions(input: unknown): NormalizedRecommendationSubjectLock {
   const invalid = () => new TypeError("Invalid recommendation subject lock options.");
   if (typeof input !== "object" || input === null) throw invalid();
-  const { acquire, timeoutMs, signal, onReleaseError } = input as Partial<RecommendationSubjectLockOptions>;
+  const { acquire, timeoutMs, signal, onReleaseError, maxHoldMs, onHoldExceeded } = input as Partial<RecommendationSubjectLockOptions>;
   if (typeof acquire !== "function") throw invalid();
   if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > RECOMMENDATION_SUBJECT_LOCK_MAX_TIMEOUT_MS)) throw invalid();
   if (signal !== undefined && (typeof signal !== "object" || signal === null || typeof signal.addEventListener !== "function" || typeof signal.aborted !== "boolean")) throw invalid();
   if (onReleaseError !== undefined && typeof onReleaseError !== "function") throw invalid();
+  if (maxHoldMs !== undefined && (!Number.isInteger(maxHoldMs) || maxHoldMs < 1 || maxHoldMs > RECOMMENDATION_SUBJECT_LOCK_MAX_HOLD_MS)) throw invalid();
+  if (onHoldExceeded !== undefined && typeof onHoldExceeded !== "function") throw invalid();
   return Object.freeze({
     acquire: (subjectId: string, options: { signal: AbortSignal }) => acquire.call(input, subjectId, options),
     timeoutMs: timeoutMs ?? RECOMMENDATION_SUBJECT_LOCK_DEFAULT_TIMEOUT_MS,
     signal,
-    onReleaseError
+    onReleaseError,
+    maxHoldMs: maxHoldMs ?? RECOMMENDATION_SUBJECT_LOCK_DEFAULT_HOLD_MS,
+    onHoldExceeded
   });
 }
 
@@ -134,21 +161,48 @@ function acquireLock(lock: NormalizedRecommendationSubjectLock, subjectId: strin
   });
 }
 
+function reportHoldExceeded(lock: NormalizedRecommendationSubjectLock): void {
+  try {
+    const told: unknown = lock.onHoldExceeded?.(new RecommendationSubjectLockError("hold_exceeded"));
+    // An async callback that rejects must not become an unhandled rejection either.
+    if (typeof (told as { then?: unknown } | undefined)?.then === "function") (told as Promise<unknown>).then(undefined, () => undefined);
+  } catch { /* a broken reporter must not change the outcome */ }
+}
+
 /**
  * Holds the lock around `work`. Callers queue per subject first and take this lock second, never the
  * reverse, so a lock holder is never waiting on the in-process queue. A failed acquire rejects
  * before `work` runs. The lock is released in a `finally`, and a failing release never replaces the
  * result or error of `work`.
+ *
+ * `work` gets a signal that aborts after `maxHoldMs`. Passing the deadline does not release anything:
+ * the lock (and the queues around it, which are held by the same promise) stay held until `work`
+ * settles, and then the call fails with `hold_exceeded`, whatever `work` returned or threw. If `work`
+ * never settles, the lock is never released by the library. A Web Lock goes when the tab closes.
  */
 export async function withRecommendationSubjectLock<T>(
   lock: NormalizedRecommendationSubjectLock,
   subjectId: string,
-  work: () => Promise<T>
+  work: (signal: AbortSignal) => Promise<T>
 ): Promise<T> {
   const release = await acquireLock(lock, subjectId);
+  const controller = new AbortController();
+  let exceeded = false;
+  const timer = setTimeout(() => {
+    exceeded = true;
+    controller.abort();
+    reportHoldExceeded(lock);
+  }, lock.maxHoldMs);
   try {
-    return await work();
+    const result = await work(controller.signal);
+    if (exceeded) throw new RecommendationSubjectLockError("hold_exceeded");
+    return result;
+  } catch (error) {
+    // The work's own error is dropped on purpose: after an abort it is usually an AbortError, and it may name the subject.
+    if (exceeded) throw new RecommendationSubjectLockError("hold_exceeded");
+    throw error;
   } finally {
+    clearTimeout(timer);
     await release();
   }
 }

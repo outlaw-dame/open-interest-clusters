@@ -36,6 +36,8 @@ export * from "./recommendation/onboarding-lifecycle.js";
 export {
   RECOMMENDATION_SUBJECT_LOCK_DEFAULT_TIMEOUT_MS,
   RECOMMENDATION_SUBJECT_LOCK_MAX_TIMEOUT_MS,
+  RECOMMENDATION_SUBJECT_LOCK_DEFAULT_HOLD_MS,
+  RECOMMENDATION_SUBJECT_LOCK_MAX_HOLD_MS,
   RecommendationSubjectLockError,
   type RecommendationSubjectLock,
   type RecommendationSubjectLockFailureReason,
