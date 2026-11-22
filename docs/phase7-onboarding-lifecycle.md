@@ -171,10 +171,28 @@ Gaps that remain by design or by scope:
 - The profile transition moves the profile record only. It does not move reported candidate events, the engine's event-history store or derived caches. Each has its own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
 - Deletion waits for an in-flight save only within one process and one store object (see the race note above).
-- Event stores that do not implement compare-and-set stay single-writer.
+- Event stores that do not implement compare-and-set, or that fail `checkRecommendationCandidateEventStoreCompareAndSet`, stay single-writer. There is no lease or lock across processes (see "Several processes and scheduled refresh").
 - Verification outcomes are not cached, so a failed save followed by a retry verifies again (see "Retries" under evidence verification).
-- No per-kind caps and no automatic periodic refresh. `refresh` runs when the application calls it.
+- No per-kind caps and no automatic periodic refresh. `refresh` runs only when the application calls it (see "Several processes and scheduled refresh").
 - Set-level exclusions are bounded by `setExclusionRetentionMs` (365 days at most). A permanent "never show this set" is an application setting, passed as `excludeSourceIds`.
+
+## Several processes and scheduled refresh
+
+**Refresh is owned by the application.** The library never starts a timer, a job or a background loop. Nothing refreshes a plan or expires a hidden candidate until your code calls `lifecycle.refresh`. Pick the trigger that suits the app: when the user opens the onboarding screen, after `reportCandidateEvents`, or from your own scheduler (a cron job, a service worker alarm, a queue). Because stored events expire on read, a refresh that runs late still gives the right answer.
+
+**The library cannot lock across processes by itself.** The per-subject queue lives in one process's memory. Two processes or devices only coordinate through whatever storage they share, so any cross-process guarantee has to come from that storage. The library offers one thing there: compare-and-set on the candidate event store, with a conformance check (see "Concurrent writers"). It protects the stored events. It does not stop two processes from both running `refresh` or `applySelection` for the same subject at the same time, which can double the work but does not corrupt the event record.
+
+**Why there is no built-in lease.** A lease needs a shared record that holds an owner and an expiry, and a clock that every process trusts. The store interface has neither a place for an owner nor a shared clock, and a lease checked against local clocks can be wrong in both directions: two holders after clock skew, or a dead holder blocking everyone until the expiry. Compare-and-set already gives the safe part (no lost events) with the bounded retry described above, so adding a lease to the library would add risk without removing a case that matters for correctness.
+
+**A recipe if you want one refresher per subject.** Use a store that has atomic conditional writes (a database row, an object store with `If-Match`, a Redis key with `SET NX PX`):
+
+1. Before refreshing, try to create a lock record for the subject with a random owner ID and an expiry (`now + 2 * expected refresh time`), only if no unexpired record exists. If that fails, skip this run. The next trigger will try again.
+2. Run `lifecycle.refresh`. Renew the lease if it takes longer than half the expiry.
+3. Release by deleting the record only if it still carries your owner ID.
+4. If the process crashes, nobody releases it. The expiry frees it, so a crashed holder blocks others for one lease length at most. Use the lock store's own clock for expiry (the database `now()`, the Redis TTL) rather than each process's clock.
+5. When a lock attempt fails, wait with exponential backoff and jitter (for example 1s, 2s, 4s up to a cap, each scaled by a random factor between 0.5 and 1) before trying again, and give up after a handful of attempts.
+
+Treat the lock as an efficiency measure only. Refresh stays safe without it, because every stored write is still guarded by compare-and-set when the store supports it.
 
 ## Evidence verification
 

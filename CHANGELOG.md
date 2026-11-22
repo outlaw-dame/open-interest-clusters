@@ -18,6 +18,7 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ### Documented
 
+- Several processes and scheduled refresh: the library never refreshes on its own (the application calls `refresh`) and cannot lock across processes without shared storage. The Phase 7 doc now explains why there is no built-in lease and gives a concrete lock recipe with expiry, crash recovery and backoff.
 - `lifecycle.refresh` can return fewer than `limit` recommendations when the first-session object ignores `excludeSourceIds` and had already cut its list to `limit`. The refresh filter only removes and does not rerun the first session. The library's own orchestrator is not affected.
 
 ## 0.3.0
