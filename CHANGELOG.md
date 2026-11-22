@@ -21,6 +21,7 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ### Documented
 
+- What `local_only` means. On a signal it says the interest is not disclosed to providers or apps, and it holds when the profile sits in a user-owned pod. On a store manifest, `processingBoundary` says where the store runs: `local_only` for a device, `server_allowed` for a store the user owns. Interests are matched against the local profile, and remote servers should only be asked to check candidates and updates. User ATProto PDS storage is documented as not allowed for subject-level interests. Nothing changes in behavior. New tests cover every persistence path, the candidate event store, the profile move, and the requests the source and discovery clients build.
 - Several processes and scheduled refresh: the library never refreshes on its own (the application calls `refresh`) and cannot lock across processes without shared storage. The Phase 7 doc now explains why there is no built-in lease and gives a concrete lock recipe with expiry, crash recovery and backoff.
 - `lifecycle.refresh` can return fewer than `limit` recommendations when the first-session object ignores `excludeSourceIds` and had already cut its list to `limit`. The refresh filter only removes and does not rerun the first session. The library's own orchestrator is not affected.
 

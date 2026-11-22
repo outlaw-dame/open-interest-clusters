@@ -8,7 +8,7 @@ The engine distinguishes **where processing occurs** from **who controls persist
 
 The legacy `privacyBoundary` values remain supported as processing-location and disclosure boundaries:
 
-- `local_only`: processing and subject-level state remain on the current device;
+- `local_only`: the interest is not disclosed to providers, servers or other apps. It is held on the device or in a store the user owns (see `privacy-model.md`, "Signal label versus store manifest");
 - `server_allowed`: remote processing or persistence is technically possible;
 - `aggregate_only`: only aggregate, non-subject-level state is permitted.
 

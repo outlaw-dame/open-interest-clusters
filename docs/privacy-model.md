@@ -6,7 +6,7 @@ Open Interest Clusters is designed for privacy-preserving discovery and recommen
 
 - Deny by default when consent, authorization, or a privacy boundary is ambiguous.
 - Process only data required for an explicitly allowed recommendation use.
-- Keep user-private personalization local-first unless another boundary is explicitly permitted.
+- Keep user-private personalization local-first unless another boundary is explicitly permitted. Interests stay `local_only` even when the profile is kept in a store the user owns.
 - Separate public/shared semantic intelligence from subject-level profile state.
 - Do not copy raw subject identifiers into signals, profile snapshots, audit events, errors, or telemetry.
 - Treat consent revocation and deletion as lifecycle events that propagate to derived data.
@@ -25,11 +25,39 @@ Interest signals and profile state carry an explicit privacy boundary.
 
 ### `local_only`
 
-The default for user-private personalization. Processing and storage are expected to remain on the user's device or in user-controlled local storage.
+The default for user-private personalization. On a signal or profile entry it is a disclosure label: the interest is known to the user's own app and to stores the user controls, and is not handed to providers, servers, AppViews or other apps. It is not a rule about where the bytes may sit. A `local_only` profile may be kept on the device or in a user-owned remote store (an ActivityPods or Solid pod). Moving it between the two never changes the label.
 
 ### `server_allowed`
 
-Server-side profile processing or persistence is permitted only when consent explicitly allows the requested server-side use.
+On a signal, server-side profile processing or persistence is permitted only when consent explicitly allows the requested server-side use.
+
+### Signal label versus store manifest
+
+The same three words appear in two places, and they answer different questions.
+
+| Where | Field | Question it answers |
+| --- | --- | --- |
+| Signal or profile entry | `privacyBoundary` | Who may be told about this interest? |
+| Store manifest | `processingBoundary` | Where does this store run, and whose is it? |
+
+A manifest says `local_only` for a device-owned store with no network, and `server_allowed` for a remote store that the user owns. `server_allowed` there means a server operated for the user runs the store. It does not mean an app or provider may read the interests. Provider-owned and shared-operator stores are refused for subject-level state under every boundary. Interest signals keep their `local_only` label in both placements.
+
+### Matching happens against the local profile
+
+Interests are matched on the user's side. A remote app or server is asked to check candidates, or to report what changed since the last check, and it is not sent the profile, the signals or the interests behind them.
+
+What the library does:
+
+- A remote candidate source receives a redacted query: candidate kinds, limit, cursor and a hashed request ID. Interests and language preferences are dropped before the call (`readRecommendationCandidateSourceAdapter`). Only an adapter declared `local` receives them.
+- The curated account-set clients send a fixed public URL and nothing about the user. The ATProto label query sends URI patterns, sources, limit and cursor, and never the subject ID.
+- Remote sources must declare public discovery data only. A source that declares private data is refused.
+- Tests send marker strings through each of these and check that none reaches the request.
+
+What the library does not control:
+
+- What an integration puts into a URL, a URI pattern or a cursor that it builds itself. A query like "accounts tagged gaming" tells the server about the interest even when no profile is sent. Keep requests to public identifiers and fetch broad sets that are narrowed locally.
+- What a server does with the requests it gets. Requirement for integrations: servers that answer these checks should not keep queries or profile data beyond serving the request, and should not build per-user histories from them. The library cannot enforce that and does not claim to.
+- The network layer. Request timing, IP address and the client's choice of endpoint still reach the server.
 
 ### `aggregate_only`
 

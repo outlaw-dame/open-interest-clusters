@@ -169,6 +169,14 @@ Race note: saves and deletes against the event store go through one in-process q
 
 Compatibility: the `candidateEvents` option and the `policy` field on report and refresh input are additive. Without a store, `listReportedCandidateEvents` and `assessPlan` throw. The interface and state domain changes are in "Public API changes".
 
+## Matching interests without sending them
+
+Interests stay `local_only`. The lifecycle works by asking remote apps and servers to check public candidates or report updates, while the matching against the profile happens locally.
+
+- Remote candidate sources get a redacted query (kinds, limit, cursor, hashed request ID). Interests and languages are removed before the call, and only a `local` adapter sees them. The curated account-set clients send a fixed public URL. The label query sends URI patterns and never the subject ID. Tests cover each of these.
+- Subject-level state is refused for provider-owned and shared-operator stores in every persistence path, including the candidate event store and the profile move. A user's ATProto PDS is not an allowed placement (see `local-first-state-placement.md`).
+- Requirement on integrations: a server that answers these checks should not store the queries or any profile data past serving them. The library can only control what it builds. It cannot see what you put in a URL or cursor yourself, and it cannot enforce what a server does afterwards.
+
 ## Residual limits
 
 State after the limit-reduction work, with what each item does and does not cover.
@@ -181,7 +189,7 @@ State after the limit-reduction work, with what each item does and does not cove
 Gaps that remain by design or by scope:
 
 - The profile transition moves the profile record and, when both sides pass a `candidateEventStore`, reported candidate events. It does not move the engine's event-history store or derived caches. Each has its own placement, owned by the application.
-- A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
+- A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries. A test moves an onboarding profile from the device to a pod and back and checks every entry is still `local_only`. The store manifest's `server_allowed` only says a user-owned server runs the store (see "Signal label versus store manifest" in `privacy-model.md`).
 - The deletion registry is per process. The orchestrator clears only event stores registered by a lifecycle built in the same process on the same orchestrator. Build the lifecycle before recovering or running pending deletion tasks at startup. A `candidate_cache` task that completes before that has nothing registered and leaves stored events in place. Apps that cannot guarantee the order should also give the orchestrator an invalidator built with `createRecommendationCandidateEventDeletionInvalidator`, which does not depend on registration order.
 - Deletion waits for an in-flight save only within one process and one store object (see the race note above).
 - Event stores that do not implement compare-and-set, or that fail `checkRecommendationCandidateEventStoreCompareAndSet`, stay single-writer. There is no lease or lock across processes (see "Several processes and scheduled refresh").

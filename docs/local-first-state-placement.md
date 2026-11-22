@@ -28,14 +28,30 @@ This prevents an adopter from treating all recommendation data as one generic pr
 
 ## Allowed authority boundaries
 
+The manifest's `processingBoundary` says where the store runs. It does not relabel what is in it. Interest signals and profiles stay `local_only` (not disclosed to apps or providers, see [`privacy-model.md`](privacy-model.md)) in every allowed placement.
+
 Subject-level recommendation state may be placed only in:
 
-1. `device_owned` storage using the `local_only` processing boundary; or
-2. `user_owned` storage using the `server_allowed` processing boundary, such as a correctly authorized ActivityPod, Solid Pod, or equivalent user-controlled remote store.
+1. `device_owned` storage with the `local_only` manifest boundary. The store runs on the device; or
+2. `user_owned` storage with the `server_allowed` manifest boundary, such as a correctly authorized ActivityPod, Solid Pod, or equivalent user-controlled remote store. A server runs the store, but it is the user's server.
+
+Any other pairing is refused: a device store cannot claim `server_allowed`, and a user-owned store cannot claim `local_only`.
 
 `provider_owned` application, instance, AppView, and service-operator storage is not eligible for subject-level recommendation state.
 
 `shared_operator` storage is limited to non-subject `aggregate_statistics` under the `aggregate_only` boundary.
+
+### User-owned remote stores
+
+| Store | Status |
+| --- | --- |
+| ActivityPods pod | Supported. The library ships a manifest and a grant-bound adapter. |
+| Solid pod | Supported as a placement. The library has no Solid adapter; you supply one and declare it `user_owned` with `server_allowed`. |
+| User's ATProto PDS | **Not an allowed placement.** |
+
+An ATProto repository is, in the protocol's own words, a collection of data published by a single user ([atproto.com/guides/data-repos](https://atproto.com/guides/data-repos)). Repos are self-authenticating and anyone can verify them, so writing private interests into one would publish them. The PDS host can also read repo contents. The manifest is a declaration by the integrator, and the library does not inspect the store behind it. Its authority values are `device_owned`, `user_owned`, `provider_owned` and `shared_operator`, and none of them names a PDS. Any other value is rejected, but a PDS adapter declared as `user_owned` would pass the manifest check, so this rule is documentation plus review, not something the code can detect. Integrators must not declare a PDS as `user_owned`.
+
+A PDS could become acceptable for subject-level interests only if the content is encrypted on the client with keys the user holds, so the host and the public see ciphertext, or if the protocol gains private, permissioned storage that has been verified to exist. This was not checked against newer AT Protocol work, so any private-data feature that has shipped since is unconfirmed. Until then ATProto is a source of public data (labels, public repos), not a place for the user's interests.
 
 ## Local-first adapter requirements
 
