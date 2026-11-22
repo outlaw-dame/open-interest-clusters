@@ -23,7 +23,7 @@ export interface RecommendationEvidenceVerifierContext {
   readonly kind: RecommendationEvidenceKind;
   /** The caller's clock for this operation. Use it for expiry checks. */
   readonly now: string;
-  /** Aborted when the verifier runs past its time limit. Stop any work that honors it. */
+  /** Aborted when the verifier runs past its time limit, or when another item in the same call fails. Stop any work that honors it. */
   readonly signal: AbortSignal;
 }
 
@@ -126,11 +126,21 @@ async function verifyOne(
   kind: RecommendationEvidenceKind,
   subjectId: string,
   now: string,
-  timeoutMs: number
+  timeoutMs: number,
+  callSignal: AbortSignal
 ): Promise<void> {
   const controller = new AbortController();
+  // The call as a whole failing aborts this item too, so a sibling does not keep running unobserved.
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onCallAbort: () => void = () => undefined;
   const timeout = new Promise<never>((_, reject) => {
+    // Stop waiting as well, so a verifier that ignores its signal does not hold this item open.
+    onCallAbort = () => {
+      controller.abort();
+      reject(new RecommendationEvidenceVerificationError(kind, "error"));
+    };
+    if (callSignal.aborted) onCallAbort();
+    else callSignal.addEventListener("abort", onCallAbort, { once: true });
     timer = setTimeout(() => {
       controller.abort();
       reject(new RecommendationEvidenceVerificationError(kind, "timeout"));
@@ -147,6 +157,7 @@ async function verifyOne(
     throw new RecommendationEvidenceVerificationError(kind, "error", { cause: error });
   } finally {
     clearTimeout(timer);
+    callSignal.removeEventListener("abort", onCallAbort);
   }
   if (result === null || typeof result !== "object" || Array.isArray(result) || typeof (result as { verified?: unknown }).verified !== "boolean") {
     throw new RecommendationEvidenceVerificationError(kind, "malformed");
@@ -156,7 +167,8 @@ async function verifyOne(
 
 /**
  * Verifies the items with bounded concurrency and an overall deadline, and stops handing out work
- * after the first failure. With no verifier the items are left alone and the result says
+ * after the first failure. The first failure also aborts the `signal` of every verifier call still
+ * running, so nothing keeps working after the caller has the error. With no verifier the items are left alone and the result says
  * `unverified`. With a verifier and nothing to check it also says `unverified`, because no check
  * ran. A verifier can only reject; it never widens what evidence may do.
  */
@@ -171,15 +183,17 @@ export async function verifyRecommendationEvidence(
   const deadline = Date.now() + configured.totalTimeoutMs;
   let next = 0;
   let failed = false;
+  const callController = new AbortController();
   const worker = async (): Promise<void> => {
     while (!failed && next < items.length) {
       const item = items[next++];
       const remaining = deadline - Date.now();
       try {
         if (remaining <= 0) throw new RecommendationEvidenceVerificationError(kind, "timeout");
-        await verifyOne(configured, item, kind, subjectId, now, Math.min(configured.timeoutMs, remaining));
+        await verifyOne(configured, item, kind, subjectId, now, Math.min(configured.timeoutMs, remaining), callController.signal);
       } catch (error) {
         failed = true;
+        callController.abort();
         throw error;
       }
     }

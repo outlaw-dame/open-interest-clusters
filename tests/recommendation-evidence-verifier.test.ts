@@ -175,6 +175,32 @@ test("a failure stops new items from being handed out", async () => {
   assert.ok(calls <= 3, `calls was ${calls}`);
 });
 
+test("a failure aborts the signal of a sibling call that is still running", async () => {
+  const signals: AbortSignal[] = [];
+  let abortedAt = 0;
+  const configured = normalizeRecommendationEvidenceVerifierOptions({
+    verifier: {
+      id: "test-keys",
+      verify: (evidence: { index: number }, context: { signal: AbortSignal }) => {
+        if (evidence.index === 0) return new Promise((resolve) => setTimeout(() => resolve({ verified: false }), 10));
+        signals.push(context.signal);
+        context.signal.addEventListener("abort", () => { abortedAt = Date.now(); });
+        return new Promise(() => undefined);
+      }
+    },
+    timeoutMs: 5_000,
+    maxConcurrency: 3
+  });
+  const started = Date.now();
+  await assert.rejects(
+    verifyRecommendationEvidence(configured, [{ index: 0 }, { index: 1 }, { index: 2 }], "lifecycle_event", SUBJECT, NOW),
+    (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "rejected"
+  );
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every((signal) => signal.aborted));
+  assert.ok(abortedAt - started < 1_000, `aborted after ${abortedAt - started} ms`);
+});
+
 test("one call cannot run past the total time limit", async () => {
   const started = Date.now();
   const configured = verifier(() => new Promise((resolve) => setTimeout(() => resolve({ verified: true }), 30)), 500, { maxConcurrency: 1, totalTimeoutMs: 70 });
