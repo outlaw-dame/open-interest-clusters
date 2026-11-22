@@ -166,17 +166,47 @@ export function readRecommendationCandidateEventRecord(
 
 const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
 
-/** The incoming events that are not already held, with repeats inside the batch removed. */
+/**
+ * What identifies "the same fact" for a set-level event. Reporting the same set again with a later
+ * time is the same fact seen again, so it must not take a second slot. A different candidate ID is a
+ * different fact, because that candidate is excluded everywhere, not only inside the set.
+ */
+function slotKey(event: RecommendationCandidateLifecycleEvent): string {
+  return SET_LEVEL_KINDS.has(event.kind)
+    ? JSON.stringify([event.kind, event.setSourceId, event.candidateId ?? null])
+    : eventKey(event);
+}
+
+/** True when `candidate` should replace `held` for the same slot. Later report time wins, ties go to the larger key so the result never depends on arrival order. */
+function supersedes(candidate: RecommendationCandidateLifecycleEvent, held: RecommendationCandidateLifecycleEvent): boolean {
+  if (candidate.occurredAt !== held.occurredAt) return Date.parse(candidate.occurredAt) > Date.parse(held.occurredAt);
+  return eventKey(candidate) > eventKey(held);
+}
+
+/** One event per slot, keeping the winner. Order of the input does not change the result. */
+function coalesceEvents(events: readonly RecommendationCandidateLifecycleEvent[]): RecommendationCandidateLifecycleEvent[] {
+  const bySlot = new Map<string, RecommendationCandidateLifecycleEvent>();
+  for (const event of events) {
+    const key = slotKey(event);
+    const held = bySlot.get(key);
+    if (held === undefined || supersedes(event, held)) bySlot.set(key, event);
+  }
+  return [...bySlot.values()];
+}
+
+/**
+ * The incoming events that would change what is held. Repeats inside the batch are removed, and so are
+ * set-level events the store already covers with the same or a later report.
+ */
 export function selectNewRecommendationCandidateEvents(
   current: readonly RecommendationStoredCandidateEvent[],
   incoming: readonly RecommendationCandidateLifecycleEvent[]
 ): readonly RecommendationCandidateLifecycleEvent[] {
-  const seen = new Set(current.map((entry) => eventKey(entry.event)));
+  const heldBySlot = new Map(current.map((entry) => [slotKey(entry.event), entry.event] as const));
   const fresh: RecommendationCandidateLifecycleEvent[] = [];
-  for (const event of incoming) {
-    const key = eventKey(event);
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const event of coalesceEvents(incoming)) {
+    const held = heldBySlot.get(slotKey(event));
+    if (held !== undefined && !supersedes(event, held)) continue;
     fresh.push(event);
   }
   return fresh;
@@ -189,7 +219,8 @@ export function recommendationCandidateEventRecordDigest(raw: unknown): string |
 
 /**
  * Merges new events into the live ones. Events already held keep their first recording time, so
- * replaying a report changes nothing. Past the cap the oldest entries that are not set-level events
+ * replaying a report changes nothing. A set-level event for a set that already has one of the same
+ * kind replaces it only when it is later, so a set uses at most one slot per kind. Past the cap the oldest entries that are not set-level events
  * are compacted away. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) are
  * never evicted to make room, because losing one makes the set eligible again, and an event being
  * added now is never dropped to make room either. If the cap would force either out, this throws and
@@ -201,12 +232,23 @@ export function mergeRecommendationCandidateEventEntries(
   limits: RecommendationCandidateEventStoreLimits,
   now: string
 ): { entries: readonly RecommendationStoredCandidateEvent[]; changed: boolean } {
-  const byKey = new Map(current.map((entry) => [eventKey(entry.event), entry] as const));
+  const byKey = new Map<string, RecommendationStoredCandidateEvent>();
   let changed = false;
+  for (const entry of current) {
+    // A record written before coalescing may hold several entries for one slot. Keep the winner.
+    const key = slotKey(entry.event);
+    const held = byKey.get(key);
+    if (held === undefined) byKey.set(key, entry);
+    else {
+      changed = true;
+      if (supersedes(entry.event, held.event)) byKey.set(key, entry);
+    }
+  }
   const added = new Set<RecommendationStoredCandidateEvent>();
-  for (const event of incoming) {
-    const key = eventKey(event);
-    if (!byKey.has(key)) {
+  for (const event of coalesceEvents(incoming)) {
+    const key = slotKey(event);
+    const held = byKey.get(key);
+    if (held === undefined || supersedes(event, held.event)) {
       const entry = Object.freeze({ recordedAt: now, event });
       byKey.set(key, entry);
       added.add(entry);

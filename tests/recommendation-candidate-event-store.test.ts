@@ -415,3 +415,99 @@ test("the in-memory reference store says it is ephemeral and supports compare-an
   await assert.rejects(memory.save(A, record, { expectedDigest: null }), RecommendationCandidateEventConflictError);
   await memory.save(A, record, { expectedDigest: "d1" });
 });
+
+const setAt = (kind: "set_deleted" | "set_not_discoverable" | "set_sensitive", setSourceId: string, occurredAt: string, candidateId?: string) =>
+  ({ kind, occurredAt, setSourceId, ...(candidateId === undefined ? {} : { candidateId }) }) as const;
+
+test("repeated reports for one set keep one entry per kind and the later report wins", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 3 });
+  const times = ["2026-09-26T06:10:00.000Z", "2026-09-26T06:20:00.000Z", T1, T2];
+  for (const occurredAt of times) {
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, occurredAt)], policy: POLICY(A), now: occurredAt });
+  }
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]!.occurredAt, T2);
+  // A different kind for the same set is a different fact and gets its own entry.
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T2)], policy: POLICY(A), now: T3 });
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 })).length, 2);
+  // An older report of the same fact is already covered: nothing is written.
+  const before = JSON.stringify(raw.get(A));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T3 });
+  assert.equal(JSON.stringify(raw.get(A)), before);
+});
+
+test("a flood of reports for one set cannot fill the cap, so other facts still fit", async () => {
+  const { store } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 3 });
+  const flood = Array.from({ length: 60 }, (_, index) => setAt("set_sensitive", SET_SOURCE_ID, `2026-09-26T06:${String(10 + Math.floor(index / 2)).padStart(2, "0")}:${index % 2 === 0 ? "00" : "30"}.000Z`));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: flood, policy: POLICY(A), now: NOW });
+  for (let round = 0; round < 5; round += 1) {
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, `2026-09-26T06:3${round}:30.000Z`)], policy: POLICY(A), now: NOW });
+  }
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("later")], policy: POLICY(A), now: NOW });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: NOW });
+  assert.equal(kept.filter((event) => event.kind === "set_sensitive").length, 1);
+  assert.ok(kept.some((event) => event.candidateId === "later"));
+});
+
+test("many distinct sets reach the cap and fail closed without dropping an exclusion", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 4 });
+  const setIds = Array.from({ length: 4 }, (_, index) => createRecommendationCuratedAccountSetSourceId(MEMBER_SET.setProvider, `flood-${index}`));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: setIds.map((id) => setAt("set_sensitive", id, T1)), policy: POLICY(A), now: T1 });
+  const before = JSON.stringify(raw.get(A));
+  const extra = createRecommendationCuratedAccountSetSourceId(MEMBER_SET.setProvider, "flood-extra");
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", extra, T2)], policy: POLICY(A), now: T2 }), /no room/);
+  assert.equal(JSON.stringify(raw.get(A)), before, "nothing was evicted or changed");
+  // Re-reporting a set that already holds a slot still works at the cap, because it replaces in place.
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", setIds[0]!, T3)], policy: POLICY(A), now: T3 });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 });
+  assert.deepEqual(kept.map((event) => event.setSourceId).sort(), [...setIds].sort());
+});
+
+test("coalescing does not depend on arrival order and keeps a different candidate ID as its own fact", async () => {
+  const early = setAt("set_deleted", SET_SOURCE_ID, T1);
+  const late = setAt("set_deleted", SET_SOURCE_ID, T2);
+  const withCandidate = setAt("set_deleted", SET_SOURCE_ID, T2, candidate("account", "bob").candidateId);
+  const stored = async (events: readonly (typeof early | typeof late | typeof withCandidate)[]) => {
+    const { store, raw } = rawStore();
+    const { lifecycle } = build(store);
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [...events], policy: POLICY(A), now: T3 });
+    return (raw.get(A) as { digest: string; entries: { event: unknown }[] });
+  };
+  const forward = await stored([early, late, withCandidate]);
+  const backward = await stored([withCandidate, late, early]);
+  assert.deepEqual(forward.entries.map((entry) => entry.event), backward.entries.map((entry) => entry.event));
+  assert.equal(forward.digest, backward.digest);
+  assert.equal(forward.entries.length, 2, "the plain and the candidate-bound reports are separate facts");
+});
+
+test("a hostile flood through refresh and report cannot evict set exclusions or grow the record", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle, seen } = build(store, { maxEvents: 5 });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T1 });
+  for (let round = 0; round < 20; round += 1) {
+    const at = `2026-09-26T06:${String(31 + (round % 10)).padStart(2, "0")}:00.000Z`;
+    await lifecycle.refresh({ request: { subjectId: A, requestId: `r${round}` } as never, candidateEvents: [setAt("set_deleted", SET_SOURCE_ID, at), benign(`n${round}`)], policy: POLICY(A), now: NOW });
+  }
+  const entries = (raw.get(A) as { entries: { event: { kind: string } }[] }).entries;
+  assert.equal(entries.filter((entry) => entry.event.kind === "set_deleted").length, 1);
+  assert.ok(entries.length <= 5);
+  assert.deepEqual((seen.at(-1) as { excludeSourceIds: string[] }).excludeSourceIds, [SET_SOURCE_ID]);
+});
+
+test("a stored record with duplicate set slots from before coalescing is repaired on the next save", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T1 });
+  const record = raw.get(A) as { entries: { recordedAt: string; event: unknown }[]; digest: string; updatedAt: string; subjectId: string; schemaVersion: string };
+  const { buildRecommendationCandidateEventRecord } = await import("../src/recommendation/candidate-event-store.js");
+  const older = { recordedAt: "2026-09-26T06:20:00.000Z", event: setAt("set_deleted", SET_SOURCE_ID, "2026-09-26T06:20:00.000Z") };
+  raw.set(A, buildRecommendationCandidateEventRecord(A, [older, ...record.entries] as never, T1));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("x")], policy: POLICY(A), now: T2 });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T2 });
+  assert.equal(kept.filter((event) => event.kind === "set_deleted").length, 1);
+  assert.equal(kept.find((event) => event.kind === "set_deleted")!.occurredAt, T1);
+});

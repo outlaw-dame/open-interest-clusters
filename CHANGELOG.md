@@ -4,6 +4,10 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+### Changed
+
+- The candidate event store now keeps one slot per set, kind and candidate ID for set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`). Reporting the same set again with a later time replaces the earlier event instead of adding another, so repeated reports cannot fill the cap. At the cap a report for a new set still fails and nothing is evicted. Records written earlier that hold duplicates are tidied on the next save.
+
 ### Documented
 
 - `lifecycle.refresh` can return fewer than `limit` recommendations when the first-session object ignores `excludeSourceIds` and had already cut its list to `limit`. The refresh filter only removes and does not rerun the first session. The library's own orchestrator is not affected.
