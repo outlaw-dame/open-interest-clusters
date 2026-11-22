@@ -55,13 +55,33 @@ function build() {
   return { engine, derived, plainEngine, plainDerived, invalidations };
 }
 
-test("an engine without readEventHistory is accepted, and selection changes fail before any write", async () => {
+test("an engine without readEventHistory is accepted, and selection changes fail before the ledger is touched", async () => {
   const { derived, plainEngine, engine, invalidations } = build();
   const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: plainEngine, now: () => T0 });
   await assert.rejects(lifecycle.applySelection(selectionChange()), /needs an engine with readEventHistory/u);
   await assert.rejects(lifecycle.withdrawSelections({ subjectId: SUBJECT, reason: "source_retracted", now: T0 }), /needs an engine with readEventHistory/u);
   assert.equal((await engine.readEventHistory(SUBJECT)).length, 0);
   assert.equal(invalidations.length, 0);
+});
+
+test("without readEventHistory, a consent_revoked withdrawal still deletes stored events and then reports the missing port", async () => {
+  const { derived, plainEngine, engine } = build();
+  const store = createInMemoryRecommendationCandidateEventStore();
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: plainEngine, now: () => T0, candidateEvents: { store } });
+  await lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [EVENT], policy: POLICY, now: T0 });
+  assert.notEqual(await store.load(SUBJECT), undefined);
+  await assert.rejects(lifecycle.withdrawSelections({ subjectId: SUBJECT, reason: "consent_revoked", now: T0 }), /needs an engine with readEventHistory/u);
+  assert.equal(await store.load(SUBJECT), undefined);
+  assert.equal((await engine.readEventHistory(SUBJECT)).length, 0);
+});
+
+test("without readEventHistory, a non-revoking withdrawal leaves stored events alone", async () => {
+  const { derived, plainEngine } = build();
+  const store = createInMemoryRecommendationCandidateEventStore();
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: plainEngine, now: () => T0, candidateEvents: { store } });
+  await lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [EVENT], policy: POLICY, now: T0 });
+  await assert.rejects(lifecycle.withdrawSelections({ subjectId: SUBJECT, reason: "source_retracted", now: T0 }), /needs an engine with readEventHistory/u);
+  assert.notEqual(await store.load(SUBJECT), undefined);
 });
 
 test("an engine without readEventHistory still lets candidate events be reported", async () => {
@@ -124,8 +144,11 @@ test("a stored record from a later schema version is refused with a message that
   const limits = { retentionMs: 60_000 * 60, maxEvents: 10 };
   const newer = { schemaVersion: "recommendation-candidate-event-record.v2", subjectId: SUBJECT, entries: [], updatedAt: T0, digest: "x", extra: true };
   assert.throws(() => readRecommendationCandidateEventRecord(newer, SUBJECT, limits, T0), /Unsupported recommendation candidate event record schema version/u);
+  for (const version of ["v3", "v9", "v10", "v123"]) {
+    assert.throws(() => readRecommendationCandidateEventRecord({ ...newer, schemaVersion: `recommendation-candidate-event-record.${version}` }, SUBJECT, limits, T0), /Unsupported recommendation candidate event record schema version/u);
+  }
   // Anything else that does not match stays a plain invalid record.
-  for (const schemaVersion of ["something-else.v1", "recommendation-candidate-event-record.vx", 2, undefined]) {
+  for (const schemaVersion of ["something-else.v1", "recommendation-candidate-event-record.vx", "recommendation-candidate-event-record.v0", "recommendation-candidate-event-record.v01", "recommendation-candidate-event-record.v02", 2, undefined]) {
     assert.throws(() => readRecommendationCandidateEventRecord({ ...newer, schemaVersion }, SUBJECT, limits, T0), /Invalid stored recommendation candidate event record/u);
   }
   assert.equal(RECOMMENDATION_CANDIDATE_EVENT_RECORD_SCHEMA_VERSION, "recommendation-candidate-event-record.v1");

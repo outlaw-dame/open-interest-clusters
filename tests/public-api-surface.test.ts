@@ -79,9 +79,17 @@ function currentSurface(): { exports: string[]; lists: Record<string, unknown[]>
   return { exports: names, lists };
 }
 
+// The update switch skips the comparison, so it must never be able to pass quietly in CI.
+function assertUpdateAllowed(env: Record<string, string | undefined>): void {
+  if (env.CI !== undefined && env.CI !== "" && env.CI !== "false" && env.CI !== "0") {
+    throw new Error("UPDATE_API_SURFACE cannot be used when CI is set.");
+  }
+}
+
 test("public API surface matches the checked-in snapshot", () => {
   const actual = currentSurface();
   if (process.env.UPDATE_API_SURFACE === "1") {
+    assertUpdateAllowed(process.env);
     writeFileSync(FIXTURE_URL, `${JSON.stringify(actual, null, 2)}\n`);
     return;
   }
@@ -105,4 +113,11 @@ test("the snapshot covers the Phase 7 additions and the extension seams", () => 
   ]) assert.ok(exports.includes(name), `${name} should be exported`);
   assert.ok(lists.RECOMMENDATION_STATE_DOMAINS?.includes("candidate_lifecycle_events"));
   assert.ok(lists.RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS?.includes("candidate_state_changed"));
+});
+
+test("the update switch is refused in CI and allowed locally", () => {
+  assert.throws(() => assertUpdateAllowed({ CI: "true" }), /CI is set/u);
+  assert.throws(() => assertUpdateAllowed({ CI: "1" }), /CI is set/u);
+  assert.doesNotThrow(() => assertUpdateAllowed({}));
+  assert.doesNotThrow(() => assertUpdateAllowed({ CI: "false" }));
 });

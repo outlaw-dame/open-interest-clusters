@@ -58,7 +58,7 @@ The derived-state orchestrator's checkpoint is a digest of the profile, so a can
 
 ### 5. Consent revocation and deletion
 
-- `withdrawSelections({ reason: "consent_revoked" })` retracts every live onboarding signal with the ledger's `consent_revoked` reason. `applySelection` enforces consent on every call, so a policy that no longer allows personalization (or belongs to another subject) stops a change before anything is written.
+- `withdrawSelections({ reason: "consent_revoked" })` retracts every live onboarding signal with the ledger's `consent_revoked` reason. `applySelection` enforces consent on every call, so a policy that no longer allows personalization (or belongs to another subject) stops a change before the ledger is touched.
 - Full deletion stays `derivedOrchestrator.deleteSubject`. The engine's deletion barrier already blocks `process`, and `readEventHistory` throws behind it too, so onboarding writes and withdrawals fail after deletion. No new deletion path was added.
 - The lifecycle does not watch the consent policy. The application calls `withdrawSelections` when consent changes.
 
@@ -99,7 +99,7 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 
 New exports are additive. Compared with 0.2.0, interfaces that an application implements by hand (engine and derived-state ports, stores, verifiers) have no required Phase 7 members. Where Phase 7 needs a new capability from such a port, it lives on a separate extension interface that the lifecycle looks for at runtime:
 
-- `readEventHistory(subjectId)` is on `RecommendationEngineEventHistoryReader`, not on `RecommendationEngineOrchestrator`. `createRecommendationEngineOrchestrator` returns `RecommendationEngineOrchestratorWithHistory`, so code using the package's engine sees it. A wrapper or test double that lacks it still compiles. A lifecycle built on an engine without it throws a `TypeError` from `applySelection` and `withdrawSelections` before anything is written. Event reports, `assessPlan` and `refresh` do not need it.
+- `readEventHistory(subjectId)` is on `RecommendationEngineEventHistoryReader`, not on `RecommendationEngineOrchestrator`. `createRecommendationEngineOrchestrator` returns `RecommendationEngineOrchestratorWithHistory`, so code using the package's engine sees it. A wrapper or test double that lacks it still compiles. A lifecycle built on an engine without it is created normally and throws a `TypeError` on the first `applySelection` or `withdrawSelections`. `applySelection` and non-revoking withdrawals fail before the ledger is touched. A `consent_revoked` withdrawal still deletes stored candidate events before it fails, because revoked consent should remove them either way. Event reports, `assessPlan` and `refresh` do not need it.
 - `invalidateCandidateState(input)` is on `RecommendationCandidateStateInvalidator`, not on `RecommendationDerivedStateInvalidationOrchestrator`. The factory returns `RecommendationDerivedStateInvalidationOrchestratorWithCandidateState`. A lifecycle built on a derived-state port without it throws a `TypeError` from `reportCandidateEvents` (and from a `refresh` that reports events) before consent is read or anything is stored, because the candidate caches could not be cleared. Selections, `assessPlan` and a `refresh` with no events still work.
 
 What still breaks existing code, all of it type-level and all of it on types the library produces or on unions that grew:

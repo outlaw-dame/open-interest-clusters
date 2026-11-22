@@ -16,7 +16,7 @@ export const RECOMMENDATION_CANDIDATE_PLAN_ASSESSMENT_SCHEMA_VERSION = "recommen
 
 /**
  * Facts about a candidate or its source that changed after a plan was built. They are reported by the
- * caller. Nothing here is signed, so an event can only make a plan less usable, never more.
+ * caller. Nothing here verifies a proof for an event, so an event can only make a plan less usable, never more.
  */
 export const RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENT_KINDS = [
   "member_consent_revoked",

@@ -126,13 +126,17 @@ export interface RecommendationOnboardingLifecycleOptions {
   /**
    * The invalidating wrapper around the engine. All writes go through it. `invalidateCandidateState` is
    * optional: without it `reportCandidateEvents` (and a `refresh` that reports events) throws before
-   * anything is stored, because candidate caches could not be cleared. Everything else still works.
+   * anything is stored, because candidate caches could not be cleared. This is checked on the call, not
+   * when the lifecycle is created. Everything else still works.
    */
   derived: Pick<RecommendationDerivedStateInvalidationOrchestrator, "process" | "repair"> & Partial<RecommendationCandidateStateInvalidator>;
   /**
    * The same engine the wrapper drives. Only used to read accepted event history. `readEventHistory`
-   * is optional: without it `applySelection` and `withdrawSelections` throw before any write, because
-   * the live selections could not be worked out. Event reports, plan assessment and refresh still work.
+   * is optional: without it `applySelection` and `withdrawSelections` throw, because the live selections
+   * could not be worked out. The check happens on the first call, not when the lifecycle is created.
+   * `applySelection` and non-revoking withdrawals fail before the ledger is touched. A `consent_revoked`
+   * withdrawal still clears stored candidate events first, since revoked consent should delete them
+   * whether or not the history can be read. Event reports, plan assessment and refresh still work.
    */
   engine: object & Partial<RecommendationEngineEventHistoryReader>;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
