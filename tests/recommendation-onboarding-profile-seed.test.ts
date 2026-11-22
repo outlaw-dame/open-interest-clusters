@@ -393,3 +393,37 @@ test("onboarding profile seed enforces the signal cap before profile ingestion",
   );
   assert.equal(ingestCalled, false);
 });
+
+test("a selection kept in a user pod is labelled server_allowed with pod evidence, and an explicit local_only is refused", async () => {
+  const catalogIndex = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
+  const selection = createRecommendationOnboardingSelection({
+    catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+    selectedTopicIds: ["gaming"],
+    selectedAt: SELECTED_AT,
+    storageTarget: "activitypods_pod"
+  });
+  const policy = Object.freeze({
+    subjectId: SUBJECT_ID,
+    allowedDataUses: LOCAL_PERSONALIZATION_USES,
+    privateDataUses: LOCAL_PERSONALIZATION_USES,
+    serverSideDataUses: LOCAL_PERSONALIZATION_USES
+  });
+
+  const seed = await createRecommendationOnboardingProfileSeed({ subjectId: SUBJECT_ID, catalogIndex, selection, policy });
+  assert.ok(seed.signals.length > 0);
+  for (const signal of seed.signals) {
+    assert.equal(signal.privacyBoundary, "server_allowed");
+    assert.equal(signal.evidence.protocol, "activitypods");
+    assert.equal(signal.consent.serverSideProcessing, true);
+  }
+
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({ subjectId: SUBJECT_ID, catalogIndex, selection, policy, privacyBoundary: "local_only" }),
+    /user-owned pod must use the server_allowed/u
+  );
+  // The server label needs server-side consent even for the user's own pod.
+  await assert.rejects(
+    createRecommendationOnboardingProfileSeed({ subjectId: SUBJECT_ID, catalogIndex, selection, policy: localPersonalizationPolicy() }),
+    (error: unknown) => error instanceof RecommendationConsentDeniedError && error.reason === "consent.deny.server_processing_not_allowed"
+  );
+});

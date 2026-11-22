@@ -208,7 +208,7 @@ test("signals stay local_only through device to user pod and back, and the pod c
   assert.equal(pod.records.size, 0);
 });
 
-test("onboarding straight to a user pod keeps the signals local_only too", async () => {
+test("onboarding straight to a user pod labels the signals server_allowed", async () => {
   const pod = new MemoryAdapter(POD);
   await bootstrapRecommendationProfileFromOnboarding({
     subjectId: SUBJECT, storageTarget: "user_pod", catalog: RECOMMENDATION_GLOBAL_CATALOG_V1, selectedTopicIds: ["gaming"],
@@ -217,7 +217,7 @@ test("onboarding straight to a user pod keeps the signals local_only too", async
   const stored = [...pod.records.values()] as RecommendationProfileStoreRecord[];
   assert.equal(stored.length, 1);
   assert.ok(stored[0]!.profile.entries.length > 0);
-  assert.ok(stored[0]!.profile.entries.every((entry) => entry.privacyBoundaries.every((boundary) => boundary === "local_only")));
+  assert.ok(stored[0]!.profile.entries.every((entry) => entry.privacyBoundaries.every((boundary) => boundary === "server_allowed")));
 });
 
 // What a remote server is asked. Sentinels stand in for profile and signal content; none may appear.
