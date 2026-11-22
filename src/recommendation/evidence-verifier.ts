@@ -2,9 +2,9 @@ import { hasUnsafeControlCharacter } from "./control-characters.js";
 
 /**
  * Candidate lifecycle events, starter-pack consent and curated-set provenance all come from the
- * caller and carry no signature. This module is the one place an application can plug in a check
- * that they are real. The library ships no keys and no trust root, so by default nothing is verified
- * and every result says so.
+ * caller and carry no proof. This module is the one place an application can plug in a check
+ * that they are real. Nothing in the library verifies protocol proofs (commit or label signatures,
+ * HTTP signatures, ACLs) yet, so by default nothing is verified and every result says so.
  */
 export const RECOMMENDATION_EVIDENCE_KINDS = ["lifecycle_event", "starter_pack_consent", "starter_pack_provenance"] as const;
 export type RecommendationEvidenceKind = typeof RECOMMENDATION_EVIDENCE_KINDS[number];
@@ -34,7 +34,7 @@ export interface RecommendationEvidenceVerifierContext {
  * what its signatures cover.
  */
 export interface RecommendationEvidenceVerifier {
-  /** Short stable name that is reported next to a verified result, such as a key set identifier. */
+  /** Short stable name that is reported next to a verified result, such as the name of the check it performs. */
   readonly id: string;
   verify(evidence: unknown, context: RecommendationEvidenceVerifierContext): Promise<{ verified: boolean }> | { verified: boolean };
 }
