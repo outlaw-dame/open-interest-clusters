@@ -1,6 +1,6 @@
 # Phase 7: onboarding lifecycle and refresh
 
-Phase 7 keeps onboarding-derived state correct after the first session. It adds a handful of small modules (the lifecycle, candidate lifecycle assessment, profile persistence transition, an optional candidate event store, an optional evidence verifier, and a keyed serializer), one new invalidation reason, one new state domain and two new required methods on the lifecycle object itself. The breaking changes are listed under "Public API changes". It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
+Phase 7 keeps onboarding-derived state correct after the first session. It adds a handful of small modules (the lifecycle, candidate lifecycle assessment, profile persistence transition, an optional candidate event store, an optional evidence verifier, and a keyed serializer), one new state domain, and new lifecycle methods that sit on an extending type (`RecommendationOnboardingLifecycleWithCandidateEvents`) instead of the base lifecycle interface. The invalidation reason `candidate_state_changed` it relies on already exists in 0.2.0. The breaking changes are listed under "Public API changes". It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
 
 | Concern | Where it lives |
 | --- | --- |
@@ -111,7 +111,9 @@ The same applies to the lifecycle and its results. The base types keep their 0.2
 
 `tests/public-api-surface.test.ts` holds a hand-written lifecycle and hand-built result values written against the 0.2.0 shapes, so they stop compiling if a required member is ever added to a base type again.
 
-What still breaks existing code is one type-level change: `RECOMMENDATION_STATE_DOMAINS` (and with it `RecommendationStateDomain`) gains `candidate_lifecycle_events`. An exhaustive `switch` or `Record<RecommendationStateDomain, ...>` fails to compile until it handles the new value. The old union could not be kept. The value is a real state domain: `isRecommendationStateDomain` accepts it, the placement policy returns metadata for it, and the candidate event store's manifest declares it. A union that left it out would make those types describe values the code does not produce. See "Open unions" below.
+Two type-level changes still break existing code. First: `RECOMMENDATION_STATE_DOMAINS` (and with it `RecommendationStateDomain`) gains `candidate_lifecycle_events`. An exhaustive `switch` or `Record<RecommendationStateDomain, ...>` fails to compile until it handles the new value. The old union could not be kept. The value is a real state domain: `isRecommendationStateDomain` accepts it, the placement policy returns metadata for it, and the candidate event store's manifest declares it. A union that left it out would make those types describe values the code does not produce. See "Open unions" below.
+
+Second, `readEventHistory` and `invalidateCandidateState` are no longer on the base port types. Calling `engine.readEventHistory(...)` on a value typed `RecommendationEngineOrchestrator`, or `derived.invalidateCandidateState(...)` on a value typed `RecommendationDerivedStateInvalidationOrchestrator`, fails with TS2339. Type the value as the factory's return type (`RecommendationEngineOrchestratorWithHistory` or `RecommendationDerivedStateInvalidationOrchestratorWithCandidateState`) or let inference do it. Optional members on the base types would still force an `undefined` check at each call, so they would not avoid the break.
 
 Two things that looked like breaks are not. `candidate_state_changed` was already in `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` in 0.2.0. `RecommendationEvidenceVerificationState` (and its `partial` value) is new in this release, so nothing existed to widen.
 
@@ -130,7 +132,7 @@ These lists can grow in a minor release, so code that branches on them needs a d
 
 `tests/public-api-surface.test.ts` pins the exported names and the member lists of the interfaces above against `tests/fixtures/public-api-surface.json`. After an intentional API change, run `pnpm build && UPDATE_API_SURFACE=1 node --test dist/tests/public-api-surface.test.js`, review the fixture diff and commit it with the change.
 
-Version 0.2.0 shipped with `readEventHistory` and `invalidateCandidateState` as required members of the engine and derived-state orchestrator interfaces. The extension interfaces above relax that, so code written against 0.2.0 keeps compiling. The full list of breaking changes per release, with migration notes, is in [CHANGELOG.md](../CHANGELOG.md).
+Version 0.2.0 shipped with `readEventHistory` and `invalidateCandidateState` as required members of the engine and derived-state orchestrator interfaces. The extension interfaces above relax that for implementers. Code that only implements these interfaces keeps compiling, but code that calls the two methods through the base types does not (see above). The full list of breaking changes per release, with migration notes, is in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Clocks
 

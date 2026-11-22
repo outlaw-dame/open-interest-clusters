@@ -17,14 +17,15 @@ Changes from PR #136, on top of 0.2.0.
 
 ### Changed
 
-- `readEventHistory` is no longer a required member of `RecommendationEngineOrchestrator`, and `invalidateCandidateState` is no longer a required member of `RecommendationDerivedStateInvalidationOrchestrator`. Both were required in 0.2.0. Wrappers and test doubles written before 0.2.0 compile again, and code written against 0.2.0 keeps working.
+- `readEventHistory` is no longer a required member of `RecommendationEngineOrchestrator`, and `invalidateCandidateState` is no longer a required member of `RecommendationDerivedStateInvalidationOrchestrator`. Both were required in 0.2.0. Code that implements these interfaces (wrappers, test doubles) compiles again without them. Code that calls the two methods through the base types stops compiling, see "Breaking changes".
 - The new lifecycle members and result fields live on extending types instead of the 0.2.0 ones. `createRecommendationOnboardingLifecycle` returns `RecommendationOnboardingLifecycleWithCandidateEvents` (adds `listReportedCandidateEvents` and `assessPlan`). `reportCandidateEvents` returns `RecommendationOnboardingCandidateReportResultWithEvidence`, `assessPlan` and the assessment functions return `RecommendationCandidatePlanAssessmentWithEvidence` (both add `evidenceVerification`, `verifierId`, `verifiedKinds` and `storedEventsNotChecked`), and `refresh` returns `RecommendationOnboardingRefreshResultWithSetExclusions` (adds `excludedSetSourceIds`). `RecommendationOnboardingLifecycle`, `RecommendationCandidatePlanAssessment`, `RecommendationOnboardingCandidateReportResult` and `RecommendationOnboardingRefreshResult` keep their 0.2.0 members, and the extended types are assignable to them. Hand-written doubles and hand-built values still compile.
 
 ### Breaking changes
 
-One, and it is type-level. Nothing changes at runtime.
+Two, both type-level. Nothing changes at runtime.
 
 - `RECOMMENDATION_STATE_DOMAINS` and `RecommendationStateDomain` gained `candidate_lifecycle_events`. An exhaustive `switch` or `Record<RecommendationStateDomain, ...>` will not compile until it handles the new value. Give those branches a default that treats an unknown domain as the least trusting one. The old union could not be kept, because this is a real domain that the placement policy and the candidate event store use, and a union without it would be wrong about what they return.
+- Calling `readEventHistory` on a value typed `RecommendationEngineOrchestrator`, or `invalidateCandidateState` on a value typed `RecommendationDerivedStateInvalidationOrchestrator`, fails with TS2339, because both methods moved to extension types. Type the value as what the factory returns (`RecommendationEngineOrchestratorWithHistory`, `RecommendationDerivedStateInvalidationOrchestratorWithCandidateState`) or let inference do it. Making the methods optional on the base types would keep the call compiling but force an `undefined` check at every call site, so it would still break callers, and it would hide that a plain implementer may lack them.
 
 Not breaking: the consent `policy` input is only needed when a candidate event store is configured. `RecommendationCandidateEventStore.save` takes an optional third argument and the interface gains the optional `supportsCompareAndSet`.
 
