@@ -26,3 +26,18 @@ export function createRecommendationKeyedSerializer(): RecommendationKeyedSerial
     }
   });
 }
+
+const sharedSerializers = new WeakMap<object, RecommendationKeyedSerializer>();
+
+/**
+ * One serializer per owner object, so separate wrappers around the same engine queue behind each
+ * other instead of each keeping a private queue. The entry goes away with the owner.
+ */
+export function getSharedRecommendationKeyedSerializer(owner: object): RecommendationKeyedSerializer {
+  let serializer = sharedSerializers.get(owner);
+  if (serializer === undefined) {
+    serializer = createRecommendationKeyedSerializer();
+    sharedSerializers.set(owner, serializer);
+  }
+  return serializer;
+}

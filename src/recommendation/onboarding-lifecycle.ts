@@ -1,4 +1,5 @@
 import { sha256Hex } from "../runtime/hash.js";
+import { executeWithRetry } from "../utils/retry-policy.js";
 import {
   assertRecommendationTimestampNotAhead,
   listRecommendationLifecycleExcludedCandidateIds,
@@ -18,7 +19,7 @@ import type {
   RecommendationFirstSessionResult
 } from "./first-session-orchestrator.js";
 import type { RecommendationInterestSignal } from "./interest-signal.js";
-import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import {
   buildRecommendationOnboardingSignals,
   type RecommendationOnboardingProfileSeedInput
@@ -101,6 +102,14 @@ export interface RecommendationOnboardingLifecycle {
   reportCandidateEvents(input: { subjectId: string; events: readonly RecommendationCandidateLifecycleEvent[]; now?: string }): Promise<RecommendationOnboardingCandidateReportResult>;
   /** Settles pending invalidation, reports candidate facts, then reruns the first session without the withdrawn candidates. */
   refresh(input: RecommendationOnboardingRefreshInput): Promise<RecommendationOnboardingRefreshResult>;
+}
+
+/** A few quick replans with jittered backoff. A lost race normally settles on the first one. */
+const STALE_PLAN_RETRY = Object.freeze({ attempts: 5, initialDelayMs: 5, maxDelayMs: 100, jitterRatio: 0.5 });
+
+/** Marks a failed write that happened while the ledger moved under the plan, so the plan can be redone. */
+class StalePlanError extends Error {
+  constructor(readonly original: unknown) { super("Onboarding plan was based on stale history."); }
 }
 
 const SOURCE_EVENT_PREFIX = "onboarding:v1:";
@@ -203,7 +212,8 @@ export function createRecommendationOnboardingLifecycle(
     throw new TypeError("Invalid recommendation onboarding lifecycle options.");
   }
   const clock = options.now ?? (() => new Date().toISOString());
-  const serializer = createRecommendationKeyedSerializer();
+  // Keyed by the engine, so every lifecycle built on one engine queues per subject in one line.
+  const serializer = getSharedRecommendationKeyedSerializer(options.engine);
 
   const timestampMessage = "Invalid recommendation onboarding lifecycle timestamp.";
 
@@ -220,7 +230,26 @@ export function createRecommendationOnboardingLifecycle(
     return given;
   }
 
+  function historySignature(history: readonly RecommendationSignalLedgerEventInput[]): string {
+    return history.map((event) => event.operationId).join("\u0000");
+  }
+
   async function reconcile(
+    subjectId: string,
+    now: string,
+    desired: ReadonlyMap<string, { signal: RecommendationInterestSignal; digest: string }>,
+    withdrawalReason: RecommendationSignalRetractionReason
+  ): Promise<RecommendationOnboardingSelectionChangeResult> {
+    return executeWithRetry(
+      () => reconcileOnce(subjectId, now, desired, withdrawalReason),
+      {
+        ...STALE_PLAN_RETRY,
+        shouldRetry: ({ error }) => error instanceof StalePlanError
+      }
+    ).catch((error: unknown) => { throw error instanceof StalePlanError ? error.original : error; });
+  }
+
+  async function reconcileOnce(
     subjectId: string,
     now: string,
     desired: ReadonlyMap<string, { signal: RecommendationInterestSignal; digest: string }>,
@@ -255,7 +284,19 @@ export function createRecommendationOnboardingLifecycle(
 
     // Always go through `process`, even with no events, so a pending invalidation from an earlier
     // crash is finished and the profile checkpoint is brought up to date.
-    const processing = await options.derived.process({ subjectId, events, now });
+    let processing: RecommendationDerivedStateProcessResult;
+    try {
+      processing = await options.derived.process({ subjectId, events, now });
+    } catch (error) {
+      // A writer outside this queue (another process, or a direct engine call) may have touched the
+      // ledger after the history was read, which shows up as a ledger conflict. If the history really
+      // moved, plan again from it. Any other failure is returned as is.
+      if (error instanceof TypeError) {
+        const latest = await options.engine.readEventHistory(subjectId);
+        if (historySignature(latest) !== historySignature(history)) throw new StalePlanError(error);
+      }
+      throw error;
+    }
     return Object.freeze({
       subjectId,
       added: Object.freeze(added.sort()),

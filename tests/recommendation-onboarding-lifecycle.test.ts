@@ -510,3 +510,60 @@ test("excluded sets do not take candidate slots from usable ones", async () => {
   assert.equal(run.result.discoveredCandidateCount, 1);
   assert.deepEqual(run.result.recommendations.map((item) => item.candidate.nativeId), ["https://social.example/users/dave"]);
 });
+
+type Harness = ReturnType<typeof harness>;
+
+/** A read-only view of the harness engine that reports every history read before returning it. */
+function spyEngine(h: Harness, onRead: (history: Awaited<ReturnType<Harness["engine"]["readEventHistory"]>>) => Promise<void> | void) {
+  return {
+    async readEventHistory(id: string) {
+      const history = await h.engine.readEventHistory(id);
+      await onRead(history);
+      return history;
+    }
+  };
+}
+
+test("lifecycle instances on one engine queue behind each other for the same subject", async () => {
+  const h = harness();
+  const trace: string[] = [];
+  const engine = spyEngine(h, async () => { trace.push("read"); await new Promise((resolve) => setImmediate(resolve)); });
+  const derived = { ...h.derived, process: ((input: Parameters<Harness["derived"]["process"]>[0]) => { trace.push("write"); return h.derived.process(input); }) as Harness["derived"]["process"] };
+  const a = createRecommendationOnboardingLifecycle({ derived, engine, now: () => lifecycleClock });
+  const b = createRecommendationOnboardingLifecycle({ derived, engine, now: () => lifecycleClock });
+  await Promise.all([a.applySelection(change(["gaming"], T0)), b.applySelection(change(["music"], T1))]);
+  assert.deepEqual(trace.slice(0, 4), ["read", "write", "read", "write"], "the second plan waits for the first write");
+});
+
+/** A lifecycle whose first history read is followed by a write from outside the lifecycle queue. */
+function lifecycleWithRival(h: Harness, rival: () => Promise<unknown>): RecommendationOnboardingLifecycle {
+  let armed = true;
+  const engine = spyEngine(h, async () => { if (armed) { armed = false; await rival(); } });
+  return createRecommendationOnboardingLifecycle({ derived: h.derived, engine, now: () => lifecycleClock });
+}
+
+async function rivalEventsFor(topics: readonly string[]) {
+  const probe = harness();
+  await probe.lifecycle.applySelection(change(topics, T0));
+  return probe.engine.readEventHistory(SUBJECT);
+}
+
+test("a direct write racing applySelection with the same target at another time converges", async () => {
+  const rivalEvents = await rivalEventsFor(["gaming"]);
+  const h = harness();
+  const lifecycle = lifecycleWithRival(h, () => h.derived.process({ subjectId: SUBJECT, events: rivalEvents, now: T0 }));
+  const result = await lifecycle.applySelection(change(["gaming"], T1));
+  assert.ok(activeKeys(await h.engine.readProfile(SUBJECT)).includes("canonical_interest:gaming"));
+  assert.equal(result.eventCount, 0, "the replan sees the rival's signal and has nothing left to write");
+  const ids = (await h.engine.readEventHistory(SUBJECT)).map((event) => event.sourceEventId);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test("a ledger error that is not caused by a moved history is not retried", async () => {
+  const h = harness();
+  let writes = 0;
+  const derived = { ...h.derived, process: async () => { writes += 1; throw new TypeError("not a race"); } };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: h.engine, now: () => lifecycleClock });
+  await assert.rejects(lifecycle.applySelection(change(["gaming"], T0)), /not a race/u);
+  assert.equal(writes, 1);
+});
