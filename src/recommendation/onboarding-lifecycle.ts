@@ -365,6 +365,9 @@ export function createRecommendationOnboardingLifecycle(
     assertRecommendationCandidateEventStore(options.candidateEvents.store);
     eventLimits = normalizeRecommendationCandidateEventStoreLimits(options.candidateEvents);
   }
+  // Writes and deletes against the store share one queue per subject, keyed by the store object, so a
+  // deletion that arrives while a report is saving waits for the save and then clears what it wrote.
+  const storeQueue = eventStore === undefined ? undefined : getSharedRecommendationKeyedSerializer(eventStore);
   const eventRetry: RetryPolicyOptions = { ...CANDIDATE_EVENT_STORE_RETRY, ...options.candidateEvents?.retry };
 
   /** Store calls fail closed: they retry with backoff, then surface the last error. */
@@ -394,19 +397,19 @@ export function createRecommendationOnboardingLifecycle(
       ...(eventRetry.retrySleeper === undefined ? {} : { retrySleeper: eventRetry.retrySleeper }),
       shouldRetry: ({ error }) => error instanceof RecommendationCandidateEventConflictError
     };
-    await executeWithRetry(async () => {
+    await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
       const raw = await storeIo((store) => store.load(subjectId));
       const merged = mergeRecommendationCandidateEventEntries(readRecommendationCandidateEventRecord(raw, subjectId, eventLimits!, now), events, eventLimits!, now);
       if (!merged.changed) return;
       const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
       const expected = eventStore!.supportsCompareAndSet === true ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
       await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected));
-    }, retry);
+    }, retry));
   }
 
   /** Revoked or denied consent removes what was kept. If the removal fails, the call fails with it. */
   async function clearStoredEvents(subjectId: string): Promise<void> {
-    if (eventStore !== undefined) await storeIo((store) => store.delete(subjectId));
+    if (storeQueue !== undefined) await storeQueue.run(subjectId, () => storeIo((store) => store.delete(subjectId)));
   }
 
   async function requireStoreConsent(subjectId: string, policy: RecommendationConsentPolicy | undefined): Promise<void> {

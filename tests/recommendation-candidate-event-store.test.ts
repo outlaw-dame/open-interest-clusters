@@ -225,26 +225,47 @@ test("deleting the subject through the derived orchestrator clears stored events
   assert.equal(raw.has(B), true, "other subjects are untouched");
 });
 
-test("a report that is mid-save while the subject is deleted leaves its events behind, and deleting again clears them", async () => {
+test("a report that is mid-save while the subject is deleted is cleared by the deletion, not resurrected", async () => {
   const { store, raw } = rawStore();
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const realSave = store.save.bind(store);
   let saveStarted: () => void = () => undefined;
   const started = new Promise<void>((resolve) => { saveStarted = resolve; });
+  const order: string[] = [];
+  const realDelete = store.delete.bind(store);
   const slow: RecommendationCandidateEventStore = {
     ...store,
-    async save(id, record) { saveStarted(); await gate; await realSave(id, record); }
+    async save(id, record) { saveStarted(); await gate; await realSave(id, record); order.push("save"); },
+    async delete(id) { order.push("delete"); await realDelete(id); }
   };
   const { lifecycle, derived } = build(slow);
   const pending = lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
   await started;
-  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  const deletion = derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  // Let the deletion run as far as it can on its own, across several event loop turns.
+  for (let turn = 0; turn < 10; turn += 1) await new Promise<void>((resolve) => { setImmediate(resolve); });
+  assert.deepEqual(order, [], "the store delete waits for the save that is in flight");
   release();
-  await pending.catch(() => undefined);
-  assert.equal(raw.has(A), true, "the deletion does not wait for the in-flight report, so the save lands after it");
+  await pending;
+  await deletion;
+  assert.deepEqual(order, ["save", "delete"]);
+  assert.equal(raw.has(A), false, "the events saved just before the deletion are gone afterwards");
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), []);
+  // Other subjects are not held up by it.
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [bobRevoked], policy: POLICY(B), now: T2 });
+  assert.equal(raw.has(B), true);
+});
+
+test("a failed in-flight save does not wedge the deletion queue, and deleting again still clears", async () => {
+  const { store, raw, fail } = rawStore();
+  const { lifecycle, derived } = build(store);
+  fail.save = 100;
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 }), /save down/);
+  fail.save = 0;
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
   await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
-  assert.equal(raw.has(A), false, "a repeated deletion always clears the events");
+  assert.equal(raw.has(A), false);
 });
 
 test("withdrawing consent, a denied policy, or a missing policy never leaves events behind or stores new ones", async () => {
@@ -333,7 +354,9 @@ test("a compare-and-set store keeps both events when two writers race, and a pla
   for (const cas of [true, false]) {
     const { store, raw, hooks } = rawStore(undefined, { cas });
     const first = build(store);
-    const second = build(store); // another process: its own engine, so its own queue
+    // Another process: its own engine and its own store client over the same records, so it shares
+    // neither the lifecycle queue nor the store queue with the first writer.
+    const second = build({ ...store });
     // Load 1 is the dedupe read, load 2 is the merge read. The other writer lands right after load 2.
     hooks.afterLoad = { onLoad: 2, run: async () => { await second.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("theirs")], policy: POLICY(A), now: T2 }); } };
     await first.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("mine")], policy: POLICY(A), now: T3 });

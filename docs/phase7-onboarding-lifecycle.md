@@ -91,7 +91,7 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 | Plans never become executable, malformed or future events are rejected | same file |
 | Persistence moves are crash-safe and provider-owned placement is refused | `recommendation-profile-persistence-transition.test.ts` |
 | Reported events survive restart, are bounded, subject-bound, tamper-evident, consent-gated and deleted with the subject | `recommendation-candidate-event-store.test.ts` |
-| Deletion racing an in-flight report | same file: mid-save deletion leaves events, a second deletion clears them |
+| Deletion racing an in-flight report | same file: a deletion during a slow save waits for it and then clears the events |
 | A verifier that rejects, throws, times out or returns junk blocks the report or assessment | `recommendation-evidence-verifier.test.ts` |
 | Two lifecycles on one engine queue behind each other, a racing direct write converges, and an unrelated ledger error is not retried | same file: lifecycle instances queue, direct write racing, ledger error |
 
@@ -153,7 +153,7 @@ By default `reportCandidateEvents` only clears caches. Pass `candidateEvents: { 
 - **Concurrent writers.** The in-process queue covers one engine. For several processes or devices on one user-owned store, the store can opt into compare-and-set: set `supportsCompareAndSet: true` and make `save(subjectId, record, { expectedDigest })` write only when the held record's digest equals `expectedDigest` (`null` means no record), otherwise throw `RecommendationCandidateEventConflictError` without writing. The lifecycle then reloads, merges and saves again, up to 6 attempts with backoff and jitter, and surfaces the conflict error if they run out. A store that does not declare support is single-writer: with two writers the last save wins and the other's new events can be lost, and nothing detects it. The reference in-memory store supports compare-and-set. The third `save` argument is optional, so existing stores keep working unchanged.
 - **Read API.** `listReportedCandidateEvents({ subjectId })` returns the live events. `assessPlan({ subjectId, plan, events? })` assesses a plan against the stored events plus any extra ones. Both throw if no store is configured, so a missing store is never mistaken for "no events". Stored events are validated against their own recording time, and `refresh` merges them into the candidate and set-level exclusions. The merged lists (stored events plus the request's own `excludeCandidateIds` and `excludeSourceIds`) are checked against the 5000 entry limit before the first session runs. Over it, `refresh` throws `Too many recommendation exclusions for one refresh.` instead of dropping entries, because dropping would show withdrawn candidates again.
 
-Race note: deletion goes through the derived orchestrator's own queue, not the lifecycle's, so it does not wait for a report that is already saving. A report mid-save when `derived.deleteSubject` runs leaves its events in the store, and a second `deleteSubject` clears them. A test covers both steps. Avoid reporting while a deletion is in flight, or repeat the deletion afterward.
+Race note: saves and deletes against the event store go through one in-process queue per subject, keyed by the store object. The lifecycle's saves and deletes and the deletion invalidator all use it. A `derived.deleteSubject` that arrives while a report is saving waits for that save and then deletes, so the report's events do not come back after the deletion. A test interleaves a slow save with a deletion and checks the order. This covers one process sharing one store object. Another process, or a second store client object over the same data, has its own queue, so a deletion there can still be followed by a late save from here; repeat the deletion, or route deletes and reports for a subject through one process. Store methods must not call back into the lifecycle or the deletion invalidator for the same subject, because that call would wait behind itself.
 
 Compatibility: the `candidateEvents` option and the `policy` field on report and refresh input are additive. Without a store, `listReportedCandidateEvents` and `assessPlan` throw. The interface and state domain changes are in "Public API changes".
 
@@ -170,7 +170,7 @@ Gaps that remain by design or by scope:
 
 - The profile transition moves the profile record only. It does not move reported candidate events, the engine's event-history store or derived caches. Each has its own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
-- Deletion does not wait for a report that is already saving (see the race note above).
+- Deletion waits for an in-flight save only within one process and one store object (see the race note above).
 - Event stores that do not implement compare-and-set stay single-writer.
 - Verification outcomes are not cached, so a failed save followed by a retry verifies again (see "Retries" under evidence verification).
 - No per-kind caps and no automatic periodic refresh. `refresh` runs when the application calls it.

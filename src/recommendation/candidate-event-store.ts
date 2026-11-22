@@ -1,3 +1,4 @@
+import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import { sha256Hex } from "../runtime/hash.js";
 import {
   MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS,
@@ -346,7 +347,8 @@ export function createRecommendationCandidateEventDeletionInvalidator(
   assertRecommendationCandidateEventStore(store);
   return Object.freeze({
     async invalidate(request: Parameters<RecommendationDerivedStateInvalidator["invalidate"]>[0]) {
-      if (request.reason === "deletion_requested") await store.delete(request.subjectId);
+      // Same queue the lifecycle saves through, so a report that is mid-save finishes first and this delete clears it.
+      if (request.reason === "deletion_requested") await getSharedRecommendationKeyedSerializer(store).run(request.subjectId, () => store.delete(request.subjectId));
       if (inner !== undefined) await inner.invalidate(request);
     }
   });
