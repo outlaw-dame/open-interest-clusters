@@ -169,8 +169,9 @@ async function verifyOne(
  * Verifies the items with bounded concurrency and an overall deadline, and stops handing out work
  * after the first failure. The first failure also aborts the `signal` of every verifier call still
  * running, so nothing keeps working after the caller has the error. With no verifier the items are
- * left alone and the result says `unverified`. With a verifier and nothing to check it also says `unverified`, because no check
- * ran. A verifier can only reject; it never widens what evidence may do.
+ * left alone and the result says `unverified`. With a verifier and nothing to check it also says
+ * `unverified`, because no check ran. A verifier can only reject; it never widens what evidence
+ * may do.
  */
 export async function verifyRecommendationEvidence(
   configured: NormalizedRecommendationEvidenceVerifier | undefined,
