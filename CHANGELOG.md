@@ -4,6 +4,10 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+### Added
+
+- `candidateEvents.setExclusionRetentionMs` on `createRecommendationOnboardingLifecycle`, and `MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS` (365 days). It lets set-level events outlive ordinary ones so a hidden set stays hidden longer. It defaults to `retentionMs`, so nothing changes unless you set it, and it may not be shorter than `retentionMs`. Deletion and revoked consent still clear these events immediately.
+
 ### Changed
 
 - A lifecycle with `candidateEvents: { store }` built on the library's own derived-state orchestrator now clears the stored events on `derived.deleteSubject` without any extra wiring. The delete is part of the durable `candidate_cache` deletion step, so a failure is reported as pending and retried on the next call. If you already wrap an invalidator with `createRecommendationCandidateEventDeletionInvalidator`, that store is not deleted twice. A custom or wrapped `derived` port still needs the helper.

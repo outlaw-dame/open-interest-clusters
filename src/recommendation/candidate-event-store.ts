@@ -19,6 +19,8 @@ export const RECOMMENDATION_CANDIDATE_EVENT_STATE_DOMAIN = "candidate_lifecycle_
 
 export const DEFAULT_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+/** Upper bound for `setExclusionRetentionMs`. Set-level exclusions may outlive ordinary events, but not forever. */
+export const MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 const MIN_RETENTION_MS = 60 * 1000;
 
 export interface RecommendationStoredCandidateEvent {
@@ -69,7 +71,14 @@ export class RecommendationCandidateEventConflictError extends Error {
 export interface RecommendationCandidateEventStoreLimits {
   retentionMs: number;
   maxEvents: number;
+  /**
+   * How long set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) count. Never
+   * shorter than `retentionMs`. Left out, they expire with everything else after `retentionMs`.
+   */
+  setExclusionRetentionMs?: number;
 }
+
+const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -91,7 +100,7 @@ function digestOf(subjectId: string, updatedAt: string, entries: readonly Recomm
 }
 
 export function normalizeRecommendationCandidateEventStoreLimits(
-  input: { retentionMs?: number; maxEvents?: number } | undefined
+  input: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number } | undefined
 ): RecommendationCandidateEventStoreLimits {
   const retentionMs = input?.retentionMs ?? DEFAULT_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS;
   const maxEvents = input?.maxEvents ?? MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS;
@@ -101,7 +110,14 @@ export function normalizeRecommendationCandidateEventStoreLimits(
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS) {
     throw new TypeError("Invalid recommendation candidate event limit.");
   }
-  return Object.freeze({ retentionMs, maxEvents });
+  const setExclusionRetentionMs = input?.setExclusionRetentionMs ?? retentionMs;
+  if (
+    !Number.isSafeInteger(setExclusionRetentionMs) || setExclusionRetentionMs < retentionMs ||
+    setExclusionRetentionMs > MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS
+  ) {
+    throw new TypeError("Invalid recommendation candidate set exclusion retention.");
+  }
+  return Object.freeze({ retentionMs, maxEvents, setExclusionRetentionMs });
 }
 
 /** Checks the store can hold subject-level events: placement policy allows it and the methods exist. */
@@ -161,11 +177,12 @@ export function readRecommendationCandidateEventRecord(
   }
   if (record.digest !== digestOf(subjectId, updatedAt, entries)) return bad();
   // Expired events are dropped on read, so an old record can never keep a plan unusable forever.
-  const cutoff = Date.parse(now) - limits.retentionMs;
-  return Object.freeze(entries.filter((entry) => Date.parse(entry.recordedAt) > cutoff));
+  // Set-level events can be given a longer, still bounded, lifetime of their own.
+  const nowMs = Date.parse(now);
+  const cutoff = nowMs - limits.retentionMs;
+  const setCutoff = nowMs - Math.max(limits.retentionMs, limits.setExclusionRetentionMs ?? limits.retentionMs);
+  return Object.freeze(entries.filter((entry) => Date.parse(entry.recordedAt) > (SET_LEVEL_KINDS.has(entry.event.kind) ? setCutoff : cutoff)));
 }
-
-const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
 
 /**
  * What identifies "the same fact" for a set-level event. Reporting the same set again with a later
@@ -225,7 +242,7 @@ export function recommendationCandidateEventRecordDigest(raw: unknown): string |
  * are compacted away. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) are
  * never evicted to make room, because losing one makes the set eligible again, and an event being
  * added now is never dropped to make room either. If the cap would force either out, this throws and
- * nothing is changed; set-level events leave only when they expire.
+ * nothing is changed; set-level events leave only when they expire (after `setExclusionRetentionMs`).
  */
 export function mergeRecommendationCandidateEventEntries(
   current: readonly RecommendationStoredCandidateEvent[],

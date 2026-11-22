@@ -165,6 +165,12 @@ export interface RecommendationOnboardingLifecycleOptions {
     store: RecommendationCandidateEventStore;
     /** How long a stored event counts. Default 30 days, at most 90. */
     retentionMs?: number;
+    /**
+     * How long set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) count, so a
+     * "never show this set" can outlive ordinary events. Defaults to `retentionMs`. It may not be
+     * shorter than `retentionMs` and is at most 365 days. Deletion and revoked consent still clear them at once.
+     */
+    setExclusionRetentionMs?: number;
     /** Cap per subject. The oldest events are compacted first. Default and maximum 1000. */
     maxEvents?: number;
     /** Backoff for store reads, writes and deletes. Defaults to 4 attempts from 25 ms, doubling, with jitter. */

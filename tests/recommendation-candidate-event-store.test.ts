@@ -13,6 +13,7 @@ import {
   createRecommendationDerivedStateInvalidationOrchestrator,
   createRecommendationEngineOrchestrator,
   createRecommendationOnboardingLifecycle,
+  MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS,
   type RecommendationCandidate,
   type RecommendationCandidateEventStore,
   type RecommendationConsentPolicy,
@@ -84,7 +85,7 @@ function rawStore(manifest?: Partial<RecommendationStateStorageAdapterManifest>,
   return { store, raw, counts, fail, hooks };
 }
 
-function build(store: RecommendationCandidateEventStore, extra: { retentionMs?: number; maxEvents?: number } = {}, clock = { now: NOW }) {
+function build(store: RecommendationCandidateEventStore, extra: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number } = {}, clock = { now: NOW }) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
   const invalidator = { async invalidate(request: RecommendationDerivedStateInvalidationRequest) { calls.push(request); } };
@@ -619,4 +620,76 @@ test("a derived port that is not the library's orchestrator is not changed by th
   await wrapper.deleteSubject({ subjectId: A, ...DELETE });
   assert.equal(counts.delete, 0, "the app has to wire the deletion invalidator itself for its own port");
   assert.equal(raw.has(A), true);
+});
+
+const MINUTE = 60 * 1000;
+const at = (base: string, minutes: number) => new Date(Date.parse(base) + minutes * MINUTE).toISOString();
+
+test("a set exclusion outlives ordinary events when given its own retention, and expires at that bound", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle, seen } = build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 60 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1), benign("plain")], policy: POLICY(A), now: T2 });
+  clock.now = at(T2, 30); // ordinary event is past its 10 minutes, the set event is not past its 60
+  assert.deepEqual((await lifecycle.listReportedCandidateEvents({ subjectId: A })).map((event) => event.kind), ["set_deleted"]);
+  const run = await lifecycle.refresh({ request: { subjectId: A, requestId: "r-late" } as never });
+  assert.deepEqual(run.excludedSetSourceIds, [SET_SOURCE_ID], "refresh still keeps the set out");
+  assert.deepEqual((seen.at(-1) as { excludeSourceIds: string[] }).excludeSourceIds, [SET_SOURCE_ID]);
+  clock.now = at(T2, 59);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 1);
+  clock.now = at(T2, 60);
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), [], "it expires at its own bound");
+});
+
+test("without setExclusionRetentionMs set events expire with everything else, as before", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle } = build(store, { retentionMs: 10 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  clock.now = at(T2, 10);
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), []);
+});
+
+test("re-reporting a set extends its exclusion from the new report, not past the bound from it", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle } = build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 20 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  const later = at(T2, 15);
+  clock.now = later;
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, at(T1, 15))], policy: POLICY(A) });
+  clock.now = at(later, 19);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 1);
+  clock.now = at(later, 20);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 0);
+});
+
+test("a long-lived set exclusion is still removed at once by deletion and by revoked consent", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle, derived } = build(store, { setExclusionRetentionMs: MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  assert.equal(raw.has(A), false);
+  // A deleted subject is blocked by the engine afterwards, so the consent paths use another subject.
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(B), now: T2 });
+  await lifecycle.withdrawSelections({ subjectId: B, reason: "consent_revoked", now: T3 });
+  assert.equal(raw.has(B), false);
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(B), now: T2 });
+  await assert.rejects(lifecycle.refresh({ request: { subjectId: B, requestId: "r-denied" } as never, policy: { subjectId: B, allowedDataUses: [], revokedAt: T2 }, now: T3 }), RecommendationConsentDeniedError);
+  assert.equal(raw.has(B), false);
+});
+
+test("set exclusion retention is bounded and never shorter than the event retention", () => {
+  const { store } = rawStore();
+  for (const bad of [
+    { setExclusionRetentionMs: MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS + 1 },
+    { retentionMs: 20 * MINUTE, setExclusionRetentionMs: 10 * MINUTE },
+    { setExclusionRetentionMs: 1.5 * MINUTE },
+    { setExclusionRetentionMs: Number.NaN },
+    { setExclusionRetentionMs: Number.POSITIVE_INFINITY },
+    { setExclusionRetentionMs: "3600000" as unknown as number }
+  ]) {
+    assert.throws(() => build(store, bad), /set exclusion retention/, JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 10 * MINUTE }));
 });
