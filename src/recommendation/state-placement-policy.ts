@@ -18,6 +18,7 @@ export const RECOMMENDATION_STATE_DOMAINS = [
   "profile_embedding",
   "candidate_cache",
   "explanation_cache",
+  "candidate_lifecycle_events",
   "aggregate_statistics"
 ] as const;
 
@@ -91,6 +92,7 @@ const DOMAIN_METADATA: Readonly<Record<RecommendationStateDomain, Recommendation
     profile_embedding: Object.freeze({ domain: "profile_embedding", subjectLevel: true, userPreferenceState: false, rebuildable: true }),
     candidate_cache: Object.freeze({ domain: "candidate_cache", subjectLevel: true, userPreferenceState: false, rebuildable: true }),
     explanation_cache: Object.freeze({ domain: "explanation_cache", subjectLevel: true, userPreferenceState: false, rebuildable: true }),
+    candidate_lifecycle_events: Object.freeze({ domain: "candidate_lifecycle_events", subjectLevel: true, userPreferenceState: true, rebuildable: false }),
     aggregate_statistics: Object.freeze({ domain: "aggregate_statistics", subjectLevel: false, userPreferenceState: false, rebuildable: true })
   });
 

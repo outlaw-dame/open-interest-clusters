@@ -28,6 +28,7 @@ export * from "./recommendation/candidate-source-adapter.js";
 export * from "./recommendation/cold-start-candidate-generation.js";
 export * from "./recommendation/cold-start-scoring-input-builder.js";
 export * from "./recommendation/first-session-orchestrator.js";
+export * from "./recommendation/candidate-event-store.js";
 export * from "./recommendation/candidate-lifecycle.js";
 export * from "./recommendation/onboarding-lifecycle.js";
 export * from "./recommendation/profile-persistence-transition.js";

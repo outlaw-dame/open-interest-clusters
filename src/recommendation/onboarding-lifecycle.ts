@@ -1,7 +1,21 @@
 import { sha256Hex } from "../runtime/hash.js";
-import { executeWithRetry } from "../utils/retry-policy.js";
+import { executeWithRetry, type RetryPolicyOptions } from "../utils/retry-policy.js";
+import {
+  assertRecommendationCandidateEventStore,
+  buildRecommendationCandidateEventRecord,
+  mergeRecommendationCandidateEventEntries,
+  normalizeRecommendationCandidateEventStoreLimits,
+  readRecommendationCandidateEventRecord,
+  type RecommendationCandidateEventStore,
+  type RecommendationCandidateEventStoreLimits
+} from "./candidate-event-store.js";
+import type { RecommendationCandidateActionPlan } from "./candidate-action-plan.js";
+import { RecommendationConsentDeniedError, requireRecommendationConsent } from "./consent-enforcement.js";
+import type { RecommendationConsentPolicy } from "./consent.js";
 import {
   assertRecommendationTimestampNotAhead,
+  assessRecommendationCandidateActionPlan,
+  type RecommendationCandidatePlanAssessment,
   listRecommendationLifecycleExcludedCandidateIds,
   listRecommendationLifecycleExcludedSetSourceIds,
   normalizeRecommendationCandidateLifecycleEvents,
@@ -65,8 +79,18 @@ export interface RecommendationOnboardingCandidateReportResult {
   propagation: RecommendationDerivedStatePropagationResult | undefined;
 }
 
+export interface RecommendationOnboardingCandidateReportInput {
+  subjectId: string;
+  events: readonly RecommendationCandidateLifecycleEvent[];
+  /** Required when a candidate event store is configured: storing events needs current consent. */
+  policy?: RecommendationConsentPolicy;
+  now?: string;
+}
+
 export interface RecommendationOnboardingRefreshInput {
   request: RecommendationFirstSessionRequest;
+  /** Required when events are reported and a candidate event store is configured. */
+  policy?: RecommendationConsentPolicy;
   /** Candidate facts that changed since the last run. Reported before the rerun, so caches are cleared first. */
   candidateEvents?: readonly RecommendationCandidateLifecycleEvent[];
   now?: string;
@@ -74,6 +98,7 @@ export interface RecommendationOnboardingRefreshInput {
 
 export interface RecommendationOnboardingRefreshResult {
   result: RecommendationFirstSessionResult;
+  /** Includes candidates excluded by events stored from earlier reports, when a store is configured. */
   excludedCandidateIds: readonly string[];
   /** Curated-set source IDs left out because a set-level event was reported for them. */
   excludedSetSourceIds: readonly string[];
@@ -87,6 +112,28 @@ export interface RecommendationOnboardingLifecycleOptions {
   engine: Pick<RecommendationEngineOrchestrator, "readEventHistory">;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
   now?: () => string;
+  /**
+   * Optional durable home for reported candidate events. Leave it out and events are only used for
+   * the call that reports them, as before. The store must be device-owned or user-owned.
+   */
+  candidateEvents?: {
+    store: RecommendationCandidateEventStore;
+    /** How long a stored event counts. Default 30 days, at most 90. */
+    retentionMs?: number;
+    /** Cap per subject. The oldest events are compacted first. Default and maximum 1000. */
+    maxEvents?: number;
+    /** Backoff for store reads, writes and deletes. Defaults to 4 attempts from 25 ms, doubling, with jitter. */
+    retry?: Pick<RetryPolicyOptions, "attempts" | "initialDelayMs" | "maxDelayMs" | "jitterRatio" | "random" | "retrySleeper">;
+  };
+}
+
+export interface RecommendationOnboardingPlanAssessmentInput {
+  subjectId: string;
+  plan: RecommendationCandidateActionPlan;
+  /** Extra events to consider on top of the stored ones. */
+  events?: readonly RecommendationCandidateLifecycleEvent[];
+  maxEligibilityAgeMs?: number;
+  now?: string;
 }
 
 export interface RecommendationOnboardingLifecycle {
@@ -98,14 +145,24 @@ export interface RecommendationOnboardingLifecycle {
   applySelection(input: RecommendationOnboardingSelectionChangeInput): Promise<RecommendationOnboardingSelectionChangeResult>;
   /** Retracts every live onboarding signal. Use `consent_revoked` when the user withdrew consent. */
   withdrawSelections(input: RecommendationOnboardingWithdrawalInput): Promise<RecommendationOnboardingSelectionChangeResult>;
-  /** Records changed candidate facts: durably clears the candidate and explanation caches. */
-  reportCandidateEvents(input: { subjectId: string; events: readonly RecommendationCandidateLifecycleEvent[]; now?: string }): Promise<RecommendationOnboardingCandidateReportResult>;
+  /**
+   * Records changed candidate facts: durably clears the candidate and explanation caches. With a
+   * candidate event store, the events are saved first and the call fails if they cannot be, so a
+   * success never claims more than was kept.
+   */
+  reportCandidateEvents(input: RecommendationOnboardingCandidateReportInput): Promise<RecommendationOnboardingCandidateReportResult>;
+  /** Stored events that have not expired, oldest first. Throws when no candidate event store is configured. */
+  listReportedCandidateEvents(input: { subjectId: string; now?: string }): Promise<readonly RecommendationCandidateLifecycleEvent[]>;
+  /** Assesses a plan against the stored events plus any extra ones. Throws when no candidate event store is configured. */
+  assessPlan(input: RecommendationOnboardingPlanAssessmentInput): Promise<RecommendationCandidatePlanAssessment>;
   /** Settles pending invalidation, reports candidate facts, then reruns the first session without the withdrawn candidates. */
   refresh(input: RecommendationOnboardingRefreshInput): Promise<RecommendationOnboardingRefreshResult>;
 }
 
 /** A few quick replans with jittered backoff. A lost race normally settles on the first one. */
 const STALE_PLAN_RETRY = Object.freeze({ attempts: 5, initialDelayMs: 5, maxDelayMs: 100, jitterRatio: 0.5 });
+
+const CANDIDATE_EVENT_STORE_RETRY = Object.freeze({ attempts: 4, initialDelayMs: 25, maxDelayMs: 400, jitterRatio: 0.5 });
 
 /** Marks a failed write that happened while the ledger moved under the plan, so the plan can be redone. */
 class StalePlanError extends Error {
@@ -215,6 +272,59 @@ export function createRecommendationOnboardingLifecycle(
   // Keyed by the engine, so every lifecycle built on one engine queues per subject in one line.
   const serializer = getSharedRecommendationKeyedSerializer(options.engine);
 
+  const eventStore = options.candidateEvents?.store;
+  let eventLimits: RecommendationCandidateEventStoreLimits | undefined;
+  if (options.candidateEvents !== undefined) {
+    if (!isRecord(options.candidateEvents)) throw new TypeError("Invalid recommendation onboarding lifecycle options.");
+    assertRecommendationCandidateEventStore(options.candidateEvents.store);
+    eventLimits = normalizeRecommendationCandidateEventStoreLimits(options.candidateEvents);
+  }
+  const eventRetry: RetryPolicyOptions = { ...CANDIDATE_EVENT_STORE_RETRY, ...options.candidateEvents?.retry };
+
+  /** Store calls fail closed: they retry with backoff, then surface the last error. */
+  function storeIo<T>(work: (store: RecommendationCandidateEventStore) => Promise<T>): Promise<T> {
+    return executeWithRetry(() => work(eventStore!), eventRetry);
+  }
+
+  async function readStoredEntries(subjectId: string, now: string) {
+    return readRecommendationCandidateEventRecord(await storeIo((store) => store.load(subjectId)), subjectId, eventLimits!, now);
+  }
+
+  async function readStoredEvents(subjectId: string, now: string): Promise<readonly RecommendationCandidateLifecycleEvent[]> {
+    return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
+  }
+
+  async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string): Promise<void> {
+    const merged = mergeRecommendationCandidateEventEntries(await readStoredEntries(subjectId, now), events, eventLimits!, now);
+    if (!merged.changed) return;
+    const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
+    await storeIo((store) => store.save(subjectId, record));
+  }
+
+  /** Revoked or denied consent removes what was kept. If the removal fails, the call fails with it. */
+  async function clearStoredEvents(subjectId: string): Promise<void> {
+    if (eventStore !== undefined) await storeIo((store) => store.delete(subjectId));
+  }
+
+  async function requireStoreConsent(subjectId: string, policy: RecommendationConsentPolicy | undefined): Promise<void> {
+    if (policy === undefined) throw new TypeError("Storing recommendation candidate events requires a consent policy.");
+    try {
+      await requireRecommendationConsent(policy, {
+        subjectId,
+        dataUse: "local_personalization",
+        protocol: "app_local",
+        sourceVisibility: "local_only",
+        accessBasis: "owner",
+        containsPrivateData: true,
+        containsThirdPartyData: false,
+        serverSideProcessing: eventStore!.manifest.processingBoundary !== "local_only"
+      });
+    } catch (error) {
+      if (error instanceof RecommendationConsentDeniedError) await clearStoredEvents(subjectId);
+      throw error;
+    }
+  }
+
   const timestampMessage = "Invalid recommendation onboarding lifecycle timestamp.";
 
   /** A time given by the caller may not run ahead of the lifecycle clock by more than the allowed skew. */
@@ -311,11 +421,18 @@ export function createRecommendationOnboardingLifecycle(
   async function report(
     subjectId: string,
     rawEvents: readonly RecommendationCandidateLifecycleEvent[],
-    now: string
+    now: string,
+    policy?: RecommendationConsentPolicy
   ): Promise<RecommendationOnboardingCandidateReportResult> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
       return Object.freeze({ subjectId, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+    }
+    // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is harmless
+    // because an event that is already stored is not stored twice.
+    if (eventStore !== undefined) {
+      await requireStoreConsent(subjectId, policy);
+      await persistEvents(subjectId, events, now);
     }
     const propagation = await options.derived.invalidateCandidateState({ subjectId, occurredAt: now });
     return Object.freeze({
@@ -338,7 +455,13 @@ export function createRecommendationOnboardingLifecycle(
       return serializer.run(input.subjectId, async () => {
         // The seed does the catalog, sensitivity and consent checks. Consent is enforced on every
         // call, so a policy that no longer allows personalization stops the change before any write.
-        const seed = await buildRecommendationOnboardingSignals(seedInput);
+        let seed;
+        try {
+          seed = await buildRecommendationOnboardingSignals(seedInput);
+        } catch (error) {
+          if (error instanceof RecommendationConsentDeniedError) await clearStoredEvents(input.subjectId);
+          throw error;
+        }
         const desired = new Map<string, { signal: RecommendationInterestSignal; digest: string }>();
         for (const signal of seed.signals) {
           const hash = targetHash(signal);
@@ -355,14 +478,39 @@ export function createRecommendationOnboardingLifecycle(
       }
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, () => reconcile(input.subjectId, now, new Map(), input.reason));
+      return serializer.run(input.subjectId, async () => {
+        if (input.reason === "consent_revoked") await clearStoredEvents(input.subjectId);
+        return reconcile(input.subjectId, now, new Map(), input.reason);
+      });
     },
 
-    async reportCandidateEvents(input: { subjectId: string; events: readonly RecommendationCandidateLifecycleEvent[]; now?: string }) {
+    async reportCandidateEvents(input: RecommendationOnboardingCandidateReportInput) {
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding candidate report.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, () => report(input.subjectId, input.events, now));
+      return serializer.run(input.subjectId, () => report(input.subjectId, input.events, now, input.policy));
+    },
+
+    async listReportedCandidateEvents(input: { subjectId: string; now?: string }) {
+      if (!isRecord(input)) throw new TypeError("Invalid recommendation candidate event read.");
+      assertValidRecommendationProfileSubjectId(input.subjectId);
+      if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
+      const now = timestamp(input.now);
+      return serializer.run(input.subjectId, async () => Object.freeze([...await readStoredEvents(input.subjectId, now)]));
+    },
+
+    async assessPlan(input: RecommendationOnboardingPlanAssessmentInput) {
+      if (!isRecord(input)) throw new TypeError("Invalid recommendation plan assessment input.");
+      assertValidRecommendationProfileSubjectId(input.subjectId);
+      if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
+      const now = timestamp(input.now);
+      return serializer.run(input.subjectId, async () => {
+        const stored = await readStoredEvents(input.subjectId, now);
+        return assessRecommendationCandidateActionPlan(input.plan, [...stored, ...(input.events ?? [])], {
+          now,
+          ...(input.maxEligibilityAgeMs === undefined ? {} : { maxEligibilityAgeMs: input.maxEligibilityAgeMs })
+        });
+      });
     },
 
     async refresh(input: RecommendationOnboardingRefreshInput) {
@@ -381,13 +529,15 @@ export function createRecommendationOnboardingLifecycle(
         // Finish whatever an earlier crash left behind before deciding what to serve.
         const propagation = events === undefined || events.length === 0
           ? await options.derived.repair(subjectId)
-          : (await report(subjectId, events, now)).propagation!;
+          : (await report(subjectId, events, now, input.policy)).propagation!;
+        // Stored events keep excluding after a restart. They are read after the report, so they include it.
+        const known = eventStore === undefined ? (events ?? []) : [...(events ?? []), ...await readStoredEvents(subjectId, now)];
         const excluded = new Set(input.request.excludeCandidateIds ?? []);
-        for (const id of listRecommendationLifecycleExcludedCandidateIds(events ?? [])) excluded.add(id);
+        for (const id of listRecommendationLifecycleExcludedCandidateIds(known)) excluded.add(id);
         const excludedCandidateIds = Object.freeze([...excluded].sort());
         // Set-level events usually have no candidate ID, so those candidates are matched by the set's source ID.
         const sourceIds = new Set(input.request.excludeSourceIds ?? []);
-        for (const id of listRecommendationLifecycleExcludedSetSourceIds(events ?? [])) sourceIds.add(id);
+        for (const id of listRecommendationLifecycleExcludedSetSourceIds(known)) sourceIds.add(id);
         const excludedSetSourceIds = Object.freeze([...sourceIds].sort());
         const result = await firstSession.execute({
           ...input.request,
