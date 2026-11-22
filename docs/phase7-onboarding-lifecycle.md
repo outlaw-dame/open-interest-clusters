@@ -1,6 +1,6 @@
 # Phase 7: onboarding lifecycle and refresh
 
-Phase 7 keeps onboarding-derived state correct after the first session. It adds four small modules, one required method on each of two existing orchestrator interfaces, and one new invalidation reason. It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
+Phase 7 keeps onboarding-derived state correct after the first session. It adds a handful of small modules (the lifecycle, candidate lifecycle assessment, profile persistence transition, an optional candidate event store, an optional evidence verifier, and a keyed serializer), required methods on three existing interfaces, one new invalidation reason and one new state domain. The breaking changes are listed under "Public API changes". It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
 
 | Concern | Where it lives |
 | --- | --- |
@@ -9,6 +9,8 @@ Phase 7 keeps onboarding-derived state correct after the first session. It adds 
 | Candidate and explanation cache invalidation without a profile change | `invalidateCandidateState` on the derived-state orchestrator |
 | Reading accepted event history | `readEventHistory` on the engine orchestrator |
 | Moving the profile record between device-owned and user-owned storage | `src/recommendation/profile-persistence-transition.ts` |
+| Optional durable store for reported candidate events | `src/recommendation/candidate-event-store.ts` |
+| Optional verifier for reported events and plan evidence | `src/recommendation/evidence-verifier.ts` |
 | Per-key serialization shared by the new modules | `src/recommendation/keyed-serializer.ts` |
 
 ## Decisions
@@ -52,7 +54,7 @@ A rebuilt plan reuses the existing path: rerun candidate eligibility, which alre
 
 The derived-state orchestrator's checkpoint is a digest of the profile, so a candidate fact cannot trigger it. `invalidateCandidateState({ subjectId })` adds a durable task with reason `candidate_state_changed` and only the `candidate_cache` and `explanation_cache` targets. It first settles any pending or out-of-date profile invalidation, so the checkpoint written at the end can never claim embeddings are current when they are not. It uses the same task store, per-subject serialization and `repair` recovery. Each report is a new fact, so it is not deduplicated.
 
-`lifecycle.reportCandidateEvents` validates the events and then calls it. `lifecycle.refresh` finishes pending invalidation (or reports the new events), then reruns the first-session orchestrator with the reported candidate IDs added to `excludeCandidateIds`. Events that name a candidate ID exclude that candidate. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) usually carry only a set source ID, so refresh also passes those IDs to the first session as `excludeSourceIds`. Candidate generation then drops every candidate whose provenance includes one of them, before ranking and before the candidate cap. Member and `starter_pack` candidates from a curated set carry the set's `createRecommendationCuratedAccountSetSourceId` in their `curated_account_set` provenance, so no candidate ID is needed. A candidate listed in two sets is dropped when either set is reported, which errs toward less usable. Member consent events also name a set, but they concern one member, so they exclude only the named candidate and not the rest of the set. The result lists what was left out in `excludedSetSourceIds`. Events are not remembered, so the exclusion covers the refresh that reports them. A caller that keeps the set out must keep reporting it, or stop returning it from its source. Set events also still invalidate any plan that relied on that set when the plan is assessed. If pending invalidation cannot be finished, `refresh` throws and does not rerun, so stale cache state is never served.
+`lifecycle.reportCandidateEvents` validates the events and then calls it. `lifecycle.refresh` finishes pending invalidation (or reports the new events), then reruns the first-session orchestrator with the reported candidate IDs added to `excludeCandidateIds`. Events that name a candidate ID exclude that candidate. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) usually carry only a set source ID, so refresh also passes those IDs to the first session as `excludeSourceIds`. Candidate generation then drops every candidate whose provenance includes one of them, before ranking and before the candidate cap. Member and `starter_pack` candidates from a curated set carry the set's `createRecommendationCuratedAccountSetSourceId` in their `curated_account_set` provenance, so no candidate ID is needed. A candidate listed in two sets is dropped when either set is reported, which errs toward less usable. Member consent events also name a set, but they concern one member, so they exclude only the named candidate and not the rest of the set. The result lists what was left out in `excludedSetSourceIds`. Without a candidate event store, events are not remembered, so the exclusion covers only the refresh that reports them, and a caller that keeps the set out must keep reporting it or stop returning it from its source. With a store (see "Persisted candidate events"), stored events are merged into the exclusions on every refresh until they expire. Set events also still invalidate any plan that relied on that set when the plan is assessed. If pending invalidation cannot be finished, `refresh` throws and does not rerun, so stale cache state is never served.
 
 ### 5. Consent revocation and deletion
 
@@ -88,24 +90,30 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 | Plans go stale or invalid on consent revocation, set loss, moves, verification loss, source loss | `recommendation-candidate-lifecycle.test.ts` |
 | Plans never become executable, malformed or future events are rejected | same file |
 | Persistence moves are crash-safe and provider-owned placement is refused | `recommendation-profile-persistence-transition.test.ts` |
+| Reported events survive restart, are bounded, subject-bound, tamper-evident, consent-gated and deleted with the subject | `recommendation-candidate-event-store.test.ts` |
+| Deletion racing an in-flight report | same file: mid-save deletion leaves events, a second deletion clears them |
+| A verifier that rejects, throws, times out or returns junk blocks the report or assessment | `recommendation-evidence-verifier.test.ts` |
+| Two lifecycles on one engine queue behind each other, a racing direct write converges, and an unrelated ledger error is not retried | same file: lifecycle instances queue, direct write racing, ledger error |
 
 ## Public API changes
 
-New exports are additive. Three changes to existing exported types are not, and they break code that implements or switches over those types by hand:
+New exports are additive. The changes to existing exported types below are not, and they break code that implements or switches over those types by hand:
 
 - `RecommendationEngineOrchestrator` gains a required `readEventHistory(subjectId)`. A hand-written implementation or test double stops compiling until it adds the method.
 - `RecommendationDerivedStateInvalidationOrchestrator` gains a required `invalidateCandidateState(input)`. Same effect for implementers.
 - `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gains `candidate_state_changed`. A `switch` over the reason that has no default branch fails to compile until it handles the new case.
+- `RecommendationOnboardingLifecycle` gains the required methods `listReportedCandidateEvents` and `assessPlan`. A hand-written implementation stops compiling until it adds them.
+- `RECOMMENDATION_STATE_DOMAINS` gains `candidate_lifecycle_events`, which breaks exhaustive `Record<RecommendationStateDomain, ...>` maps in caller code.
 
 Callers that only use the orchestrators the package builds are not affected. Tasks stored by older versions still load. The reverse does not hold: an older version reading a task saved with `candidate_state_changed` will reject it, so roll readers forward before writers.
 
-Because of the three items above this ships as 0.2.0, a minor bump in the pre-1.0 range.
+Because of these items this ships as 0.2.0, a minor bump in the pre-1.0 range.
 
 ### 0.2.0 breaking changes
 
 Everything below breaks existing callers, not only the Phase 7 interface additions:
 
-- `RecommendationEngineOrchestrator` and `RecommendationDerivedStateInvalidationOrchestrator` have the new required methods described above, and the reason union is wider.
+- The interface and type changes listed above under "Public API changes".
 - The `collections` capability is now `communities`. There is no alias, so callers have to rename it.
 - `starterPackMembers` takes `{ eligibility, consent }` wrappers instead of bare members.
 - Member candidates must carry `curated_account_set` provenance.
@@ -128,22 +136,26 @@ By default `reportCandidateEvents` only clears caches. Pass `candidateEvents: { 
 - **Isolation and integrity.** A record is bound to its subject and carries a digest over its content. A record that names another subject, has unknown fields, bad events, wrong order or a failed digest is rejected with a `TypeError`. It is never read as empty and never overwritten, because treating it as empty would make plans usable again. The digest catches damage and swapped records, not a deliberate rewrite by someone who can write the store. Fix such a record by deleting the subject's events.
 - **Failure handling.** The events are saved before caches are cleared, and the call fails if the save fails, so success never claims more than was kept. Store reads, writes and deletes retry with exponential backoff and jitter (4 attempts from 25 ms, capped at 400 ms, tunable through `retry`). Reporting the same event again is a no-op: the first recording time is kept and nothing is written.
 - **Read API.** `listReportedCandidateEvents({ subjectId })` returns the live events. `assessPlan({ subjectId, plan, events? })` assesses a plan against the stored events plus any extra ones. Both throw if no store is configured, so a missing store is never mistaken for "no events". Stored events are validated against their own recording time, and `refresh` merges them into the candidate and set-level exclusions.
-- **Persistence transition.** `profile-persistence-transition.ts` moves the profile record only. The event store has its own placement, so it is not part of that move.
 
-Race note: deletion goes through the derived orchestrator's own queue, not the lifecycle's. A report running at the same moment as a deletion for the same subject could save events after the delete. Avoid reporting while a deletion is in flight, or repeat the deletion afterward.
+Race note: deletion goes through the derived orchestrator's own queue, not the lifecycle's, so it does not wait for a report that is already saving. A report mid-save when `derived.deleteSubject` runs leaves its events in the store, and a second `deleteSubject` clears them. A test covers both steps. Avoid reporting while a deletion is in flight, or repeat the deletion afterward.
 
-Compatibility: the new option, the `policy` field on report and refresh input, `listReportedCandidateEvents` and `assessPlan` are additive. `RecommendationOnboardingLifecycle` gains two required methods, so a hand-written implementation of that interface stops compiling until it adds them. `RECOMMENDATION_STATE_DOMAINS` gains `candidate_lifecycle_events`, which breaks exhaustive `Record<RecommendationStateDomain, ...>` maps in caller code.
+Compatibility: the `candidateEvents` option and the `policy` field on report and refresh input are additive. Without a store, `listReportedCandidateEvents` and `assessPlan` throw. The interface and state domain changes are in "Public API changes".
 
 ## Residual limits
 
-- Candidate lifecycle events and the consent and provenance inside plans are caller-supplied and unsigned, and the library cannot change that. A signature needs a trust root (who may sign, and which keys) and only the application owns one. What the library does provide is an optional verifier hook, described in "Evidence verification" below. Without it, results say `evidenceVerification: "unverified"` and a consistent fabrication of plan evidence is still not detectable. Evidence can only make a plan less usable, with or without a verifier.
-- Reported events are only persisted when a candidate event store is configured (see "Persisted candidate events" below). With no store, only the cache invalidation they cause is durable, as before.
-- Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). It only retries when the history actually changed, so an unrelated ledger error is returned on the first failure. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call.
-- Nothing here provides a cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
-- Plan assessment rejects a plan whose provenance, identity fields or timestamps are malformed. A plan that is well formed but forged is still not detectable.
-- The profile transition moves the profile record only. The engine's event-history store and derived caches have their own placement, owned by the application.
+State after the limit-reduction work, with what each item does and does not cover.
+
+1. **Unsigned evidence: reduced, not eliminated.** Candidate lifecycle events and the consent and provenance inside plans are caller-supplied. The library cannot sign them, because a signature needs a trust root (who may sign, which keys) that only the application owns. The optional `evidenceVerifier` hook (see "Evidence verification") lets the application reject evidence, and a rejection or failure blocks the report or assessment. Without a verifier, results say `evidenceVerification: "unverified"`, and a consistent fabrication of plan evidence is not detectable. Plan assessment also rejects malformed provenance, identity fields and timestamps, but a well-formed forgery passes. Evidence can only make a plan less usable, with or without a verifier.
+2. **Reported events are lost on restart: fixed when a store is configured, opt-in.** With `candidateEvents: { store }` events are kept (see "Persisted candidate events"). With no store, only the cache invalidation they cause is durable, as before.
+3. **Write interleaving: fixed in process per engine, cross-process remains.** Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). It only retries when the history actually changed, so an unrelated ledger error is returned on the first failure. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call. There is no cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
+4. **Set-level events needing candidate IDs: fixed.** Set events exclude by source ID on refresh (see decision 4).
+
+Gaps that remain by design or by scope:
+
+- The profile transition moves the profile record only. It does not move reported candidate events, the engine's event-history store or derived caches. Each has its own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
-- No per-kind caps or automatic periodic refresh were added. `refresh` runs when the application calls it.
+- Deletion does not wait for a report that is already saving (see the race note above).
+- No per-kind caps and no automatic periodic refresh. `refresh` runs when the application calls it.
 
 ## Evidence verification
 

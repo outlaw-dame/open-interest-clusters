@@ -211,6 +211,28 @@ test("deleting the subject through the derived orchestrator clears stored events
   assert.equal(raw.has(B), true, "other subjects are untouched");
 });
 
+test("a report that is mid-save while the subject is deleted leaves its events behind, and deleting again clears them", async () => {
+  const { store, raw } = rawStore();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realSave = store.save.bind(store);
+  let saveStarted: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => { saveStarted = resolve; });
+  const slow: RecommendationCandidateEventStore = {
+    ...store,
+    async save(id, record) { saveStarted(); await gate; await realSave(id, record); }
+  };
+  const { lifecycle, derived } = build(slow);
+  const pending = lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await started;
+  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  release();
+  await pending.catch(() => undefined);
+  assert.equal(raw.has(A), true, "the deletion does not wait for the in-flight report, so the save lands after it");
+  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  assert.equal(raw.has(A), false, "a repeated deletion always clears the events");
+});
+
 test("withdrawing consent, a denied policy, or a missing policy never leaves events behind or stores new ones", async () => {
   const { store, raw, fail } = rawStore();
   const { lifecycle } = build(store);
