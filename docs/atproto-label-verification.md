@@ -41,9 +41,11 @@ The caller resolves the DID document and decides how fresh it must be. Key rotat
 - A signed negation is refused with `negated_label`. An attestation reads as a positive claim, and a retraction is not one. An expired label is refused with `expired`.
 - A label with no `exp` stays attestable for as long as you keep passing it. Set `maxLabelAgeMs` to refuse a label whose `cts` is older than that (`label_too_old`). A non-positive or non-integer value gives `invalid_attestation_input`. It limits age only. It does not find a later negation.
 - If the label has an `exp`, the attestation carries it as `expiresAt` and stops being accepted at that time, even inside `maxAgeMs`.
-- The attestation always has a `contentDigest`. By default it is the digest of the label as given (including `sig`), so a verifier built with `bindContent: true` accepts only that exact label. Pass `evidence` to bind something derived from the label instead. You are then vouching for the derivation.
+- The attestation always has a `contentDigest`. By default it is the digest of the label as given (including `sig`), so the attestation verifier, which always checks the digest, accepts only that exact label. Pass `evidence` to bind something derived from the label instead. You are then vouching for the derivation.
 - A label with getters or non-plain values is refused (`malformed_label`) so that what was verified is what was digested. Bad subject, source, claim or verifier fields give `invalid_attestation_input`. The function does not throw.
 - Wrong key, tampered label, bad clock and the other failures return the fixed reasons from verification and issue nothing.
+
+Every other attestation mechanism now needs a digest as well, see the content binding notes in `docs/phase7-onboarding-lifecycle.md`, which also explain how to compute one for an HTTPS origin read.
 
 Subject and source ids, and the `claim` text, come from the caller and are not checked against the label's `uri` or `val`. The claim is a note for a human reading the attestation. It is not a machine-checked statement, so describe the label truthfully and do not branch on it. The evidence verifier matches them against what it derives from the evidence, so an attestation does not move to another subject or source set.
 

@@ -17,19 +17,21 @@ import {
 const NOW = "2026-10-01T12:00:00.000Z";
 const SUBJECT = "user-1";
 const SOURCES = ["set:a", "set:b"];
+const EVIDENCE = { id: "item" };
+const DIGEST = recommendationEvidenceContentDigest(EVIDENCE);
 
 function input(overrides: Partial<RecommendationEvidenceAttestationInput> = {}): RecommendationEvidenceAttestationInput {
   return {
     subjectId: SUBJECT, sourceIds: SOURCES, kind: "starter_pack_provenance", claim: "membership read from the owner's origin",
     mechanism: "protocol_signature", authority: "protocol_native", verifiedAt: "2026-10-01T11:55:00.000Z", verifierId: "test-check",
-    ...overrides
+    contentDigest: DIGEST, ...overrides
   };
 }
 
 function requirement(overrides: Partial<RecommendationEvidenceAttestationRequirement> = {}): RecommendationEvidenceAttestationRequirement {
   return {
     subjectId: SUBJECT, sourceIds: SOURCES, kind: "starter_pack_provenance", now: NOW,
-    requiredProof: "signature", minimumAuthority: "protocol_native", ...overrides
+    requiredProof: "signature", minimumAuthority: "protocol_native", contentDigest: DIGEST, ...overrides
   };
 }
 
@@ -163,7 +165,7 @@ test("the hook rejects missing, forged, mismatched, expired and origin-only atte
 });
 
 test("the hook accepts an origin attestation where only origin proof is required", async () => {
-  const evidence = {};
+  const evidence = { id: "item" };
   const attestation = createRecommendationEvidenceAttestation(input({ mechanism: "https_origin", authority: "protocol_native" }));
   const result = await verifyRecommendationEvidence(
     configured({ requiredProof: "origin" }, new Map([[evidence, attestation]])), [evidence], "starter_pack_provenance", SUBJECT, NOW);
@@ -173,17 +175,17 @@ test("the hook accepts an origin attestation where only origin proof is required
 test("a lookup that throws, hangs or returns a bad source list still fails closed", async () => {
   const good = createRecommendationEvidenceAttestation(input());
   await assert.rejects(
-    verifyRecommendationEvidence(configured({ attestationFor: () => { throw new Error("db down"); } }), [{}], "starter_pack_provenance", SUBJECT, NOW),
+    verifyRecommendationEvidence(configured({ attestationFor: () => { throw new Error("db down"); } }), [{ id: "item" }], "starter_pack_provenance", SUBJECT, NOW),
     (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "error");
   let aborted = false;
   await assert.rejects(
     verifyRecommendationEvidence(
       configured({ attestationFor: (_evidence, context) => new Promise((resolve) => { context.signal.addEventListener("abort", () => { aborted = true; resolve(good); }); }) }),
-      [{}], "starter_pack_provenance", SUBJECT, NOW),
+      [{ id: "item" }], "starter_pack_provenance", SUBJECT, NOW),
     (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "timeout");
   assert.equal(aborted, true);
   await assert.rejects(
-    verifyRecommendationEvidence(configured({ attestationFor: () => good, sourceIdsFor: () => [] }), [{}], "starter_pack_provenance", SUBJECT, NOW),
+    verifyRecommendationEvidence(configured({ attestationFor: () => good, sourceIdsFor: () => [] }), [{ id: "item" }], "starter_pack_provenance", SUBJECT, NOW),
     (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "error");
 });
 
@@ -206,4 +208,57 @@ test("a byte array and a plain object that looks like its JSON form never share 
   // Same bytes still give the same digest, and different bytes do not.
   assert.equal(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(new Uint8Array([1, 2, 3])));
   assert.notEqual(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(new Uint8Array([1, 2, 4])));
+});
+
+// Digest binding is mandatory for every mechanism.
+test("an attestation without a valid digest cannot be issued, for any mechanism", () => {
+  for (const mechanism of ["https_origin", "authenticated_fetch", "protocol_signature", "application_signature", "atproto_label_signature"] as const) {
+    const { contentDigest: _omitted, ...withoutDigest } = input({ mechanism, authority: "protocol_native" });
+    assert.throws(() => createRecommendationEvidenceAttestation(withoutDigest), TypeError, mechanism);
+    for (const bad of [undefined, null, "", "sha256:abc", `sha256:${"A".repeat(64)}`, `md5:${"a".repeat(64)}`, 5]) {
+      assert.throws(() => createRecommendationEvidenceAttestation({ ...withoutDigest, contentDigest: bad }), TypeError, `${mechanism} ${String(bad)}`);
+    }
+  }
+});
+
+test("the evaluator needs a requirement digest and rejects a wrong or other-content digest", () => {
+  const attestation = createRecommendationEvidenceAttestation(input());
+  const { contentDigest: _omitted, ...withoutDigest } = requirement();
+  assert.throws(() => evaluateRecommendationEvidenceAttestation(attestation, withoutDigest as never), TypeError);
+  assert.throws(() => evaluateRecommendationEvidenceAttestation(attestation, requirement({ contentDigest: "sha256:nope" })), TypeError);
+  const wrong = `sha256:${"0".repeat(64)}`;
+  assert.deepEqual(evaluateRecommendationEvidenceAttestation(attestation, requirement({ contentDigest: wrong })), { verified: false, reason: "digest_mismatch" });
+  const other = recommendationEvidenceContentDigest({ id: "item", extra: 1 });
+  assert.deepEqual(evaluateRecommendationEvidenceAttestation(attestation, requirement({ contentDigest: other })), { verified: false, reason: "digest_mismatch" });
+});
+
+test("the hook always checks the digest: other content, wrong digest, cross-subject and cross-source replay are all rejected", async () => {
+  const verifyWith = (attestation: unknown, evidence: unknown, subject = SUBJECT, sources: readonly string[] = SOURCES) => verifyRecommendationEvidence(
+    configured({ sourceIdsFor: () => sources }, new Map([[evidence, attestation]])), [evidence], "starter_pack_provenance", subject, NOW);
+  const rejected = (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "rejected";
+  const good = createRecommendationEvidenceAttestation(input());
+  assert.equal((await verifyWith(good, EVIDENCE)).evidenceVerification, "verified");
+  // Same subject and sources, but the evidence handed to the hook is different content.
+  await assert.rejects(verifyWith(good, { id: "item", injected: true }), rejected);
+  // The attestation carries a digest of something else.
+  await assert.rejects(verifyWith(createRecommendationEvidenceAttestation(input({ contentDigest: `sha256:${"1".repeat(64)}` })), EVIDENCE), rejected);
+  // Replay against another subject, and against another source set, with the right content.
+  await assert.rejects(verifyWith(good, EVIDENCE, "user-2"), rejected);
+  await assert.rejects(verifyWith(good, EVIDENCE, SUBJECT, ["set:a", "set:other"]), rejected);
+  // Evidence that cannot be digested fails closed, it is never skipped.
+  const notPlain = { get id() { return "item"; } };
+  await assert.rejects(verifyWith(good, notPlain), (error: unknown) => error instanceof RecommendationEvidenceVerificationError);
+  // Every mechanism and strength is bound the same way.
+  for (const mechanism of ["https_origin", "authenticated_fetch", "protocol_signature", "application_signature"] as const) {
+    const attestation = createRecommendationEvidenceAttestation(input({ mechanism, contentDigest: `sha256:${"2".repeat(64)}` }));
+    await assert.rejects(
+      verifyRecommendationEvidence(configured({ requiredProof: "origin" }, new Map([[EVIDENCE, attestation]])), [EVIDENCE], "starter_pack_provenance", SUBJECT, NOW), rejected, mechanism);
+  }
+});
+
+test("bindContent is gone and a verifier configured with it is refused", () => {
+  const base = { id: "x", attestationFor: () => undefined, sourceIdsFor: () => ["a"], requiredProof: "signature" as const, minimumAuthority: "protocol_native" as const };
+  for (const bindContent of [true, false, "yes"]) {
+    assert.throws(() => createRecommendationAttestationEvidenceVerifier({ ...base, bindContent } as never), TypeError);
+  }
 });

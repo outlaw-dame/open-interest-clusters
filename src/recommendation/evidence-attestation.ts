@@ -27,8 +27,8 @@ export const RECOMMENDATION_EVIDENCE_ATTESTATION_SCHEMA_VERSION = "recommendatio
 /**
  * How the evidence was checked. The first two only establish where the data came from (an HTTPS
  * origin, optionally with an authenticated fetch). The rest mean a signature was verified.
- * `atproto_label_signature` is issued by `createRecommendationAtprotoLabelAttestation` and always
- * carries a content digest.
+ * `atproto_label_signature` is issued by `createRecommendationAtprotoLabelAttestation`. Every
+ * mechanism carries a content digest.
  */
 export const RECOMMENDATION_EVIDENCE_ATTESTATION_MECHANISMS = [
   "https_origin",
@@ -75,10 +75,10 @@ export interface RecommendationEvidenceAttestationInput {
   verifierId: string;
   /**
    * `sha256:` plus 64 lowercase hex characters, from `recommendationEvidenceContentDigest` over the
-   * evidence that was checked. Optional, except for `atproto_label_signature`. When present, a verifier
-   * built with `bindContent` accepts only evidence that hashes to it.
+   * evidence that was checked. Required for every mechanism. The verifier hashes the evidence it is
+   * given and accepts only an exact match, so the attestation cannot be reused for other content.
    */
-  contentDigest?: string;
+  contentDigest: string;
   /** RFC 3339. After this the attestation is refused even if it is still fresh, for example when the signed label expires. */
   expiresAt?: string;
 }
@@ -95,7 +95,7 @@ export interface RecommendationEvidenceAttestation {
   readonly authority: RecommendationProviderDiscoveryAuthority;
   readonly verifiedAt: string;
   readonly verifierId: string;
-  readonly contentDigest?: string;
+  readonly contentDigest: string;
   readonly expiresAt?: string;
 }
 
@@ -188,12 +188,9 @@ export function createRecommendationEvidenceAttestation(input: unknown): Recomme
   }
   const verifiedAt = normalizeStrictRfc3339Timestamp(record.verifiedAt, "Invalid recommendation evidence attestation time.");
   const verifierId = boundedText(record.verifierId, MAX_VERIFIER_ID_LENGTH, "Invalid recommendation evidence attestation verifier.");
-  let contentDigest: string | undefined;
-  if (record.contentDigest !== undefined) {
-    if (typeof record.contentDigest !== "string" || !DIGEST_PATTERN.test(record.contentDigest)) throw new TypeError("Invalid recommendation evidence attestation digest.");
-    contentDigest = record.contentDigest;
-  } else if (mechanism === "atproto_label_signature") {
-    throw new TypeError("An ATProto label attestation must carry a content digest.");
+  const contentDigest = record.contentDigest;
+  if (typeof contentDigest !== "string" || !DIGEST_PATTERN.test(contentDigest)) {
+    throw new TypeError("A recommendation evidence attestation must carry a content digest (sha256: plus 64 lowercase hex characters).");
   }
   const expiresAt = record.expiresAt === undefined
     ? undefined
@@ -209,7 +206,7 @@ export function createRecommendationEvidenceAttestation(input: unknown): Recomme
     authority,
     verifiedAt,
     verifierId,
-    ...(contentDigest === undefined ? {} : { contentDigest }),
+    contentDigest,
     ...(expiresAt === undefined ? {} : { expiresAt })
   });
   ISSUED.add(attestation);
@@ -233,12 +230,8 @@ export interface RecommendationEvidenceAttestationRequirement {
   minimumAuthority: RecommendationProviderDiscoveryAuthority;
   /** Default 15 minutes, at most 7 days. */
   maxAgeMs?: number;
-  /**
-   * Digest of the evidence being checked. When given, the attestation must carry the same digest. When
-   * left out, an attestation that carries a digest is refused (`digest_unchecked`), because accepting
-   * it would quietly skip the binding it was issued with.
-   */
-  contentDigest?: string;
+  /** Digest of the evidence being checked, from `recommendationEvidenceContentDigest`. The attestation must carry the same one. */
+  contentDigest: string;
 }
 
 export type RecommendationEvidenceAttestationRejection =
@@ -251,9 +244,7 @@ export type RecommendationEvidenceAttestationRejection =
   | "proof_insufficient"
   | "authority_insufficient"
   | "attestation_expired"
-  | "digest_missing"
-  | "digest_mismatch"
-  | "digest_unchecked";
+  | "digest_mismatch";
 
 export type RecommendationEvidenceAttestationResult =
   | { readonly verified: true }
@@ -283,7 +274,7 @@ export function evaluateRecommendationEvidenceAttestation(
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1 || maxAgeMs > MAX_RECOMMENDATION_EVIDENCE_ATTESTATION_MAX_AGE_MS) {
     throw new TypeError("Invalid recommendation evidence requirement age.");
   }
-  if (requirement.contentDigest !== undefined && (typeof requirement.contentDigest !== "string" || !DIGEST_PATTERN.test(requirement.contentDigest))) {
+  if (typeof requirement.contentDigest !== "string" || !DIGEST_PATTERN.test(requirement.contentDigest)) {
     throw new TypeError("Invalid recommendation evidence requirement digest.");
   }
   const nowMs = Date.parse(normalizeStrictRfc3339Timestamp(requirement.now, "Invalid recommendation evidence requirement time."));
@@ -298,12 +289,7 @@ export function evaluateRecommendationEvidenceAttestation(
   if (attestation.expiresAt !== undefined && Date.parse(attestation.expiresAt) <= nowMs) return reject("attestation_expired");
   if (requirement.requiredProof === "signature" && attestation.proof !== "signature") return reject("proof_insufficient");
   if (!recommendationProviderDiscoveryAuthorityAtLeast(attestation.authority, requirement.minimumAuthority)) return reject("authority_insufficient");
-  if (requirement.contentDigest !== undefined) {
-    if (attestation.contentDigest === undefined) return reject("digest_missing");
-    if (!constantTimeEqual(attestation.contentDigest, requirement.contentDigest)) return reject("digest_mismatch");
-  } else if (attestation.contentDigest !== undefined) {
-    return reject("digest_unchecked");
-  }
+  if (!constantTimeEqual(attestation.contentDigest, requirement.contentDigest)) return reject("digest_mismatch");
   return Object.freeze({ verified: true as const });
 }
 
@@ -321,18 +307,12 @@ export interface RecommendationAttestationEvidenceVerifierOptions {
   requiredProof: RecommendationEvidenceAttestationProof;
   minimumAuthority: RecommendationProviderDiscoveryAuthority;
   maxAgeMs?: number;
-  /**
-   * Hash the evidence the hook receives and require the attestation to carry the same digest. Use it
-   * with any attestation that has a `contentDigest` (always the case for `atproto_label_signature`),
-   * since a digested attestation is refused when this is off. The evidence must be plain data (see
-   * `recommendationEvidenceContentDigest`); anything else fails closed.
-   */
-  bindContent?: boolean;
 }
 
 /**
  * Builds a verifier for the existing `evidenceVerifier` hook. It answers `{ verified: true }` only when
- * an issued attestation matches the subject, kind and source ids, is fresh and strong enough. Every
+ * an issued attestation matches the subject, kind and source ids, carries the digest of the evidence
+ * itself, and is fresh and strong enough. Every
  * other outcome, including a throw from the lookup, is a rejection by the hook's usual fail-closed rules.
  */
 export function createRecommendationAttestationEvidenceVerifier(options: RecommendationAttestationEvidenceVerifierOptions): RecommendationEvidenceVerifier {
@@ -344,10 +324,12 @@ export function createRecommendationAttestationEvidenceVerifier(options: Recomme
   evaluateRecommendationEvidenceAttestation(undefined, {
     subjectId: "check", sourceIds: ["check"], kind: "lifecycle_event", now: "2026-01-01T00:00:00.000Z",
     requiredProof: options.requiredProof, minimumAuthority: options.minimumAuthority,
+    contentDigest: `sha256:${"0".repeat(64)}`,
     ...(options.maxAgeMs === undefined ? {} : { maxAgeMs: options.maxAgeMs })
   });
-  if (options.bindContent !== undefined && typeof options.bindContent !== "boolean") throw new TypeError("Invalid recommendation attestation verifier content binding.");
-  const { id, attestationFor, sourceIdsFor, requiredProof, minimumAuthority, maxAgeMs, bindContent } = options;
+  // Content binding is no longer optional. Refuse the old switch so stale config cannot look like it still means something.
+  if ("bindContent" in (options as object)) throw new TypeError("bindContent was removed. Every attestation is now bound to the evidence content.");
+  const { id, attestationFor, sourceIdsFor, requiredProof, minimumAuthority, maxAgeMs } = options;
   return Object.freeze({
     id,
     async verify(evidence: unknown, context: RecommendationEvidenceVerifierContext) {
@@ -359,8 +341,9 @@ export function createRecommendationAttestationEvidenceVerifier(options: Recomme
         now: context.now,
         requiredProof,
         minimumAuthority,
-        ...(maxAgeMs === undefined ? {} : { maxAgeMs }),
-        ...(bindContent === true ? { contentDigest: recommendationEvidenceContentDigest(evidence) } : {})
+        // Throws for evidence that is not plain data, which the hook treats as a rejection.
+        contentDigest: recommendationEvidenceContentDigest(evidence),
+        ...(maxAgeMs === undefined ? {} : { maxAgeMs })
       });
       return { verified: result.verified };
     }

@@ -48,7 +48,7 @@ function issue(overrides: Partial<RecommendationAtprotoLabelAttestationInput> = 
 function hook(attestation: unknown, overrides: Partial<Parameters<typeof createRecommendationAttestationEvidenceVerifier>[0]> = {}) {
   const verifier = createRecommendationAttestationEvidenceVerifier({
     id: "label-attestation-check", attestationFor: () => attestation, sourceIdsFor: () => SOURCES,
-    requiredProof: "signature", minimumAuthority: "protocol_native", bindContent: true, ...overrides
+    requiredProof: "signature", minimumAuthority: "protocol_native", ...overrides
   });
   return normalizeRecommendationEvidenceVerifierOptions({ verifier, timeoutMs: 50 });
 }
@@ -138,31 +138,30 @@ test("a stale attestation, or one past the label's expiry, is refused", async ()
     }), { verified: false, reason: "attestation_expired" });
 });
 
-test("a digested attestation is refused by a verifier that does not bind content", async () => {
-  await assert.rejects(run(issue(), label(), SUBJECT, NOW, { bindContent: false }), rejected);
-  assert.deepEqual(
-    evaluateRecommendationEvidenceAttestation(issue(), {
-      subjectId: SUBJECT, sourceIds: SOURCES, kind: KIND, now: NOW, requiredProof: "signature", minimumAuthority: "protocol_native"
-    }), { verified: false, reason: "digest_unchecked" });
+test("the evaluator refuses a requirement with no digest instead of skipping the check", () => {
+  assert.throws(() => evaluateRecommendationEvidenceAttestation(issue(), {
+    subjectId: SUBJECT, sourceIds: SOURCES, kind: KIND, now: NOW, requiredProof: "signature", minimumAuthority: "protocol_native"
+  } as never), TypeError);
 });
 
-test("a binding verifier refuses an attestation that carries no digest, such as an origin one", async () => {
-  const legacy = createRecommendationEvidenceAttestation({
+test("an origin attestation is bound to the evidence digest too, and a digest of other content is refused", async () => {
+  const evidence = { members: ["did:example:a"] };
+  const make = (contentDigest: string) => createRecommendationEvidenceAttestation({
     subjectId: SUBJECT, sourceIds: SOURCES, kind: KIND, claim: "read from origin", mechanism: "https_origin",
-    authority: "protocol_native", verifiedAt: "2026-05-31T23:59:00.000Z", verifierId: "origin"
+    authority: "protocol_native", verifiedAt: "2026-05-31T23:59:00.000Z", verifierId: "origin", contentDigest
   });
-  await assert.rejects(run(legacy, label(), SUBJECT, NOW, { requiredProof: "origin" }), rejected);
-  // The same origin attestation still works where nothing is bound, and is refused where signatures are required.
-  const unbound = await run(legacy, label(), SUBJECT, NOW, { requiredProof: "origin", bindContent: false });
-  assert.equal(unbound.evidenceVerification, "verified");
-  await assert.rejects(run(legacy, label(), SUBJECT, NOW, { bindContent: false }), rejected);
+  const ok = await run(make(recommendationEvidenceContentDigest(evidence)), evidence, SUBJECT, NOW, { requiredProof: "origin" });
+  assert.equal(ok.evidenceVerification, "verified");
+  await assert.rejects(run(make(recommendationEvidenceContentDigest({ members: [] })), evidence, SUBJECT, NOW, { requiredProof: "origin" }), rejected);
+  // Still refused where signatures are required.
+  await assert.rejects(run(make(recommendationEvidenceContentDigest(evidence)), evidence), rejected);
 });
 
 test("a literal copy of an attestation does not count", async () => {
   await assert.rejects(run({ ...issue() }, label()), rejected);
 });
 
-test("an ATProto label attestation cannot be created without a digest, and digests are validated", () => {
+test("an ATProto label attestation cannot be created without a valid digest", () => {
   const base = {
     subjectId: SUBJECT, sourceIds: SOURCES, kind: KIND, claim: "c", mechanism: "atproto_label_signature" as const,
     authority: "protocol_native" as const, verifiedAt: NOW, verifierId: "v"
@@ -188,13 +187,6 @@ test("the content digest is canonical and refuses data that is not plain", () =>
   // A key named __proto__ is data, so it changes the digest instead of being dropped.
   const proto = JSON.parse('{"__proto__":{"x":1}}') as unknown;
   assert.notEqual(recommendationEvidenceContentDigest(proto), recommendationEvidenceContentDigest({}));
-});
-
-test("a verifier cannot be configured with a non-boolean bindContent", () => {
-  assert.throws(() => createRecommendationAttestationEvidenceVerifier({
-    id: "x", attestationFor: () => undefined, sourceIdsFor: () => ["a"], requiredProof: "signature",
-    minimumAuthority: "protocol_native", bindContent: "yes" as never
-  }), TypeError);
 });
 
 test("the core entrypoint pulls in no @atproto or @ipld packages", () => {
