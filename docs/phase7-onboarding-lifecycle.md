@@ -241,10 +241,36 @@ Each protocol already has its own way to prove who said what, and the evidence v
 - **ActivityPub and Mastodon.** Authenticity is the HTTPS origin plus an authenticated fetch, and sometimes HTTP signatures or object proofs. A Mastodon 4.6.0 Collection REST read has no per-item signature.
 - **Solid and ActivityPods.** The WebID identifies the owner, and the ACL decides who may read or write.
 
-The intended shape is that an adapter verifies the protocol proof at fetch time, while it still holds the commit, signature or response. It then attaches an attestation to what it hands to the engine, recording how it was checked. The attestation should use the same authority ordering as `docs/recommendation-provider-discovery.md`, with `provider_probe` weakest and `explicit_integration` strongest. The evidence verifier then checks the attestation against the subject and kind, and applies replay rules. None of this exists yet. Until it does, a verifier cannot tell protocol-verified data from data the adapter merely parsed.
+The intended shape is that an adapter verifies the protocol proof at fetch time, while it still holds the commit, signature or response. It then attaches an attestation to what it hands to the engine, recording how it was checked. The attestation should use the same authority ordering as `docs/recommendation-provider-discovery.md`, with `provider_probe` weakest and `explicit_integration` strongest. The evidence verifier then checks the attestation against the subject and kind, and applies replay rules. The attestation shape exists (see below), but no adapter issues one yet. Until they do, a verifier cannot tell protocol-verified data from data the adapter merely parsed.
 
 Application-owned signatures are a narrow case. They make sense only for evidence the application creates itself, such as a consent receipt or an imported event it signs on its own device or server. For that, a detached Ed25519 signature over canonical JSON (for example RFC 8785) of `{ subjectId, eventId, kind, payload, issuedAt, expiresAt, nonce }`, checked against a key the application controls, is reasonable. It is not a way to vouch for provider evidence. The library ships no keys and issues none, and no maintainer or app owner is positioned to sign what a remote provider said.
 
-Residual limit, exactly: the library checks that evidence is well formed, bounded, internally consistent and (with a verifier) accepted by application code. It does not check protocol proofs, and it does not know whether anyone trustworthy produced the evidence.
+Residual limit, exactly: the library checks that evidence is well formed, bounded, internally consistent and (with a verifier) accepted by application code, and it can check that an attestation matches the subject, sources, age and strength you require. It does not check protocol proofs, and it does not know whether anyone trustworthy produced the evidence.
+
+### Attestation foundation (built) and what remains
+
+`createRecommendationEvidenceAttestation` records that a check ran: the subject, the source ids it covered, the evidence kind, a short claim, the mechanism, an authority from the provider-discovery vocabulary, when it ran and which step ran it. The result is validated, frozen and bounded (ids 512 characters, claim 256, at most 32 sources). Strings with control characters or surrounding whitespace are rejected and not cleaned, because quietly changing an id would change what it is bound to.
+
+`createRecommendationAttestationEvidenceVerifier` turns that into a verifier for the existing `evidenceVerifier` hook. It returns `{ verified: true }` only when the application's lookup finds an attestation that:
+
+- was issued by `createRecommendationEvidenceAttestation` in this process (a literal, a JSON copy or a structured clone is refused, so data that merely looks like an attestation never counts),
+- names the same subject and kind, and covers exactly the source ids taken from the evidence itself,
+- has a `verifiedAt` that is not in the future and is no older than `maxAgeMs` (default 15 minutes, at most 7 days),
+- has the required proof class (`origin` or `signature`) and at least the minimum authority.
+
+Anything else, including a lookup that throws or hangs, is rejected by the hook's normal fail-closed rules. The mechanisms are `https_origin` and `authenticated_fetch` (proof class `origin`) and `protocol_signature` and `application_signature` (proof class `signature`). The class is derived from the mechanism and cannot be passed in. Origin mechanisms cannot claim more than `protocol_native` authority. A Mastodon Collection read over REST is therefore an `https_origin` or `authenticated_fetch` attestation, and a verifier configured with `requiredProof: "signature"` refuses it.
+
+What this does not do: it verifies no signature. The issuing function is public, so whoever calls it is vouching that the check happened. It stops forged or copied data and mix-ups between subjects and sources. It does not make an unchecked claim true. No crypto or CBOR dependency was added.
+
+Which adapter would issue which attestation, and what is left to build:
+
+| Adapter | Attestation it could issue today | Needed for `signature` proof |
+| --- | --- | --- |
+| `activitypub-curated-account-sets` (Mastodon Collection REST) | `https_origin`, or `authenticated_fetch` when the read needed auth. Never `signature`. | Nothing. The protocol has no per-item signature here. |
+| `activitypub-public-outbox-source-adapter`, `mastodon-timeline-source-adapter` | `https_origin` or `authenticated_fetch` from the access basis. | HTTP signature or object proof checking, which needs a key fetch and a signature verifier in the host. |
+| `atproto-*-labels` | None yet. | Labels are DAG-CBOR encoded and signed with secp256k1 or P-256 keys. Checking one needs a CBOR encoder, the labeler key from the DID document and a key type Node's built-ins do not cover for secp256k1. This needs a dependency decision. |
+| `protocol-source-*` (ATProto records) | None yet. | Repository commit verification needs CAR and CBOR parsing, MST proof checking and the DID signing key. Same dependency decision. |
+| `activitypods-*` | None yet. | Fetching and evaluating ACLs and verifying with the actor key. |
+| Application-owned receipts | `application_signature` once an app signs and checks its own receipts. | The Ed25519 over canonical JSON recipe above, which Node can do with `node:crypto`, but the key handling belongs to the application. |
 
 Open decisions before protocol verification can be built: the attestation shape and where it travels (an optional field on the event type, or a side channel keyed by event ID), which adapters verify first (ATProto labels and commits are the most self-contained), how DID documents and signing keys are fetched and cached without making the core do network I/O, and how a failed or missing proof maps onto the existing fail-closed behavior.

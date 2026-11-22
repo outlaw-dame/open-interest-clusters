@@ -159,6 +159,15 @@ const AUTHORITY_RANK: Readonly<Record<RecommendationProviderDiscoveryAuthority, 
   authenticated_registration: 3,
   explicit_integration: 3
 });
+/** True when `actual` is at least as strong as `required` in the authority ordering (`provider_probe` weakest). */
+export function recommendationProviderDiscoveryAuthorityAtLeast(
+  actual: RecommendationProviderDiscoveryAuthority,
+  required: RecommendationProviderDiscoveryAuthority
+): boolean {
+  const have = AUTHORITY_RANK[actual];
+  const need = AUTHORITY_RANK[required];
+  return have !== undefined && need !== undefined && have >= need;
+}
 const MAX_ID_LENGTH = 512;
 const MAX_ENDPOINT_LENGTH = 2_048;
 const MAX_PROBES = 32;
