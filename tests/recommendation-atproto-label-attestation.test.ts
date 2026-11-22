@@ -177,8 +177,7 @@ test("an ATProto label attestation cannot be created without a digest, and diges
 test("the content digest is canonical and refuses data that is not plain", () => {
   assert.equal(recommendationEvidenceContentDigest({ b: 1, a: [true, null, "x"] }), recommendationEvidenceContentDigest({ a: [true, null, "x"], b: 1 }));
   assert.notEqual(recommendationEvidenceContentDigest({ a: "1" }), recommendationEvidenceContentDigest({ a: 1 }));
-  assert.notEqual(recommendationEvidenceContentDigest(new Uint8Array([1])), recommendationEvidenceContentDigest({ $bytes: "AQ==" }) + "x");
-  assert.equal(recommendationEvidenceContentDigest(new Uint8Array([1])), recommendationEvidenceContentDigest({ $bytes: "AQ==" }));
+  assert.notEqual(recommendationEvidenceContentDigest(new Uint8Array([1])), recommendationEvidenceContentDigest({ $bytes: "AQ==" }));
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
   let deep: unknown = "x";

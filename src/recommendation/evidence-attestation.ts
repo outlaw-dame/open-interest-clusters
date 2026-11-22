@@ -116,7 +116,7 @@ function canonicalize(value: unknown, depth: number, budget: { nodes: number }):
     if (!Number.isFinite(value)) throw new TypeError("Evidence holds a number that cannot be digested.");
     return JSON.stringify(Object.is(value, -0) ? 0 : value);
   }
-  if (value instanceof Uint8Array) return `{"$bytes":${JSON.stringify(Buffer.from(value).toString("base64"))}}`;
+  if (value instanceof Uint8Array) return `bytes(${JSON.stringify(Buffer.from(value).toString("base64"))})`;
   if (Array.isArray(value)) {
     const parts: string[] = [];
     for (let index = 0; index < value.length; index += 1) {
@@ -142,7 +142,8 @@ function canonicalize(value: unknown, depth: number, budget: { nodes: number }):
 
 /**
  * SHA-256 over a canonical encoding of plain data: sorted keys, no whitespace, `Uint8Array` as
- * `{"$bytes": base64}`. Throws `TypeError` for anything that is not plain data (undefined, functions,
+ * `bytes("<base64>")`, which no JSON value can encode to, so a byte array never shares a digest with a
+ * plain object such as `{ $bytes: "<base64>" }`. Throws `TypeError` for anything that is not plain data (undefined, functions,
  * symbols, bigint, NaN or Infinity, class instances, getters, sparse arrays) and for input that is
  * more than 32 levels deep, over 100,000 values or over 1 MiB once encoded. Refusing these keeps two
  * different values from sharing a digest and keeps a getter from showing different data later.

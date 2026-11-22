@@ -7,6 +7,7 @@ import {
   evaluateRecommendationEvidenceAttestation,
   isIssuedRecommendationEvidenceAttestation,
   normalizeRecommendationEvidenceVerifierOptions,
+  recommendationEvidenceContentDigest,
   recommendationProviderDiscoveryAuthorityAtLeast,
   verifyRecommendationEvidence,
   type RecommendationEvidenceAttestationInput,
@@ -193,4 +194,16 @@ test("the verifier factory refuses bad options up front", () => {
   assert.throws(() => createRecommendationAttestationEvidenceVerifier({ ...base, requiredProof: "none" as never }), TypeError);
   assert.throws(() => createRecommendationAttestationEvidenceVerifier({ ...base, maxAgeMs: -1 }), TypeError);
   assert.doesNotThrow(() => createRecommendationAttestationEvidenceVerifier(base));
+});
+
+test("a byte array and a plain object that looks like its JSON form never share a digest", () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const lookalike = { $bytes: Buffer.from(bytes).toString("base64") };
+  assert.notEqual(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(lookalike));
+  assert.notEqual(recommendationEvidenceContentDigest({ a: bytes }), recommendationEvidenceContentDigest({ a: lookalike }));
+  // A string that spells out the encoding is still a quoted string, so it differs too.
+  assert.notEqual(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(`bytes("${lookalike.$bytes}")`));
+  // Same bytes still give the same digest, and different bytes do not.
+  assert.equal(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(new Uint8Array([1, 2, 3])));
+  assert.notEqual(recommendationEvidenceContentDigest(bytes), recommendationEvidenceContentDigest(new Uint8Array([1, 2, 4])));
 });
