@@ -55,6 +55,7 @@ export interface RecommendationStateStorageAdapterManifest {
   adapterId: string;
   domains: readonly RecommendationStateDomain[];
   authority: RecommendationStorageAuthority;
+  /** Where this adapter runs (device or user-owned remote), not how the stored interests are labelled. */
   processingBoundary: RecommendationProcessingBoundary;
   persistence: RecommendationStatePersistenceMode;
   requiresNetwork: boolean;
