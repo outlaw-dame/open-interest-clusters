@@ -2,6 +2,7 @@ import { sha256Hex } from "../runtime/hash.js";
 import {
   assertRecommendationTimestampNotAhead,
   listRecommendationLifecycleExcludedCandidateIds,
+  listRecommendationLifecycleExcludedSetSourceIds,
   normalizeRecommendationCandidateLifecycleEvents,
   type RecommendationCandidateLifecycleEvent
 } from "./candidate-lifecycle.js";
@@ -73,6 +74,8 @@ export interface RecommendationOnboardingRefreshInput {
 export interface RecommendationOnboardingRefreshResult {
   result: RecommendationFirstSessionResult;
   excludedCandidateIds: readonly string[];
+  /** Curated-set source IDs left out because a set-level event was reported for them. */
+  excludedSetSourceIds: readonly string[];
   propagation: RecommendationDerivedStatePropagationResult;
 }
 
@@ -341,8 +344,16 @@ export function createRecommendationOnboardingLifecycle(
         const excluded = new Set(input.request.excludeCandidateIds ?? []);
         for (const id of listRecommendationLifecycleExcludedCandidateIds(events ?? [])) excluded.add(id);
         const excludedCandidateIds = Object.freeze([...excluded].sort());
-        const result = await firstSession.execute({ ...input.request, excludeCandidateIds: excludedCandidateIds });
-        return Object.freeze({ result, excludedCandidateIds, propagation });
+        // Set-level events usually have no candidate ID, so those candidates are matched by the set's source ID.
+        const sourceIds = new Set(input.request.excludeSourceIds ?? []);
+        for (const id of listRecommendationLifecycleExcludedSetSourceIds(events ?? [])) sourceIds.add(id);
+        const excludedSetSourceIds = Object.freeze([...sourceIds].sort());
+        const result = await firstSession.execute({
+          ...input.request,
+          excludeCandidateIds: excludedCandidateIds,
+          excludeSourceIds: excludedSetSourceIds
+        });
+        return Object.freeze({ result, excludedCandidateIds, excludedSetSourceIds, propagation });
       });
     }
   });

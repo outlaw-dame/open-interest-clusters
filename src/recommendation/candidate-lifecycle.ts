@@ -199,6 +199,7 @@ export function normalizeRecommendationCandidateLifecycleEvents(
 /**
  * Candidate IDs a caller should keep out of a rerun. Set-level and provider-level events carry no
  * candidate ID of their own, so they only contribute the optional `candidateId` the reporter gave.
+ * Set-level events are handled by `listRecommendationLifecycleExcludedSetSourceIds`.
  */
 export function listRecommendationLifecycleExcludedCandidateIds(
   events: readonly RecommendationCandidateLifecycleEvent[]
@@ -206,6 +207,23 @@ export function listRecommendationLifecycleExcludedCandidateIds(
   const ids = new Set<string>();
   for (const event of events) {
     if (event.candidateId !== undefined) ids.add(event.candidateId);
+  }
+  return Object.freeze([...ids].sort());
+}
+
+const SET_LEVEL_KINDS = new Set<RecommendationCandidateLifecycleEventKind>(["set_deleted", "set_not_discoverable", "set_sensitive"]);
+
+/**
+ * Curated-set source IDs a rerun should leave out. Only set-level events count. Consent events also
+ * name a set, but they concern one member, so they must not take the rest of the set down with them.
+ * Candidates are matched by their `curated_account_set` provenance source ID, so no candidate ID is needed.
+ */
+export function listRecommendationLifecycleExcludedSetSourceIds(
+  events: readonly RecommendationCandidateLifecycleEvent[]
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (SET_LEVEL_KINDS.has(event.kind) && event.setSourceId !== undefined) ids.add(event.setSourceId);
   }
   return Object.freeze([...ids].sort());
 }
