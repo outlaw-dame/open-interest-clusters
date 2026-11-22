@@ -29,7 +29,7 @@ The default for user-private personalization. On a signal or profile entry it sa
 
 ### `server_allowed`
 
-On a signal or profile entry it says a server processes the interest. The only server that may hold subject-level interests is one the user owns, such as an ActivityPods or Solid pod. A user-controlled server is still a server, so the label is `server_allowed` there, and it requires the user's explicit server-side consent for the requested use. Missing, revoked, deleted or mismatched consent refuses the write. `server_allowed` is not permission for an app or provider to read the interests, and provider-owned and shared-operator stores are refused for subject-level state under every label.
+On a signal or profile entry it says a server processes the interest. The only server that may hold subject-level interests is one the user owns, such as an ActivityPods or Solid pod, or a private ATProto space on the user's own PDS. A user-controlled server is still a server, so the label is `server_allowed` there, and it requires the user's explicit server-side consent for the requested use. Missing, revoked, deleted or mismatched consent refuses the write. `server_allowed` is not permission for an app or provider to read the interests, and provider-owned and shared-operator stores are refused for subject-level state under every label.
 
 ### `aggregate_only`
 
@@ -47,10 +47,12 @@ The same words appear in two places, and they have to agree.
 | Placement | Manifest | Interests are labelled |
 | --- | --- | --- |
 | Device-owned store | `device_owned` + `local_only` | `local_only` |
-| User-owned server store (ActivityPods or Solid pod) | `user_owned` + `server_allowed` | `server_allowed` |
+| User-owned server store (ActivityPods or Solid pod, or a private ATProto space on the user's own PDS) | `user_owned` + `server_allowed` | `server_allowed` |
 | Provider-owned or shared-operator store | refused for subject-level state | not applicable |
 
 Writing a profile to a pod labels its interests `server_allowed`. Onboarding with `storageTarget: "user_pod"` does this by default, and the device default stays `local_only`. Asking for a label that does not fit the target (`local_only` for a pod, `server_allowed` for the device) throws instead of being rewritten. Moving a profile between the two relabels it, see the lifecycle doc.
+
+A public ATProto repo is never a placement for subject-level interests, because repos are published data. A private ATProto space gives access control, not confidentiality: the PDS host and apps with access can read it, and spaces were an alpha when this was written. The library ships no spaces adapter and cannot check what an adapter writes. An optional `publiclyReadable: true` on a store manifest is refused for subject-level state, but the library cannot verify that declaration. See `local-first-state-placement.md`.
 
 Releases 0.2.0 and 0.3.0 stored onboarding profiles in a pod with `local_only` labels. Those records still load. They are accepted as stored, and the next write to the pod or the next transition relabels them `server_allowed`. A stale `local_only` label is the stricter one, so reading it grants nothing extra.
 
