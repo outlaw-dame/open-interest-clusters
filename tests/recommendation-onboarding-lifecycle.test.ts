@@ -38,6 +38,9 @@ function change(topics: readonly string[], now = T0, extra: Record<string, unkno
   return { subjectId: SUBJECT, catalogIndex: CATALOG, selection: selection(topics, tags, now), policy: POLICY, now, ...extra };
 }
 
+// The lifecycle clock sits at the latest time these tests pass in, so explicit times are never ahead of it.
+let lifecycleClock = T2;
+
 function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[] } = {}) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T0 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
@@ -63,7 +66,7 @@ function harness(options: { failures?: RecommendationDerivedStateTarget[]; first
     candidateKinds: ["account"],
     evaluateEligibility: ({ candidate }) => { firstSessionCalls.push(candidate.candidate.candidateId); return { candidate: candidate.candidate, eligible: true, reasonCodes: ["eligible"], evaluatedAt: T0 }; }
   });
-  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => T0 });
+  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock });
   return { engine, derived, lifecycle, calls, tasks, firstSessionCalls };
 }
 
@@ -371,4 +374,47 @@ test("reporting candidate events clears candidate caches durably and rejects bad
   assert.deepEqual(ok.excludedCandidateIds, ["pack-1"]);
   assert.deepEqual(calls.map((call) => call.target), ["candidate_cache", "explanation_cache"]);
   assert.equal(tasks.size, 0);
+});
+
+const SKEW_MS = 5 * 60 * 1000;
+const FAR_FUTURE = "2099-01-01T00:00:00.000Z";
+
+test("a far-future time is rejected and does not write a second set of signals over live ones", async () => {
+  const { lifecycle, engine } = harness();
+  const first = await lifecycle.applySelection(change(["gaming", "technology"], T0, { expiresAt: "2026-10-02T10:00:00.000Z" }));
+  assert.ok(first.eventCount > 0);
+  const before = (await engine.readEventHistory(SUBJECT)).length;
+  await assert.rejects(lifecycle.applySelection(change(["gaming", "technology"], T0, { now: FAR_FUTURE, expiresAt: "2026-10-02T10:00:00.000Z" })), RangeError);
+  assert.equal((await engine.readEventHistory(SUBJECT)).length, before);
+  // With a sane clock the same call is still a no-op, so the first set is the only live one.
+  const repeat = await lifecycle.applySelection(change(["gaming", "technology"], T0, { now: T2, expiresAt: "2026-10-02T10:00:00.000Z" }));
+  assert.equal(repeat.eventCount, 0);
+});
+
+test("a time exactly at the skew limit is accepted and one millisecond past it is rejected", async () => {
+  const { lifecycle } = harness({ firstSessionSources: [source([])] });
+  const limit = new Date(Date.parse(T2) + SKEW_MS).toISOString();
+  const past = new Date(Date.parse(T2) + SKEW_MS + 1).toISOString();
+  const ok = await lifecycle.applySelection(change(["gaming"], T0, { now: limit }));
+  assert.ok(ok.eventCount > 0);
+  await assert.rejects(lifecycle.applySelection(change(["gaming"], T0, { now: past })), RangeError);
+  await assert.rejects(lifecycle.withdrawSelections({ subjectId: SUBJECT, reason: "source_retracted", now: past }), RangeError);
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [], now: past }), RangeError);
+  await assert.rejects(lifecycle.refresh({ request: REQUEST, now: past }), RangeError);
+});
+
+test("withdrawing with a far-future time leaves the live signals alone", async () => {
+  const { lifecycle, engine } = harness();
+  await lifecycle.applySelection(change(["gaming"]));
+  const before = (await engine.readEventHistory(SUBJECT)).length;
+  await assert.rejects(lifecycle.withdrawSelections({ subjectId: SUBJECT, reason: "consent_revoked", now: FAR_FUTURE }), RangeError);
+  assert.equal((await engine.readEventHistory(SUBJECT)).length, before);
+});
+
+test("an omitted time falls back to the lifecycle clock", async () => {
+  const { lifecycle, engine } = harness();
+  const { now: _unused, ...withoutNow } = change(["gaming"]);
+  await lifecycle.applySelection(withoutNow);
+  const history = await engine.readEventHistory(SUBJECT);
+  assert.ok(history.length > 0);
 });

@@ -139,6 +139,14 @@ function fieldText(value: unknown): string {
   return value;
 }
 
+/**
+ * Caller-supplied times that drive stored decisions must not run ahead of the real clock by more than
+ * the allowed skew. Otherwise a far-future value makes live signals look expired.
+ */
+export function assertRecommendationTimestampNotAhead(timestampMs: number, referenceMs: number, message: string): void {
+  if (timestampMs > referenceMs + RECOMMENDATION_CANDIDATE_LIFECYCLE_CLOCK_SKEW_MS) throw new RangeError(message);
+}
+
 function nowMillis(value: unknown): number {
   return Date.parse(normalizeStrictRfc3339Timestamp(value, "Invalid recommendation candidate lifecycle timestamp."));
 }

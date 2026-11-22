@@ -309,3 +309,22 @@ test("bad input and retry options are rejected before any storage call", async (
   }
   assert.equal(local.log.length + pod.log.length, 0);
 });
+
+test("a far-future time is rejected before anything is read or written", async () => {
+  const { local, pod, key, loc } = setup();
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: "2099-01-01T00:00:00.000Z" }),
+    RangeError
+  );
+  assert.equal(local.records.has(key), true);
+  assert.equal(pod.records.has(key), false);
+  assert.deepEqual([...local.log, ...pod.log], []);
+});
+
+test("a time just inside the skew window still moves the profile", async () => {
+  const { local, pod, key, loc } = setup();
+  const now = new Date(Date.now() + 60_000).toISOString();
+  const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now });
+  assert.equal(result.outcome, "moved");
+  assert.equal(local.records.has(key), false);
+});

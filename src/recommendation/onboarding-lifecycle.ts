@@ -1,5 +1,6 @@
 import { sha256Hex } from "../runtime/hash.js";
 import {
+  assertRecommendationTimestampNotAhead,
   listRecommendationLifecycleExcludedCandidateIds,
   normalizeRecommendationCandidateLifecycleEvents,
   type RecommendationCandidateLifecycleEvent
@@ -201,8 +202,19 @@ export function createRecommendationOnboardingLifecycle(
   const clock = options.now ?? (() => new Date().toISOString());
   const serializer = createRecommendationKeyedSerializer();
 
+  const timestampMessage = "Invalid recommendation onboarding lifecycle timestamp.";
+
+  /** A time given by the caller may not run ahead of the lifecycle clock by more than the allowed skew. */
   function timestamp(value: unknown): string {
-    return normalizeStrictRfc3339Timestamp(value ?? clock(), "Invalid recommendation onboarding lifecycle timestamp.");
+    const current = normalizeStrictRfc3339Timestamp(clock(), timestampMessage);
+    if (value === undefined) return current;
+    const given = normalizeStrictRfc3339Timestamp(value, timestampMessage);
+    assertRecommendationTimestampNotAhead(
+      Date.parse(given),
+      Date.parse(current),
+      "Recommendation onboarding lifecycle time is too far ahead of the clock."
+    );
+    return given;
   }
 
   async function reconcile(

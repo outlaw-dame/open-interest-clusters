@@ -1,3 +1,4 @@
+import { assertRecommendationTimestampNotAhead } from "./candidate-lifecycle.js";
 import type { RecommendationConsentPolicy, RecommendationDataUse } from "./consent.js";
 import type { RecommendationInterestPrivacyBoundary } from "./interest-signal.js";
 import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
@@ -187,6 +188,7 @@ export async function transitionRecommendationProfilePersistence(
   // Writing and then deleting one record would destroy it.
   if (from.adapter === to.adapter && fromKey === toKey) throw new RecommendationProfilePersistenceTransitionError("transition.deny.same_location");
   const requestedAt = normalizeStrictRfc3339Timestamp(input.now ?? new Date().toISOString(), "Invalid recommendation profile persistence transition timestamp.");
+  assertRecommendationTimestampNotAhead(Date.parse(requestedAt), Date.now(), "Recommendation profile persistence transition time is too far ahead of the clock.");
   const retry = input.retry ?? {};
   if (!isRecord(retry)) throw new TypeError("Invalid recommendation profile persistence retry options.");
   const signal = input.signal;
@@ -226,7 +228,7 @@ export async function transitionRecommendationProfilePersistence(
     abortIf(signal);
     try {
       await withBackoff(() => deleteRecommendationProfileStoreRecordSafely(from.adapter, {
-        intent: { subjectId: input.subjectId, requestedAt, scope: "recommendation_derived_data", targets: ["profile", "event_history"] },
+        intent: { subjectId: input.subjectId, requestedAt, scope: "recommendation_derived_data", targets: ["profile"] },
         storageTarget: from.storageTarget,
         ...(from.namespace === undefined ? {} : { namespace: from.namespace }),
         ...(from.salt === undefined ? {} : { salt: from.salt })
