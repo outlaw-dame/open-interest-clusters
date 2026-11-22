@@ -201,6 +201,43 @@ test("a failure aborts the signal of a sibling call that is still running", asyn
   assert.ok(abortedAt - started < 1_000, `aborted after ${abortedAt - started} ms`);
 });
 
+test("a verifier that throws after it is aborted adds no second error and no unhandled rejection", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const configured = normalizeRecommendationEvidenceVerifierOptions({
+      verifier: {
+        id: "test-keys",
+        verify: (evidence: { index: number }, context: { signal: AbortSignal }) => {
+          if (evidence.index === 0) return new Promise((resolve) => setTimeout(() => resolve({ verified: false }), 10));
+          return new Promise((_, reject) => context.signal.addEventListener("abort", () => reject(new Error("late failure"))));
+        }
+      },
+      maxConcurrency: 3
+    });
+    await assert.rejects(
+      verifyRecommendationEvidence(configured, [{ index: 0 }, { index: 1 }, { index: 2 }], "lifecycle_event", SUBJECT, NOW),
+      (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "rejected"
+    );
+    // Give the late rejections time to surface if they were going to.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("after the first failure no further items are handed to the verifier", async () => {
+  let started = 0;
+  const configured = verifier(() => { started += 1; return { verified: false }; }, 5_000, { maxConcurrency: 1 });
+  await assert.rejects(
+    verifyRecommendationEvidence(configured, [{ index: 0 }, { index: 1 }, { index: 2 }], "lifecycle_event", SUBJECT, NOW),
+    (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "rejected"
+  );
+  assert.equal(started, 1);
+});
+
 test("one call cannot run past the total time limit", async () => {
   const started = Date.now();
   const configured = verifier(() => new Promise((resolve) => setTimeout(() => resolve({ verified: true }), 30)), 500, { maxConcurrency: 1, totalTimeoutMs: 70 });
