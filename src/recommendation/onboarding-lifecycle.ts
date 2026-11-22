@@ -322,6 +322,11 @@ function applyEvent(sourceEventId: string, signal: RecommendationInterestSignal,
  * The library's own first-session orchestrator already leaves these out. A first-session object
  * written before `excludeSourceIds` existed ignores it, and without this check candidates from a
  * reported (deleted, hidden or sensitive) set would come back.
+ *
+ * This only removes. It does not call the first session again to fill the gap, because a second call
+ * could repeat consent checks or source reads. Such an old object has already cut its list to `limit`
+ * before this runs, so fewer than `limit` results can come back. The library's own orchestrator
+ * applies `excludeSourceIds` before the cut and fills the limit.
  */
 function dropExcludedSetCandidates(result: RecommendationFirstSessionResult, sourceIds: readonly string[]): RecommendationFirstSessionResult {
   if (sourceIds.length === 0) return result;

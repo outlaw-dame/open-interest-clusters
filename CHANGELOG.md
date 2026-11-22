@@ -4,6 +4,10 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+### Documented
+
+- `lifecycle.refresh` can return fewer than `limit` recommendations when the first-session object ignores `excludeSourceIds` and had already cut its list to `limit`. The refresh filter only removes and does not rerun the first session. The library's own orchestrator is not affected.
+
 ## 0.3.0
 
 Changes from PR #136, on top of 0.2.0.
