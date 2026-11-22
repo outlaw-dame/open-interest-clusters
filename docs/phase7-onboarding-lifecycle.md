@@ -64,11 +64,14 @@ The derived-state orchestrator's checkpoint is a digest of the profile, so a can
 
 ### 6. Persistence-location transitions
 
+The placement evidence for a pod or private ATProto space comes from the `storageTarget` in the selection. The library does not check it against the place the profile is actually written, so the application must pass the same target to both. Pod records written as `local_only` by older releases keep that label until the next pod write or a transition; nothing flags them on read, and the stale label is the stricter one.
+
 `transitionRecommendationProfilePersistence` moves the profile record between `local_app` (device-owned) and `user_pod` (user-owned). Order is fixed: read source, write destination (consent enforced for the remote side, verified by reading back), delete source last. A crash at any point leaves at least one complete copy, and rerunning is safe:
 
 - a destination write that fails or fails verification leaves the source untouched;
 - if only the source delete fails, the error is `source_cleanup_pending`, and the same call finishes it;
 - if the source is already gone and the destination has the record, the result is `already_moved`;
+  - if that destination record still carries the wrong label (for example a pod record written as `local_only` by an older release), the rerun rewrites it, and a pod destination needs the consent policy for that write. A rerun without a policy fails closed instead of returning `already_moved`;
 - a destination copy with a newer `updatedAt` is kept and only the stale source is removed.
 
 Adapter and verification failures are retried with exponential backoff and full jitter (default 3 attempts, 200 ms base, doubling, capped at 30 s). Consent and placement denials are never retried. Provider-hosted, server-profile, ephemeral and operator placements are refused twice: by target and by the adapter placement manifest. A transition whose two sides resolve to the same adapter and key is rejected so a record cannot delete itself. Per-subject calls are serialized in process. An abort signal also interrupts a backoff wait, so a pending retry delay does not hold the call open.

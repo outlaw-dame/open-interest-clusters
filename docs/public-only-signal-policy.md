@@ -19,7 +19,7 @@ The legacy `privacyBoundary` values remain supported as processing-location and 
 - `provider_owned`: state controlled by the application, server, AppView, instance, or service operator;
 - `shared_operator`: aggregate infrastructure controlled by one or more operators rather than an individual user.
 
-Legacy records without explicit authority are interpreted fail closed: `local_only` maps to `device_owned`, `server_allowed` maps to `provider_owned`, and `aggregate_only` maps to `shared_operator`. A narrowly verified ActivityPods/Solid control path is recognized as `user_owned`.
+Legacy records without explicit authority are interpreted fail closed: `local_only` maps to `device_owned`, `server_allowed` maps to `provider_owned`, and `aggregate_only` maps to `shared_operator`. A narrowly verified ActivityPods/Solid control path, or a private ATProto space on the user's own PDS, is recognized as `user_owned`.
 
 ## Allowed affinity evidence
 

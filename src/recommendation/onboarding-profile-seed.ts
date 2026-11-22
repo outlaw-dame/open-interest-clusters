@@ -317,7 +317,7 @@ function appendCanonicalInterestSignals(
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
 ): void {
-    const selectedTopics = new Set(selection.selectedTopicIds);
+  const selectedTopics = new Set(selection.selectedTopicIds);
   const selectedTags = new Set(selection.selectedCanonicalTagIds);
   const emittedTargets = new Set<string>();
 
@@ -377,7 +377,7 @@ function appendHashtagSignals(
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
 ): void {
-    const seenHashtags = new Set<string>();
+  const seenHashtags = new Set<string>();
 
   for (const tagId of selection.expandedCanonicalTagIds) {
     const tag = findRecommendationCanonicalTagInIndex(catalogIndex, tagId);
