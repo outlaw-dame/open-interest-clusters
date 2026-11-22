@@ -62,6 +62,7 @@
     "RECOMMENDATION_ACTIVITYPUB_NORMALIZED_OBJECT_TYPES",
     "RECOMMENDATION_ACTIVITYPUB_NORMALIZED_UNDO_TYPES",
     "RECOMMENDATION_ACTIVITYPUB_VISIBILITIES",
+    "RECOMMENDATION_ATPROTO_LABEL_ATTESTATION_REFUSALS",
     "RECOMMENDATION_ATPROTO_LABEL_PROVENANCES",
     "RECOMMENDATION_ATPROTO_LABEL_VERIFICATION_FAILURES",
     "RECOMMENDATION_ATPROTO_NORMALIZED_COLLECTIONS",
@@ -274,6 +275,7 @@
     "createRecommendationActivityPodsPublicOutboxSourceAdapter",
     "createRecommendationActivityPubPublicOutboxSourceAdapter",
     "createRecommendationAtprotoBlocksClient",
+    "createRecommendationAtprotoLabelAttestation",
     "createRecommendationAtprotoModerationSuggestion",
     "createRecommendationAtprotoMutedListsClient",
     "createRecommendationAtprotoMutesClient",
@@ -472,6 +474,7 @@
     "rebuildPGliteFromSnapshot",
     "recommendationCandidateEventRecordDigest",
     "recommendationEvidenceAttestationProof",
+    "recommendationEvidenceContentDigest",
     "recommendationMastodonFilterContextForSurface",
     "recommendationProviderCapabilityState",
     "recommendationProviderDiscoveryAuthorityAtLeast",
@@ -637,6 +640,10 @@
       "mutuals_only",
       "local_only",
       "unknown"
+    ],
+    "RECOMMENDATION_ATPROTO_LABEL_ATTESTATION_REFUSALS": [
+      "negated_label",
+      "invalid_attestation_input"
     ],
     "RECOMMENDATION_ATPROTO_LABEL_PROVENANCES": [
       "hydrated_response",
@@ -902,7 +909,8 @@
       "https_origin",
       "authenticated_fetch",
       "protocol_signature",
-      "application_signature"
+      "application_signature",
+      "atproto_label_signature"
     ],
     "RECOMMENDATION_EVIDENCE_KINDS": [
       "lifecycle_event",

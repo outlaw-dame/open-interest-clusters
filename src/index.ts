@@ -72,6 +72,7 @@ export * from "./recommendation/provider-discovery.js";
 export * from "./recommendation/profile-pinned-interest-signals.js";
 export * from "./recommendation/atproto-labels.js";
 export * from "./recommendation/atproto-label-verification.js";
+export * from "./recommendation/atproto-label-attestation.js";
 export * from "./recommendation/atproto-query-labels-client.js";
 export * from "./recommendation/atproto-subscribe-labels-client.js";
 export * from "./recommendation/atproto-viewer-safety.js";

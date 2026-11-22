@@ -32,6 +32,20 @@ The result is `{ verified: true, keyType, negated, hasExpiry }` or `{ verified: 
 
 The caller resolves the DID document and decides how fresh it must be. Key rotation works because only the key in the document you pass counts. A label signed by a retired key fails with `signature_mismatch`. Labels cached from before a rotation need a re-check against the new document.
 
+## Turning a verified label into an attestation
+
+`createRecommendationAtprotoLabelAttestation({ label, didDocument, now, subjectId, sourceIds, kind, claim, verifierId, evidence? })` runs the verification above and returns `{ issued: true, attestation }` or `{ issued: false, reason }`. It issues only when the signature verified. The attestation has mechanism `atproto_label_signature`, proof class `signature` and authority `protocol_native`, and `verifiedAt` is the `now` you passed.
+
+- A signed negation is refused with `negated_label`. An attestation reads as a positive claim, and a retraction is not one. An expired label is refused with `expired`.
+- If the label has an `exp`, the attestation carries it as `expiresAt` and stops being accepted at that time, even inside `maxAgeMs`.
+- The attestation always has a `contentDigest`. By default it is the digest of the label as given (including `sig`), so a verifier built with `bindContent: true` accepts only that exact label. Pass `evidence` to bind something derived from the label instead. You are then vouching for the derivation.
+- A label with getters or non-plain values is refused (`malformed_label`) so that what was verified is what was digested. Bad subject, source, claim or verifier fields give `invalid_attestation_input`. The function does not throw.
+- Wrong key, tampered label, bad clock and the other failures return the fixed reasons from verification and issue nothing.
+
+Subject and source ids come from the caller and are not checked against the label. The evidence verifier matches them against what it derives from the evidence, so an attestation does not move to another subject or source set.
+
+Nothing in the core imports `@atproto/*` or `@ipld/*`, and a test scans `package.json` and the compiled `dist/src` to keep it that way.
+
 ## How it was tested
 
 - The encoder is compared with bytes produced by `@ipld/dag-cbor` 9.2.7, including integer and string length boundaries and multibyte text.
