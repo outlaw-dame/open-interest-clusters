@@ -46,6 +46,7 @@ import type {
   RecommendationFirstSessionResult
 } from "./first-session-orchestrator.js";
 import type { RecommendationInterestSignal } from "./interest-signal.js";
+import { hasExcludedProvenanceSource } from "./provenance-source-exclusion.js";
 import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import {
   buildRecommendationOnboardingSignals,
@@ -314,6 +315,22 @@ function applyEvent(sourceEventId: string, signal: RecommendationInterestSignal,
     sourceEventId,
     occurredAt,
     signal
+  });
+}
+
+/**
+ * The library's own first-session orchestrator already leaves these out. A first-session object
+ * written before `excludeSourceIds` existed ignores it, and without this check candidates from a
+ * reported (deleted, hidden or sensitive) set would come back.
+ */
+function dropExcludedSetCandidates(result: RecommendationFirstSessionResult, sourceIds: readonly string[]): RecommendationFirstSessionResult {
+  if (sourceIds.length === 0) return result;
+  const excluded = new Set(sourceIds);
+  const kept = result.recommendations.filter((item) => !hasExcludedProvenanceSource(item.candidate, excluded));
+  if (kept.length === result.recommendations.length) return result;
+  return Object.freeze({
+    ...result,
+    recommendations: Object.freeze(kept.map((item, index) => Object.freeze({ ...item, rank: index + 1 })))
   });
 }
 
@@ -661,7 +678,7 @@ export function createRecommendationOnboardingLifecycle(
           excludeCandidateIds: excludedCandidateIds,
           excludeSourceIds: excludedSetSourceIds
         });
-        return Object.freeze({ result, excludedCandidateIds, excludedSetSourceIds, propagation });
+        return Object.freeze({ result: dropExcludedSetCandidates(result, excludedSetSourceIds), excludedCandidateIds, excludedSetSourceIds, propagation });
       });
     }
   });

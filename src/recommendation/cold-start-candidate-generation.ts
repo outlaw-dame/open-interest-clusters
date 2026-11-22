@@ -7,6 +7,7 @@ import {
   type RecommendationCandidateProvenance,
   type RecommendationCandidateVerification
 } from "./candidate-domain.js";
+import { hasExcludedProvenanceSource } from "./provenance-source-exclusion.js";
 import {
   isRecommendationCandidateSourceAdapter,
   readRecommendationCandidateSourceAdapter,
@@ -687,7 +688,7 @@ export async function generateRecommendationColdStartCandidates(
   const generated: RecommendationColdStartGeneratedCandidate[] = [];
   for (const group of candidateGroups.values()) {
     const candidate = mergeCandidateGroup(group);
-    if (candidate.provenance.some((entry) => input.excludeSourceIds.has(entry.sourceId))) continue;
+    if (hasExcludedProvenanceSource(candidate, input.excludeSourceIds)) continue;
     const match = matchCandidate(candidate, profileIndex, input.languages);
     if (match === undefined) continue;
     generated.push(Object.freeze({ candidate, match }));

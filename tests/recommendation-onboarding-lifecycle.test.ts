@@ -48,7 +48,7 @@ function change(topics: readonly string[], now = T0, extra: Record<string, unkno
 // The lifecycle clock sits at the latest time these tests pass in, so explicit times are never ahead of it.
 let lifecycleClock = T2;
 
-function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[]; candidateKinds?: readonly RecommendationCandidateKind[]; evidenceVerifier?: RecommendationEvidenceVerifierOptions } = {}) {
+function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[]; candidateKinds?: readonly RecommendationCandidateKind[]; evidenceVerifier?: RecommendationEvidenceVerifierOptions; ignoreSourceExclusions?: boolean } = {}) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T0 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
   const tasks = new Map<string, RecommendationDerivedStateInvalidationTask>();
@@ -67,12 +67,16 @@ function harness(options: { failures?: RecommendationDerivedStateTarget[]; first
     invalidators: { embeddings: invalidator("embeddings"), candidate_cache: invalidator("candidate_cache"), explanation_cache: invalidator("explanation_cache") }
   });
   const firstSessionCalls: unknown[] = [];
-  const firstSession = options.firstSessionSources === undefined ? undefined : createRecommendationFirstSessionOrchestrator({
+  const realFirstSession = options.firstSessionSources === undefined ? undefined : createRecommendationFirstSessionOrchestrator({
     engine,
     sources: options.firstSessionSources,
     candidateKinds: options.candidateKinds ?? ["account"],
     evaluateEligibility: ({ candidate }) => { firstSessionCalls.push(candidate.candidate.candidateId); return { candidate: candidate.candidate, eligible: true, reasonCodes: ["eligible"], evaluatedAt: T0 }; }
   });
+  // A first-session object from before excludeSourceIds existed does not look at that field.
+  const firstSession = realFirstSession !== undefined && options.ignoreSourceExclusions === true
+    ? { execute: ({ excludeSourceIds: _ignored, ...request }: Parameters<typeof realFirstSession.execute>[0]) => realFirstSession.execute(request) }
+    : realFirstSession;
   const lifecycle: RecommendationOnboardingLifecycleWithCandidateEvents = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock, ...(options.evidenceVerifier === undefined ? {} : { evidenceVerifier: options.evidenceVerifier }) });
   return { engine, derived, lifecycle, calls, tasks, firstSessionCalls };
 }
@@ -458,6 +462,20 @@ test("a set-level event with no candidate ID drops that set's members and starte
     assert.deepEqual(run.excludedSetSourceIds, [SET_A]);
     assert.deepEqual(run.excludedCandidateIds, []);
   }
+});
+
+test("a first-session object that ignores excludeSourceIds still cannot bring a reported set back", async () => {
+  const sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["carol"])];
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: CURATED_KINDS, ignoreSourceExclusions: true });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const run = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, candidateEvents: [{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_A }], now: T1 });
+  assert.deepEqual(natives(run), ["https://social.example/collections/set-b", "https://social.example/users/carol"]);
+  assert.deepEqual(run.result.recommendations.map((item) => item.rank), [1, 2]);
+  assert.deepEqual(run.excludedSetSourceIds, [SET_A]);
+  // With no reported set nothing is dropped.
+  const clean = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, now: T1 });
+  assert.equal(clean.result.recommendations.length, 5);
 });
 
 test("a member in two sets is dropped when either set is reported, and an unknown set source ID changes nothing", async () => {
