@@ -28,14 +28,14 @@ This prevents an adopter from treating all recommendation data as one generic pr
 
 ## Allowed authority boundaries
 
-The manifest's `processingBoundary` says where the store runs. It does not relabel what is in it. Interest signals and profiles stay `local_only` (not disclosed to apps or providers, see [`privacy-model.md`](privacy-model.md)) in every allowed placement.
+The manifest's `processingBoundary` says where the store runs, and the interests in it carry the matching label: `local_only` on the device, `server_allowed` in a user-owned server store (see [`privacy-model.md`](privacy-model.md)). A user-controlled server is still a server, so keeping interests there needs the user's server-side consent. Missing, revoked, deleted or mismatched consent refuses the write.
 
 Subject-level recommendation state may be placed only in:
 
 1. `device_owned` storage with the `local_only` manifest boundary. The store runs on the device; or
 2. `user_owned` storage with the `server_allowed` manifest boundary, such as a correctly authorized ActivityPod, Solid Pod, or equivalent user-controlled remote store. A server runs the store, but it is the user's server.
 
-Any other pairing is refused: a device store cannot claim `server_allowed`, and a user-owned store cannot claim `local_only`.
+Any other pairing is refused: a device store cannot claim `server_allowed`, and a user-owned store cannot claim `local_only`. Writing a profile to a pod labels its interests `server_allowed`, and moving it between the device and a pod relabels it. Candidate events carry no label of their own, so only their store's manifest placement applies.
 
 `provider_owned` application, instance, AppView, and service-operator storage is not eligible for subject-level recommendation state.
 

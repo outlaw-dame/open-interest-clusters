@@ -6,7 +6,7 @@ Open Interest Clusters is designed for privacy-preserving discovery and recommen
 
 - Deny by default when consent, authorization, or a privacy boundary is ambiguous.
 - Process only data required for an explicitly allowed recommendation use.
-- Keep user-private personalization local-first unless another boundary is explicitly permitted. Interests stay `local_only` even when the profile is kept in a store the user owns.
+- Keep user-private personalization local-first unless another boundary is explicitly permitted. Interests are labelled `local_only` while they are processed on the user's device and `server_allowed` when the profile is kept in a user-owned server store such as a pod.
 - Separate public/shared semantic intelligence from subject-level profile state.
 - Do not copy raw subject identifiers into signals, profile snapshots, audit events, errors, or telemetry.
 - Treat consent revocation and deletion as lifecycle events that propagate to derived data.
@@ -25,22 +25,34 @@ Interest signals and profile state carry an explicit privacy boundary.
 
 ### `local_only`
 
-The default for user-private personalization. On a signal or profile entry it is a disclosure label: the interest is known to the user's own app and to stores the user controls, and is not handed to providers, servers, AppViews or other apps. It is not a rule about where the bytes may sit. A `local_only` profile may be kept on the device or in a user-owned remote store (an ActivityPods or Solid pod). Moving it between the two never changes the label.
+The default for user-private personalization. On a signal or profile entry it says the interest is processed on the user's own device and nowhere else. It is not handed to providers, servers, AppViews or other apps, and it is not sent to any server, including a server the user owns. A `local_only` profile is kept in a device-owned store.
 
 ### `server_allowed`
 
-On a signal, server-side profile processing or persistence is permitted only when consent explicitly allows the requested server-side use.
+On a signal or profile entry it says a server processes the interest. The only server that may hold subject-level interests is one the user owns, such as an ActivityPods or Solid pod. A user-controlled server is still a server, so the label is `server_allowed` there, and it requires the user's explicit server-side consent for the requested use. Missing, revoked, deleted or mismatched consent refuses the write. `server_allowed` is not permission for an app or provider to read the interests, and provider-owned and shared-operator stores are refused for subject-level state under every label.
+
+### `aggregate_only`
+
+Statistics that identify nobody. Never used for subject-level interests.
 
 ### Signal label versus store manifest
 
-The same three words appear in two places, and they answer different questions.
+The same words appear in two places, and they have to agree.
 
-| Where | Field | Question it answers |
+| Where | Field | What it says |
 | --- | --- | --- |
-| Signal or profile entry | `privacyBoundary` | Who may be told about this interest? |
-| Store manifest | `processingBoundary` | Where does this store run, and whose is it? |
+| Signal or profile entry | `privacyBoundary` | Where the interest is processed. |
+| Store manifest | `processingBoundary` | Where the store runs, and whose it is. |
 
-A manifest says `local_only` for a device-owned store with no network, and `server_allowed` for a remote store that the user owns. `server_allowed` there means a server operated for the user runs the store. It does not mean an app or provider may read the interests. Provider-owned and shared-operator stores are refused for subject-level state under every boundary. Interest signals keep their `local_only` label in both placements.
+| Placement | Manifest | Interests are labelled |
+| --- | --- | --- |
+| Device-owned store | `device_owned` + `local_only` | `local_only` |
+| User-owned server store (ActivityPods or Solid pod) | `user_owned` + `server_allowed` | `server_allowed` |
+| Provider-owned or shared-operator store | refused for subject-level state | not applicable |
+
+Writing a profile to a pod labels its interests `server_allowed`. Onboarding with `storageTarget: "user_pod"` does this by default, and the device default stays `local_only`. Asking for a label that does not fit the target (`local_only` for a pod, `server_allowed` for the device) throws instead of being rewritten. Moving a profile between the two relabels it, see the lifecycle doc.
+
+Releases 0.2.0 and 0.3.0 stored onboarding profiles in a pod with `local_only` labels. Those records still load. They are accepted as stored, and the next write to the pod or the next transition relabels them `server_allowed`. A stale `local_only` label is the stricter one, so reading it grants nothing extra.
 
 ### Matching happens against the local profile
 

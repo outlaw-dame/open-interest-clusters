@@ -29,9 +29,10 @@ export type RecommendationStorageAuthorityReason =
  *   ActivityPods or Solid pod. Provider and operator services are refused.
  * - `aggregate_only`: shared infrastructure for statistics that identify nobody.
  *
- * Interests written to a `server_allowed` user-owned store keep their `local_only` label. The label
- * means the interests are not disclosed to apps or providers. It does not say the bytes never leave the
- * device.
+ * The interests kept in a store carry the matching label on their own `privacyBoundary`: `local_only` on
+ * a device, `server_allowed` in a user-owned server store. The label says where the interests are
+ * processed. A user-owned server is still a server, even though the user controls it, so using one needs
+ * the user's server-side consent.
  */
 export type RecommendationProcessingBoundary =
   | "local_only"
