@@ -1,6 +1,6 @@
 # Phase 7: onboarding lifecycle and refresh
 
-Phase 7 keeps onboarding-derived state correct after the first session. It adds four small modules and two additive methods on existing orchestrators. It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
+Phase 7 keeps onboarding-derived state correct after the first session. It adds four small modules, one required method on each of two existing orchestrator interfaces, and one new invalidation reason. It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
 
 | Concern | Where it lives |
 | --- | --- |
@@ -91,11 +91,31 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 
 ## Public API changes
 
-All additive, but two are source-visible to anyone who implements these interfaces by hand:
+New exports are additive. Three changes to existing exported types are not, and they break code that implements or switches over those types by hand:
 
-- `RecommendationEngineOrchestrator` gains `readEventHistory(subjectId)`.
-- `RecommendationDerivedStateInvalidationOrchestrator` gains `invalidateCandidateState(input)`.
-- `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gains `candidate_state_changed`. An invalidator that switches exhaustively on the reason needs a new case. Stored tasks from older versions still load.
+- `RecommendationEngineOrchestrator` gains a required `readEventHistory(subjectId)`. A hand-written implementation or test double stops compiling until it adds the method.
+- `RecommendationDerivedStateInvalidationOrchestrator` gains a required `invalidateCandidateState(input)`. Same effect for implementers.
+- `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gains `candidate_state_changed`. A `switch` over the reason that has no default branch fails to compile until it handles the new case.
+
+Callers that only use the orchestrators the package builds are not affected. Tasks stored by older versions still load. The reverse does not hold: an older version reading a task saved with `candidate_state_changed` will reject it, so roll readers forward before writers.
+
+Because of the three items above this ships as 0.2.0, a minor bump in the pre-1.0 range.
+
+### 0.2.0 breaking changes
+
+Everything below breaks existing callers, not only the Phase 7 interface additions:
+
+- `RecommendationEngineOrchestrator` and `RecommendationDerivedStateInvalidationOrchestrator` have the new required methods described above, and the reason union is wider.
+- The `collections` capability is now `communities`. There is no alias, so callers have to rename it.
+- `starterPackMembers` takes `{ eligibility, consent }` wrappers instead of bare members.
+- Member candidates must carry `curated_account_set` provenance.
+- The curated-set source also emits `starter_pack` candidates when asked for that kind.
+
+## Clocks
+
+The lifecycle reads its own clock (`now` option, defaulting to the system time). A `now` passed to `applySelection`, `withdrawSelections`, `reportCandidateEvents` or `refresh` that is more than five minutes ahead of that clock is rejected with a `RangeError`. Expiry and event timestamps depend on this value, and trusting a far-future one would make live signals look expired. The profile move applies the same bound to its `now` against the system time.
+
+The seed's `observedAt` and the lifecycle's `now` are separate clocks. `observedAt` defaults to `selection.selectedAt` and records when the user made the choice. `now` is when the lifecycle runs and stamps `occurredAt` on the events it writes. A selection made well before `now` therefore has signals whose evidence time is older than their event time. That is intended, and expiry is judged against `now`.
 
 ## Residual limits
 
