@@ -34,11 +34,12 @@ import {
   type RecommendationCandidateLifecycleEvent
 } from "./candidate-lifecycle.js";
 import type {
+  RecommendationCandidateStateInvalidator,
   RecommendationDerivedStateInvalidationOrchestrator,
   RecommendationDerivedStateProcessResult,
   RecommendationDerivedStatePropagationResult
 } from "./derived-state-invalidation-orchestrator.js";
-import type { RecommendationEngineOrchestrator } from "./engine-orchestrator.js";
+import type { RecommendationEngineEventHistoryReader } from "./engine-orchestrator.js";
 import type {
   RecommendationFirstSessionOrchestrator,
   RecommendationFirstSessionRequest,
@@ -122,10 +123,18 @@ export interface RecommendationOnboardingRefreshResult {
 }
 
 export interface RecommendationOnboardingLifecycleOptions {
-  /** The invalidating wrapper around the engine. All writes go through it. */
-  derived: Pick<RecommendationDerivedStateInvalidationOrchestrator, "process" | "repair" | "invalidateCandidateState">;
-  /** The same engine the wrapper drives. Only used to read accepted event history. */
-  engine: Pick<RecommendationEngineOrchestrator, "readEventHistory">;
+  /**
+   * The invalidating wrapper around the engine. All writes go through it. `invalidateCandidateState` is
+   * optional: without it `reportCandidateEvents` (and a `refresh` that reports events) throws before
+   * anything is stored, because candidate caches could not be cleared. Everything else still works.
+   */
+  derived: Pick<RecommendationDerivedStateInvalidationOrchestrator, "process" | "repair"> & Partial<RecommendationCandidateStateInvalidator>;
+  /**
+   * The same engine the wrapper drives. Only used to read accepted event history. `readEventHistory`
+   * is optional: without it `applySelection` and `withdrawSelections` throw before any write, because
+   * the live selections could not be worked out. Event reports, plan assessment and refresh still work.
+   */
+  engine: object & Partial<RecommendationEngineEventHistoryReader>;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
   now?: () => string;
   /**
@@ -291,8 +300,8 @@ export function createRecommendationOnboardingLifecycle(
   if (
     !isRecord(options) || !isRecord(options.derived) || !isRecord(options.engine) ||
     typeof options.derived.process !== "function" || typeof options.derived.repair !== "function" ||
-    typeof options.derived.invalidateCandidateState !== "function" ||
-    typeof options.engine.readEventHistory !== "function" ||
+    (options.derived.invalidateCandidateState !== undefined && typeof options.derived.invalidateCandidateState !== "function") ||
+    (options.engine.readEventHistory !== undefined && typeof options.engine.readEventHistory !== "function") ||
     (options.firstSession !== undefined && (!isRecord(options.firstSession) || typeof options.firstSession.execute !== "function")) ||
     (options.now !== undefined && typeof options.now !== "function")
   ) {
@@ -393,6 +402,18 @@ export function createRecommendationOnboardingLifecycle(
     return history.map((event) => event.operationId).join("\u0000");
   }
 
+  function readHistoryOrThrow(subjectId: string): Promise<readonly RecommendationSignalLedgerEventInput[]> {
+    const read = options.engine.readEventHistory;
+    if (read === undefined) throw new TypeError("This onboarding lifecycle needs an engine with readEventHistory to change selections.");
+    return read.call(options.engine, subjectId);
+  }
+
+  function requireCandidateStateInvalidator(): (input: { subjectId: string; occurredAt: string }) => Promise<RecommendationDerivedStatePropagationResult> {
+    const invalidate = options.derived.invalidateCandidateState;
+    if (invalidate === undefined) throw new TypeError("This onboarding lifecycle needs a derived-state orchestrator with invalidateCandidateState to report candidate events.");
+    return (input) => invalidate.call(options.derived, input);
+  }
+
   async function reconcile(
     subjectId: string,
     now: string,
@@ -414,7 +435,7 @@ export function createRecommendationOnboardingLifecycle(
     desired: ReadonlyMap<string, { signal: RecommendationInterestSignal; digest: string }>,
     withdrawalReason: RecommendationSignalRetractionReason
   ): Promise<RecommendationOnboardingSelectionChangeResult> {
-    const history = await options.engine.readEventHistory(subjectId);
+    const history = await readHistoryOrThrow(subjectId);
     const view = readHistory(history, Date.parse(now));
     const added: string[] = [];
     const updated: string[] = [];
@@ -451,7 +472,7 @@ export function createRecommendationOnboardingLifecycle(
       // ledger after the history was read, which shows up as a ledger conflict. If the history really
       // moved, plan again from it. Any other failure is returned as is.
       if (error instanceof TypeError) {
-        const latest = await options.engine.readEventHistory(subjectId);
+        const latest = await readHistoryOrThrow(subjectId);
         if (historySignature(latest) !== historySignature(history)) throw new StalePlanError(error);
       }
       throw error;
@@ -480,6 +501,8 @@ export function createRecommendationOnboardingLifecycle(
     // With a store, consent comes first and events it already holds are not verified again. A replay
     // detecting verifier would reject the retry of a report whose save failed, and the held events
     // were already through it. Everything else is refused here, before storing or clearing any cache.
+    // Checked up front so a missing port fails before consent is read or anything is stored.
+    const invalidate = requireCandidateStateInvalidator();
     let fresh = events;
     if (eventStore !== undefined) {
       await requireStoreConsent(subjectId, policy);
@@ -492,7 +515,7 @@ export function createRecommendationOnboardingLifecycle(
     // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is safe
     // because an event that is already stored is not stored twice and not verified twice.
     if (eventStore !== undefined) await persistEvents(subjectId, events, now);
-    const propagation = await options.derived.invalidateCandidateState({ subjectId, occurredAt: now });
+    const propagation = await invalidate({ subjectId, occurredAt: now });
     return Object.freeze({
       subjectId,
       ...verification,

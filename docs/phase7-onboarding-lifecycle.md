@@ -1,6 +1,6 @@
 # Phase 7: onboarding lifecycle and refresh
 
-Phase 7 keeps onboarding-derived state correct after the first session. It adds a handful of small modules (the lifecycle, candidate lifecycle assessment, profile persistence transition, an optional candidate event store, an optional evidence verifier, and a keyed serializer), required methods on three existing interfaces, one new invalidation reason and one new state domain. The breaking changes are listed under "Public API changes". It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
+Phase 7 keeps onboarding-derived state correct after the first session. It adds a handful of small modules (the lifecycle, candidate lifecycle assessment, profile persistence transition, an optional candidate event store, an optional evidence verifier, and a keyed serializer), one new invalidation reason, one new state domain and two new required methods on the lifecycle object itself. The breaking changes are listed under "Public API changes". It reuses the signal ledger, the derived-state invalidation task journal, the deletion replay barrier and the hardened profile persistence. It adds no second state system.
 
 | Concern | Where it lives |
 | --- | --- |
@@ -97,17 +97,31 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 
 ## Public API changes
 
-New exports are additive. The changes to existing exported types below are not, and they break code that implements or switches over those types by hand:
+New exports are additive. Interfaces that an application implements by hand (engine and derived-state ports, stores, verifiers) gained no required members. Where Phase 7 needs a new capability from such a port, it lives on a separate extension interface that the lifecycle looks for at runtime:
 
-- `RecommendationEngineOrchestrator` gains a required `readEventHistory(subjectId)`. A hand-written implementation or test double stops compiling until it adds the method.
-- `RecommendationDerivedStateInvalidationOrchestrator` gains a required `invalidateCandidateState(input)`. Same effect for implementers.
-- `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gains `candidate_state_changed`. A `switch` over the reason that has no default branch fails to compile until it handles the new case.
-- `RecommendationOnboardingLifecycle` gains the required methods `listReportedCandidateEvents` and `assessPlan`. A hand-written implementation stops compiling until it adds them.
-- `RECOMMENDATION_STATE_DOMAINS` gains `candidate_lifecycle_events`, which breaks exhaustive `Record<RecommendationStateDomain, ...>` maps in caller code.
-- `RecommendationEvidenceVerificationState` gains `partial`, and results gain `verifiedKinds` and `storedEventsNotChecked`. A `switch` over the state needs a new case, and code that builds an assessment or report result by hand needs the two fields.
-- `RecommendationCandidateEventStore.save` takes an optional third argument and the interface gains the optional `supportsCompareAndSet`. Both are additive for stores. The in-memory reference store's default manifest is now `ephemeral` with adapter ID `in-memory-candidate-events-ephemeral`.
+- `readEventHistory(subjectId)` is on `RecommendationEngineEventHistoryReader`, not on `RecommendationEngineOrchestrator`. `createRecommendationEngineOrchestrator` returns `RecommendationEngineOrchestratorWithHistory`, so code using the package's engine sees it. A wrapper or test double that lacks it still compiles. A lifecycle built on an engine without it throws a `TypeError` from `applySelection` and `withdrawSelections` before anything is written. Event reports, `assessPlan` and `refresh` do not need it.
+- `invalidateCandidateState(input)` is on `RecommendationCandidateStateInvalidator`, not on `RecommendationDerivedStateInvalidationOrchestrator`. The factory returns `RecommendationDerivedStateInvalidationOrchestratorWithCandidateState`. A lifecycle built on a derived-state port without it throws a `TypeError` from `reportCandidateEvents` (and from a `refresh` that reports events) before consent is read or anything is stored, because the candidate caches could not be cleared. Selections, `assessPlan` and a `refresh` with no events still work.
 
-Callers that only use the orchestrators the package builds are not affected. Tasks stored by older versions still load. The reverse does not hold: an older version reading a task saved with `candidate_state_changed` will reject it, so roll readers forward before writers.
+What still breaks existing code, all of it type-level and all of it on types the library produces or on unions that grew:
+
+- `RecommendationOnboardingLifecycle` gains the required methods `listReportedCandidateEvents` and `assessPlan`. The library builds this object, so only a hand-written double stops compiling.
+- `RecommendationCandidatePlanAssessment` and the report result gain `evidenceVerification`, `verifiedKinds` and `storedEventsNotChecked`. Code that builds one of these by hand has to add them. Code that only reads them is unaffected.
+- `RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS` gains `candidate_state_changed`, `RECOMMENDATION_STATE_DOMAINS` gains `candidate_lifecycle_events`, and `RecommendationEvidenceVerificationState` gains `partial`. An exhaustive `switch` or `Record<..., ...>` over any of them fails to compile until it handles the new value. See "Open unions" below.
+
+Not breaking: the consent `policy` input. It is only required when a candidate event store is configured, and a lifecycle without a store never asks for it. `RecommendationCandidateEventStore.save` takes an optional third argument and the interface gains the optional `supportsCompareAndSet`. The candidate event store and its in-memory reference implementation are new in this release, so its `ephemeral` default manifest (adapter ID `in-memory-candidate-events-ephemeral`) does not change anything that existed before.
+
+Callers that only use the orchestrators the package builds are not affected. Tasks stored by older versions still load. The reverse does not hold: an older version reading a task saved with `candidate_state_changed` will reject it with `Invalid recommendation derived-state invalidation reason.` (these task records have no version tag and are short-lived), so roll readers forward before writers. Stored candidate event records carry `schemaVersion`. A reader that meets a later `recommendation-candidate-event-record.vN` throws `Unsupported recommendation candidate event record schema version. Upgrade this library to read it.` instead of a parse error, and never guesses at the contents.
+
+### Open unions
+
+These lists can grow in a minor release, so code that branches on them needs a default case that fails safe (treat an unknown value as the least trusting one):
+
+- derived-state invalidation reasons (`RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS`) and targets
+- state domains (`RECOMMENDATION_STATE_DOMAINS`) and persistence modes
+- evidence verification states (`unverified`, `partial`, `verified`) and evidence kinds
+- provider capability names and other capability enums
+
+`tests/public-api-surface.test.ts` pins the exported names and the member lists of the interfaces above against `tests/fixtures/public-api-surface.json`. After an intentional API change, run `pnpm build && UPDATE_API_SURFACE=1 node --test dist/tests/public-api-surface.test.js`, review the fixture diff and commit it with the change.
 
 Because of these items this ships as 0.2.0, a minor bump in the pre-1.0 range.
 

@@ -10,6 +10,7 @@ import { assertValidRecommendationProfileSubjectId } from "./profile-store-persi
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
 export const RECOMMENDATION_CANDIDATE_EVENT_RECORD_SCHEMA_VERSION = "recommendation-candidate-event-record.v1" as const;
+const RECORD_SCHEMA_FAMILY_PATTERN = /^recommendation-candidate-event-record\.v\d+$/u;
 
 /** Placement domain the event record is checked against. */
 export const RECOMMENDATION_CANDIDATE_EVENT_STATE_DOMAIN = "candidate_lifecycle_events" as const;
@@ -131,6 +132,14 @@ export function readRecommendationCandidateEventRecord(
   if (raw === undefined) return Object.freeze([]);
   if (!isRecord(raw)) return bad();
   const record: Record<string, unknown> = raw;
+  // A record written by a newer version of this format is refused with a message that says so, rather
+  // than as a generic parse failure. It is never read on a guess: dropping it would make plans look usable.
+  if (
+    typeof record.schemaVersion === "string" && record.schemaVersion !== RECOMMENDATION_CANDIDATE_EVENT_RECORD_SCHEMA_VERSION &&
+    RECORD_SCHEMA_FAMILY_PATTERN.test(record.schemaVersion)
+  ) {
+    throw new TypeError("Unsupported recommendation candidate event record schema version. Upgrade this library to read it.");
+  }
   if (
     Object.keys(record).sort().join(",") !== "digest,entries,schemaVersion,subjectId,updatedAt" ||
     record.schemaVersion !== RECOMMENDATION_CANDIDATE_EVENT_RECORD_SCHEMA_VERSION || record.subjectId !== subjectId ||

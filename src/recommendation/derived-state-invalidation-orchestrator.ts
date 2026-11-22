@@ -113,6 +113,16 @@ export interface RecommendationDerivedStateInvalidationOrchestrator {
   process(input: RecommendationEngineProcessInput): Promise<RecommendationDerivedStateProcessResult>;
   synchronize(input: RecommendationEngineSynchronizeInput): Promise<RecommendationDerivedStateSynchronizeResult>;
   repair(subjectId: string): Promise<RecommendationDerivedStatePropagationResult>;
+  deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationDerivedStateDeletionResult>;
+}
+
+/**
+ * Optional extension of the derived-state port. It is kept apart from
+ * `RecommendationDerivedStateInvalidationOrchestrator` so an app that wraps or re-implements that port
+ * does not have to add it. The library's own orchestrator provides it, and the onboarding lifecycle
+ * looks for it at runtime.
+ */
+export interface RecommendationCandidateStateInvalidator {
   /**
    * Durably invalidates the candidate and explanation caches for a subject when a candidate fact
    * changed (consent revoked, source gone, identity moved) without any profile change. Uses the same
@@ -120,8 +130,11 @@ export interface RecommendationDerivedStateInvalidationOrchestrator {
    * alone because the profile did not change.
    */
   invalidateCandidateState(input: { subjectId: string; occurredAt?: string }): Promise<RecommendationDerivedStatePropagationResult>;
-  deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationDerivedStateDeletionResult>;
 }
+
+/** What `createRecommendationDerivedStateInvalidationOrchestrator` returns: the port plus candidate-state invalidation. */
+export type RecommendationDerivedStateInvalidationOrchestratorWithCandidateState =
+  RecommendationDerivedStateInvalidationOrchestrator & RecommendationCandidateStateInvalidator;
 
 export class RecommendationDerivedStateInvalidationPendingError extends Error {
   readonly pendingTargets: readonly RecommendationDerivedStateTarget[];
@@ -326,7 +339,7 @@ function processReason(input: RecommendationEngineProcessInput): RecommendationD
 
 export function createRecommendationDerivedStateInvalidationOrchestrator(
   options: RecommendationDerivedStateInvalidationOrchestratorOptions
-): RecommendationDerivedStateInvalidationOrchestrator {
+): RecommendationDerivedStateInvalidationOrchestratorWithCandidateState {
   if (!isPlainRecord(options) || !isPlainRecord(options.engine) || !isPlainRecord(options.invalidators)) {
     throw new TypeError("Invalid recommendation derived-state orchestrator options.");
   }
