@@ -121,3 +121,9 @@ The following are intentional invariants:
 - no unbounded probes, concurrency, retries, identifiers, endpoints, or capability lists;
 - no unknown protocol binding published as usable;
 - unknown/missing capability support remains fail-closed.
+
+## Capability rename: `collections` is now `communities`
+
+The provider capability that gates community candidates used to be called `collections`. That name collided with Mastodon Collections (curated sets of accounts), so it is now `communities`.
+
+This is a breaking change and there is no compatibility alias. A provider descriptor or discovery observation that still reports `collections` is treated like any other unknown capability. Observation normalization throws `Invalid recommendation provider capability observation.`, and a community action plan built from a descriptor that only has `collections` is rejected because it has no supported `communities` capability. Producers need to report `communities` instead.

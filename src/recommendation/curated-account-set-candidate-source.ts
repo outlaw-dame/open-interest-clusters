@@ -52,13 +52,18 @@ function providerForActorUri(uri: string): string {
   return parsed.hostname.toLocaleLowerCase("en-US");
 }
 
+/** Source ID stamped on every candidate that came from the given curated set. */
+export function createRecommendationCuratedAccountSetSourceId(provider: string, setId: string): string {
+  return `curated-set:v1:${sha256Hex(`${provider}:${setId}`)}`;
+}
+
 function provenanceForMember(
   set: RecommendationCuratedAccountSet,
   member: RecommendationCuratedAccountMember
 ): RecommendationCandidateProvenance {
   return Object.freeze({
     kind: "curated_account_set",
-    sourceId: `curated-set:v1:${sha256Hex(`${set.provider}:${set.id}`)}`,
+    sourceId: createRecommendationCuratedAccountSetSourceId(set.provider, set.id),
     sourceItemId: member.accountId,
     curator: set.curatorId,
     sourceUrl: set.url,

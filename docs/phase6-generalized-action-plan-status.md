@@ -8,7 +8,7 @@ Implemented:
 - feed/list/labeler subscription plans;
 - community follow plans;
 - hashtag follow plans;
-- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result;
+- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result and to accepted curated-set membership consent (caller-supplied and unsigned, so checked for consistency only; revocation after plan creation is rechecked at revalidation and propagation is left to Phase 7);
 - eligible-instance signup navigation plans;
 - exact normalized candidate-snapshot binding, including metadata and provenance;
 - explicit eligible-only evidence validation;
