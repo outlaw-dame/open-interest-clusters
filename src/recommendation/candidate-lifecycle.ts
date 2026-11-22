@@ -5,8 +5,10 @@ import {
   combineRecommendationEvidenceVerification,
   verifyRecommendationEvidence,
   type NormalizedRecommendationEvidenceVerifier,
+  type RecommendationEvidenceKind,
   type RecommendationEvidenceVerificationState
 } from "./evidence-verifier.js";
+import { assertValidRecommendationProfileSubjectId } from "./profile-store-persistence-key.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
 export const RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENT_SCHEMA_VERSION = "recommendation-candidate-lifecycle-event.v1" as const;
@@ -84,12 +86,15 @@ export interface RecommendationCandidatePlanAssessment {
   requiresRevalidation: true;
   assessedAt: string;
   /**
-   * `verified` only when an evidence verifier accepted the extra events and the plan's starter-pack
-   * consent and provenance in this call. Otherwise `unverified`: the evidence is as trustworthy as the
-   * caller that supplied it. Verification can only reject evidence, so it never makes a plan more usable.
+   * `verified` when an evidence verifier accepted everything this call used. `partial` when it
+   * accepted what it was asked about but stored events were relied on unchecked (see
+   * `storedEventsNotChecked`). `unverified` when nothing was checked. `verifiedKinds` lists which
+   * kinds of evidence were accepted. Verification can only reject evidence, so it never makes a plan more usable.
    */
   evidenceVerification: RecommendationEvidenceVerificationState;
   verifierId?: string;
+  verifiedKinds: readonly RecommendationEvidenceKind[];
+  storedEventsNotChecked: number;
   reasons: readonly RecommendationCandidatePlanAssessmentReason[];
   /** Members hit by at least one reason. A new plan must not include them without fresh evidence. */
   affectedMemberCandidateIds: readonly string[];
@@ -428,9 +433,10 @@ export async function assessRecommendationCandidateActionPlanWithEvidence(
   eventsInput: readonly RecommendationCandidateLifecycleEvent[],
   options: RecommendationCandidatePlanEvidenceAssessmentOptions
 ): Promise<RecommendationCandidatePlanAssessment> {
+  if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
   const { subjectId, evidenceVerifier, storedEvents, ...assessOptions } = options;
   assertPlanShape(planInput);
-  if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
+  assertValidRecommendationProfileSubjectId(subjectId);
   const now = normalizeStrictRfc3339Timestamp(options.now, "Invalid recommendation plan assessment timestamp.");
   const events = normalizeRecommendationCandidateLifecycleEvents(eventsInput, { now });
   const provenance = planInput.candidate.provenance.filter((item) => item.kind === "curated_account_set");
@@ -438,7 +444,7 @@ export async function assessRecommendationCandidateActionPlanWithEvidence(
     await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now),
     await verifyRecommendationEvidence(evidenceVerifier, planInput.members ?? [], "starter_pack_consent", subjectId, now),
     await verifyRecommendationEvidence(evidenceVerifier, planInput.members === undefined ? [] : provenance, "starter_pack_provenance", subjectId, now)
-  ]);
+  ], storedEvents?.length ?? 0);
   const assessment = assessRecommendationCandidateActionPlan(planInput, [...(storedEvents ?? []), ...events], assessOptions);
   return Object.freeze({ ...assessment, ...verification });
 }

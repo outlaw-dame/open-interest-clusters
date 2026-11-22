@@ -6,6 +6,9 @@ import {
   mergeRecommendationCandidateEventEntries,
   normalizeRecommendationCandidateEventStoreLimits,
   readRecommendationCandidateEventRecord,
+  recommendationCandidateEventRecordDigest,
+  selectNewRecommendationCandidateEvents,
+  RecommendationCandidateEventConflictError,
   type RecommendationCandidateEventStore,
   type RecommendationCandidateEventStoreLimits
 } from "./candidate-event-store.js";
@@ -14,6 +17,7 @@ import { RecommendationConsentDeniedError, requireRecommendationConsent } from "
 import type { RecommendationConsentPolicy } from "./consent.js";
 import {
   RECOMMENDATION_EVIDENCE_UNVERIFIED,
+  combineRecommendationEvidenceVerification,
   normalizeRecommendationEvidenceVerifierOptions,
   verifyRecommendationEvidence,
   type NormalizedRecommendationEvidenceVerifier,
@@ -97,7 +101,11 @@ export interface RecommendationOnboardingCandidateReportInput {
 
 export interface RecommendationOnboardingRefreshInput {
   request: RecommendationFirstSessionRequest;
-  /** Required when events are reported and a candidate event store is configured. */
+  /**
+   * Required when events are reported and a candidate event store is configured. When given on a
+   * refresh that reports nothing, consent is checked before stored events are read, and denied
+   * consent deletes them. Without it, stored events are still read and only ever exclude more.
+   */
   policy?: RecommendationConsentPolicy;
   /** Candidate facts that changed since the last run. Reported before the rerun, so caches are cleared first. */
   candidateEvents?: readonly RecommendationCandidateLifecycleEvent[];
@@ -144,6 +152,8 @@ export interface RecommendationOnboardingLifecycleOptions {
 export interface RecommendationOnboardingPlanAssessmentInput {
   subjectId: string;
   plan: RecommendationCandidateActionPlan;
+  /** When given, consent is checked before stored events are read, and denied consent deletes them. */
+  policy?: RecommendationConsentPolicy;
   /** Extra events to consider on top of the stored ones. */
   events?: readonly RecommendationCandidateLifecycleEvent[];
   maxEligibilityAgeMs?: number;
@@ -177,6 +187,12 @@ export interface RecommendationOnboardingLifecycle {
 const STALE_PLAN_RETRY = Object.freeze({ attempts: 5, initialDelayMs: 5, maxDelayMs: 100, jitterRatio: 0.5 });
 
 const CANDIDATE_EVENT_STORE_RETRY = Object.freeze({ attempts: 4, initialDelayMs: 25, maxDelayMs: 400, jitterRatio: 0.5 });
+
+/** Reload-and-merge attempts when a compare-and-set store reports that another writer got there first. */
+const CANDIDATE_EVENT_CONFLICT_RETRY = Object.freeze({ attempts: 6, initialDelayMs: 10, maxDelayMs: 200, jitterRatio: 0.5 });
+
+/** Largest exclusion list the first session accepts. Mirrors the candidate generation limit. */
+const MAX_EXCLUSION_IDS = 5_000;
 
 /** Marks a failed write that happened while the ledger moved under the plan, so the plan can be redone. */
 class StalePlanError extends Error {
@@ -299,7 +315,8 @@ export function createRecommendationOnboardingLifecycle(
 
   /** Store calls fail closed: they retry with backoff, then surface the last error. */
   function storeIo<T>(work: (store: RecommendationCandidateEventStore) => Promise<T>): Promise<T> {
-    return executeWithRetry(() => work(eventStore!), eventRetry);
+    // A conflict means the record is stale, so repeating the same save cannot help. persistEvents reloads instead.
+    return executeWithRetry(() => work(eventStore!), { ...eventRetry, shouldRetry: ({ error }) => !(error instanceof RecommendationCandidateEventConflictError) });
   }
 
   async function readStoredEntries(subjectId: string, now: string) {
@@ -310,11 +327,27 @@ export function createRecommendationOnboardingLifecycle(
     return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
   }
 
+  /**
+   * Loads, merges and saves. A store that supports compare-and-set is told which record version the
+   * merge was built from, so a write from another process or device in between is noticed: the save is
+   * refused, and this reloads and merges again instead of overwriting it. A store that does not
+   * declare support is single-writer, and last write wins.
+   */
   async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string): Promise<void> {
-    const merged = mergeRecommendationCandidateEventEntries(await readStoredEntries(subjectId, now), events, eventLimits!, now);
-    if (!merged.changed) return;
-    const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
-    await storeIo((store) => store.save(subjectId, record));
+    const retry: RetryPolicyOptions = {
+      ...CANDIDATE_EVENT_CONFLICT_RETRY,
+      ...(eventRetry.random === undefined ? {} : { random: eventRetry.random }),
+      ...(eventRetry.retrySleeper === undefined ? {} : { retrySleeper: eventRetry.retrySleeper }),
+      shouldRetry: ({ error }) => error instanceof RecommendationCandidateEventConflictError
+    };
+    await executeWithRetry(async () => {
+      const raw = await storeIo((store) => store.load(subjectId));
+      const merged = mergeRecommendationCandidateEventEntries(readRecommendationCandidateEventRecord(raw, subjectId, eventLimits!, now), events, eventLimits!, now);
+      if (!merged.changed) return;
+      const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
+      const expected = eventStore!.supportsCompareAndSet === true ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
+      await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected));
+    }, retry);
   }
 
   /** Revoked or denied consent removes what was kept. If the removal fails, the call fails with it. */
@@ -444,14 +477,21 @@ export function createRecommendationOnboardingLifecycle(
     if (events.length === 0) {
       return Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
     }
-    // Refuse unverified-by-a-configured-verifier events before storing them or clearing any cache.
-    const verification = await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now);
-    // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is harmless
-    // because an event that is already stored is not stored twice.
+    // With a store, consent comes first and events it already holds are not verified again. A replay
+    // detecting verifier would reject the retry of a report whose save failed, and the held events
+    // were already through it. Everything else is refused here, before storing or clearing any cache.
+    let fresh = events;
     if (eventStore !== undefined) {
       await requireStoreConsent(subjectId, policy);
-      await persistEvents(subjectId, events, now);
+      fresh = selectNewRecommendationCandidateEvents(await readStoredEntries(subjectId, now), events);
     }
+    const verification = combineRecommendationEvidenceVerification(
+      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now)],
+      events.length - fresh.length
+    );
+    // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is safe
+    // because an event that is already stored is not stored twice and not verified twice.
+    if (eventStore !== undefined) await persistEvents(subjectId, events, now);
     const propagation = await options.derived.invalidateCandidateState({ subjectId, occurredAt: now });
     return Object.freeze({
       subjectId,
@@ -523,7 +563,9 @@ export function createRecommendationOnboardingLifecycle(
       assertValidRecommendationProfileSubjectId(input.subjectId);
       if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
       const now = timestamp(input.now);
+      const policy: RecommendationConsentPolicy | undefined = input.policy as RecommendationConsentPolicy | undefined;
       return serializer.run(input.subjectId, async () => {
+        if (policy !== undefined) await requireStoreConsent(input.subjectId, policy);
         const stored = await readStoredEvents(input.subjectId, now);
         return assessRecommendationCandidateActionPlanWithEvidence(input.plan, input.events ?? [], {
           now,
@@ -552,6 +594,9 @@ export function createRecommendationOnboardingLifecycle(
         const propagation = events === undefined || events.length === 0
           ? await options.derived.repair(subjectId)
           : (await report(subjectId, events, now, input.policy)).propagation!;
+        if (eventStore !== undefined && (events === undefined || events.length === 0) && input.policy !== undefined) {
+          await requireStoreConsent(subjectId, input.policy);
+        }
         // Stored events keep excluding after a restart. They are read after the report, so they include it.
         const known = eventStore === undefined ? (events ?? []) : [...(events ?? []), ...await readStoredEvents(subjectId, now)];
         const excluded = new Set(input.request.excludeCandidateIds ?? []);
@@ -561,6 +606,10 @@ export function createRecommendationOnboardingLifecycle(
         const sourceIds = new Set(input.request.excludeSourceIds ?? []);
         for (const id of listRecommendationLifecycleExcludedSetSourceIds(known)) sourceIds.add(id);
         const excludedSetSourceIds = Object.freeze([...sourceIds].sort());
+        // Fail here with a clear message rather than deep in candidate generation. Dropping exclusions to fit would show withdrawn candidates again.
+        if (excludedCandidateIds.length > MAX_EXCLUSION_IDS || excludedSetSourceIds.length > MAX_EXCLUSION_IDS) {
+          throw new TypeError("Too many recommendation exclusions for one refresh.");
+        }
         const result = await firstSession.execute({
           ...input.request,
           excludeCandidateIds: excludedCandidateIds,

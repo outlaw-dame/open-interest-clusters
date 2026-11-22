@@ -40,9 +40,27 @@ export interface RecommendationCandidateEventRecord {
  */
 export interface RecommendationCandidateEventStore {
   manifest: RecommendationStateStorageAdapterManifest;
+  /**
+   * Set to true when `save` honors `expectedDigest` (see below). Without it the store is treated as
+   * single-writer: two devices saving at once can lose each other's events, and nothing here detects that.
+   */
+  supportsCompareAndSet?: boolean;
   load(subjectId: string): Promise<unknown>;
-  save(subjectId: string, record: RecommendationCandidateEventRecord): Promise<void>;
+  /**
+   * With `expectedDigest` set, a store that supports compare-and-set must save only if the record it
+   * holds right now has exactly that digest (`null` means it must hold no record), and otherwise throw
+   * `RecommendationCandidateEventConflictError` without writing. The lifecycle then reloads, merges and tries again.
+   */
+  save(subjectId: string, record: RecommendationCandidateEventRecord, options?: { expectedDigest: string | null }): Promise<void>;
   delete(subjectId: string): Promise<void>;
+}
+
+/** Thrown by a compare-and-set store when the record changed since it was read. The lifecycle retries on it. */
+export class RecommendationCandidateEventConflictError extends Error {
+  constructor() {
+    super("Recommendation candidate event record changed since it was read.");
+    this.name = "RecommendationCandidateEventConflictError";
+  }
 }
 
 export interface RecommendationCandidateEventStoreLimits {
@@ -137,9 +155,36 @@ export function readRecommendationCandidateEventRecord(
   return Object.freeze(entries.filter((entry) => Date.parse(entry.recordedAt) > cutoff));
 }
 
+const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
+
+/** The incoming events that are not already held, with repeats inside the batch removed. */
+export function selectNewRecommendationCandidateEvents(
+  current: readonly RecommendationStoredCandidateEvent[],
+  incoming: readonly RecommendationCandidateLifecycleEvent[]
+): readonly RecommendationCandidateLifecycleEvent[] {
+  const seen = new Set(current.map((entry) => eventKey(entry.event)));
+  const fresh: RecommendationCandidateLifecycleEvent[] = [];
+  for (const event of incoming) {
+    const key = eventKey(event);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(event);
+  }
+  return fresh;
+}
+
+/** Digest of a raw loaded record, or null when there is none. Used as the compare-and-set token. */
+export function recommendationCandidateEventRecordDigest(raw: unknown): string | null {
+  return isRecord(raw) && typeof raw.digest === "string" ? raw.digest : null;
+}
+
 /**
  * Merges new events into the live ones. Events already held keep their first recording time, so
- * replaying a report changes nothing. Past the cap the oldest entries are compacted away.
+ * replaying a report changes nothing. Past the cap the oldest entries that are not set-level events
+ * are compacted away. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) are
+ * never evicted to make room, because losing one makes the set eligible again, and an event being
+ * added now is never dropped to make room either. If the cap would force either out, this throws and
+ * nothing is changed; set-level events leave only when they expire.
  */
 export function mergeRecommendationCandidateEventEntries(
   current: readonly RecommendationStoredCandidateEvent[],
@@ -149,15 +194,30 @@ export function mergeRecommendationCandidateEventEntries(
 ): { entries: readonly RecommendationStoredCandidateEvent[]; changed: boolean } {
   const byKey = new Map(current.map((entry) => [eventKey(entry.event), entry] as const));
   let changed = false;
+  const added = new Set<RecommendationStoredCandidateEvent>();
   for (const event of incoming) {
     const key = eventKey(event);
     if (!byKey.has(key)) {
-      byKey.set(key, Object.freeze({ recordedAt: now, event }));
+      const entry = Object.freeze({ recordedAt: now, event });
+      byKey.set(key, entry);
+      added.add(entry);
       changed = true;
     }
   }
   const sorted = [...byKey.values()].sort(compareEntries);
-  const kept = sorted.length > limits.maxEvents ? sorted.slice(sorted.length - limits.maxEvents) : sorted;
+  let kept = sorted;
+  if (sorted.length > limits.maxEvents) {
+    let excess = sorted.length - limits.maxEvents;
+    const evict = new Set<RecommendationStoredCandidateEvent>();
+    for (const entry of sorted) {
+      if (excess === 0) break;
+      if (SET_LEVEL_KINDS.has(entry.event.kind) || added.has(entry)) continue;
+      evict.add(entry);
+      excess -= 1;
+    }
+    if (excess > 0) throw new TypeError("Recommendation candidate event store has no room that does not evict a set-level or new event.");
+    kept = sorted.filter((entry) => !evict.has(entry));
+  }
   return { entries: Object.freeze(kept), changed: changed || kept.length !== sorted.length };
 }
 
@@ -176,11 +236,11 @@ export function buildRecommendationCandidateEventRecord(
 }
 
 const DEVICE_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
-  adapterId: "in-memory-candidate-events",
+  adapterId: "in-memory-candidate-events-ephemeral",
   domains: Object.freeze([RECOMMENDATION_CANDIDATE_EVENT_STATE_DOMAIN]),
   authority: "device_owned",
   processingBoundary: "local_only",
-  persistence: "persistent",
+  persistence: "ephemeral",
   requiresNetwork: false,
   supportsOffline: true,
   userExportable: true,
@@ -188,20 +248,30 @@ const DEVICE_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze
   encryptedAtRest: false
 }) as RecommendationStateStorageAdapterManifest;
 
-/** A reference store that keeps one JSON copy per subject. Records are copied in and out, so callers cannot edit them in place. */
+/**
+ * A reference store that keeps one JSON copy per subject in process memory. It is ephemeral: a restart
+ * loses everything, and its default manifest says so. It supports compare-and-set. Records are copied
+ * in and out, so callers cannot edit them in place. Pass a manifest to describe a store you build on it.
+ */
 export function createInMemoryRecommendationCandidateEventStore(
   manifest: RecommendationStateStorageAdapterManifest = DEVICE_MANIFEST
 ): RecommendationCandidateEventStore {
   const records = new Map<string, string>();
   return Object.freeze({
     manifest,
+    supportsCompareAndSet: true,
     async load(subjectId: string) {
       assertValidRecommendationProfileSubjectId(subjectId);
       const text = records.get(subjectId);
       return text === undefined ? undefined : JSON.parse(text) as unknown;
     },
-    async save(subjectId: string, record: RecommendationCandidateEventRecord) {
+    async save(subjectId: string, record: RecommendationCandidateEventRecord, options?: { expectedDigest: string | null }) {
       assertValidRecommendationProfileSubjectId(subjectId);
+      if (options !== undefined) {
+        const held = records.get(subjectId);
+        const heldDigest = held === undefined ? null : recommendationCandidateEventRecordDigest(JSON.parse(held) as unknown);
+        if (heldDigest !== options.expectedDigest) throw new RecommendationCandidateEventConflictError();
+      }
       records.set(subjectId, JSON.stringify(record));
     },
     async delete(subjectId: string) {

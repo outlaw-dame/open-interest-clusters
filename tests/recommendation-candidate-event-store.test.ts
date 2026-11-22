@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  RecommendationCandidateEventConflictError,
   RecommendationConsentDeniedError,
   createInMemoryRecommendationCandidateEventStore,
   createInMemoryRecommendationProfileSignalReplacementStore,
@@ -55,18 +56,31 @@ function packPlan() {
 const bobRevoked = { kind: "member_consent_revoked", occurredAt: T1, candidateId: candidate("account", "bob").candidateId, setSourceId: SET_SOURCE_ID } as const;
 
 /** A store that exposes its raw records so tests can damage them, and counts its calls. */
-function rawStore(manifest?: Partial<RecommendationStateStorageAdapterManifest>) {
+function rawStore(manifest?: Partial<RecommendationStateStorageAdapterManifest>, options: { cas?: boolean } = {}) {
   const inner = createInMemoryRecommendationCandidateEventStore();
   const raw = new Map<string, unknown>();
   const counts = { save: 0, load: 0, delete: 0 };
   const fail = { save: 0, load: 0, delete: 0 };
+  const hooks: { afterLoad?: { onLoad: number; run: () => Promise<void> } } = {};
   const store: RecommendationCandidateEventStore = {
     manifest: { ...inner.manifest, ...manifest },
-    async load(id) { counts.load += 1; if (fail.load > 0) { fail.load -= 1; throw new Error("load down"); } return raw.has(id) ? structuredClone(raw.get(id)) : undefined; },
-    async save(id, record) { counts.save += 1; if (fail.save > 0) { fail.save -= 1; throw new Error("save down"); } raw.set(id, structuredClone(record)); },
+    ...(options.cas === true ? { supportsCompareAndSet: true } : {}),
+    async load(id) {
+      counts.load += 1;
+      if (fail.load > 0) { fail.load -= 1; throw new Error("load down"); }
+      const value = raw.has(id) ? structuredClone(raw.get(id)) : undefined;
+      if (hooks.afterLoad?.onLoad === counts.load) { const { run } = hooks.afterLoad; delete hooks.afterLoad; await run(); }
+      return value;
+    },
+    async save(id, record, saveOptions) {
+      counts.save += 1;
+      if (fail.save > 0) { fail.save -= 1; throw new Error("save down"); }
+      if (options.cas === true && saveOptions !== undefined && ((raw.get(id) as { digest?: string } | undefined)?.digest ?? null) !== saveOptions.expectedDigest) throw new RecommendationCandidateEventConflictError();
+      raw.set(id, structuredClone(record));
+    },
     async delete(id) { counts.delete += 1; if (fail.delete > 0) { fail.delete -= 1; throw new Error("delete down"); } raw.delete(id); }
   };
-  return { store, raw, counts, fail };
+  return { store, raw, counts, fail, hooks };
 }
 
 function build(store: RecommendationCandidateEventStore, extra: { retentionMs?: number; maxEvents?: number } = {}, clock = { now: NOW }) {
@@ -265,8 +279,8 @@ test("withdrawing consent, a denied policy, or a missing policy never leaves eve
 test("provider-owned and non-deletable placements are refused when the store is attached", () => {
   for (const manifest of [
     { authority: "provider_owned", processingBoundary: "server_allowed" },
-    { userDeletable: false },
-    { userExportable: false },
+    { persistence: "persistent", userDeletable: false },
+    { persistence: "persistent", userExportable: false },
     { domains: ["interest_profile"] }
   ] as const) {
     const { store } = rawStore(manifest as Partial<RecommendationStateStorageAdapterManifest>);
@@ -286,4 +300,118 @@ test("without a store nothing is persisted, the read helpers refuse, and reporti
   assert.equal(result.acceptedEventCount, 1);
   await assert.rejects(lifecycle.listReportedCandidateEvents({ subjectId: A }), TypeError);
   await assert.rejects(lifecycle.assessPlan({ subjectId: A, plan: packPlan() }), TypeError);
+});
+
+const setSensitive = { kind: "set_sensitive", occurredAt: T1, setSourceId: SET_SOURCE_ID } as const;
+const benign = (name: string) => ({ kind: "account_deleted", occurredAt: T1, candidateId: name }) as const;
+
+test("a flood of ordinary events cannot push a set-level event out of the cap", async () => {
+  const { store } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 3 });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setSensitive], policy: POLICY(A), now: T1 });
+  for (const [index, name] of ["one", "two", "three", "four", "five"].entries()) {
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign(name)], policy: POLICY(A), now: `2026-09-26T06:3${index + 1}:00.000Z` });
+  }
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: "2026-09-26T06:40:00.000Z" });
+  assert.equal(kept.length, 3);
+  assert.ok(kept.some((event) => event.kind === "set_sensitive"));
+  assert.deepEqual(kept.filter((event) => event.kind === "account_deleted").map((event) => event.candidateId), ["four", "five"]);
+});
+
+test("a cap full of set-level events refuses the report instead of dropping a fact", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle, calls } = build(store, { maxEvents: 2 });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setSensitive, { kind: "set_deleted", occurredAt: T1, setSourceId: SET_SOURCE_ID }], policy: POLICY(A), now: T1 });
+  const before = JSON.stringify(raw.get(A));
+  const cleared = calls.length;
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("late")], policy: POLICY(A), now: T2 }), TypeError);
+  assert.equal(JSON.stringify(raw.get(A)), before);
+  assert.equal(calls.length, cleared, "no cache was cleared for a report that was not kept");
+});
+
+test("a compare-and-set store keeps both events when two writers race, and a plain store loses one", async () => {
+  for (const cas of [true, false]) {
+    const { store, raw, hooks } = rawStore(undefined, { cas });
+    const first = build(store);
+    const second = build(store); // another process: its own engine, so its own queue
+    // Load 1 is the dedupe read, load 2 is the merge read. The other writer lands right after load 2.
+    hooks.afterLoad = { onLoad: 2, run: async () => { await second.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("theirs")], policy: POLICY(A), now: T2 }); } };
+    await first.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("mine")], policy: POLICY(A), now: T3 });
+    const names = (await build(store).lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 })).map((event) => event.candidateId).sort();
+    assert.deepEqual(names, cas ? ["mine", "theirs"] : ["mine"], cas ? "no event lost" : "single-writer stores lose the other write");
+    assert.ok(raw.has(A));
+  }
+});
+
+test("a store that keeps conflicting gives up with the conflict error", async () => {
+  const { store } = rawStore(undefined, { cas: true });
+  const original = store.save.bind(store);
+  store.save = async () => { throw new RecommendationCandidateEventConflictError(); };
+  const { lifecycle, calls } = build(store);
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("x")], policy: POLICY(A), now: T1 }), RecommendationCandidateEventConflictError);
+  assert.equal(calls.length, 0);
+  store.save = original;
+});
+
+test("a retried report does not send already stored events to the verifier again", async () => {
+  const { store } = rawStore();
+  const seen = new Set<string>();
+  const replayGuard = { id: "replay-guard", verify(evidence: unknown) { const key = JSON.stringify(evidence); if (seen.has(key)) return { verified: false }; seen.add(key); return { verified: true }; } };
+  const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
+  const invalidator = { async invalidate() { return undefined; } };
+  const real = createRecommendationDerivedStateInvalidationOrchestrator({ engine, now: () => T1, invalidators: { embeddings: invalidator, candidate_cache: invalidator, explanation_cache: invalidator } });
+  let failClear = 1;
+  const derived = {
+    process: real.process.bind(real), repair: real.repair.bind(real),
+    async invalidateCandidateState(request: Parameters<typeof real.invalidateCandidateState>[0]) {
+      if (failClear > 0) { failClear -= 1; throw new Error("cache clear down"); }
+      return real.invalidateCandidateState(request);
+    }
+  };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine, now: () => NOW, evidenceVerifier: { verifier: replayGuard }, candidateEvents: { store, retry: { retrySleeper: NO_SLEEP } } });
+  // The events are verified and stored, then clearing the cache fails. The caller retries.
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("one")], policy: POLICY(A), now: T1 }), /cache clear down/);
+  const retry = await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("one")], policy: POLICY(A), now: T1 });
+  assert.equal(retry.evidenceVerification, "unverified", "nothing was sent to the verifier, so the replay guard did not trip");
+  assert.equal(retry.storedEventsNotChecked, 1);
+  const mixed = await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("one"), benign("two")], policy: POLICY(A), now: T2 });
+  assert.equal(mixed.evidenceVerification, "partial");
+  assert.deepEqual(mixed.verifiedKinds, ["lifecycle_event"]);
+  assert.equal(mixed.storedEventsNotChecked, 1);
+  assert.equal(seen.size, 2);
+});
+
+test("refresh refuses an exclusion list that would not fit instead of dropping entries", async () => {
+  const { store } = rawStore();
+  const { lifecycle, seen } = build(store);
+  const ids = Array.from({ length: 5001 }, (_, index) => `id-${index}`);
+  await assert.rejects(lifecycle.refresh({ request: { subjectId: A, requestId: "r1", excludeCandidateIds: ids } as never, now: T3 }), /Too many/);
+  await assert.rejects(lifecycle.refresh({ request: { subjectId: A, requestId: "r1", excludeSourceIds: ids } as never, now: T3 }), /Too many/);
+  assert.equal(seen.length, 0);
+  const ok = await lifecycle.refresh({ request: { subjectId: A, requestId: "r1", excludeCandidateIds: ids.slice(0, 5000) } as never, now: T3 });
+  assert.equal(ok.excludedCandidateIds.length, 5000);
+});
+
+test("refresh and assessPlan with a policy check consent before reading stored events, and denial deletes them", async () => {
+  for (const act of ["refresh", "assess"] as const) {
+    const { store, raw } = rawStore();
+    const { lifecycle } = build(store);
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+    const revoked = { subjectId: A, allowedDataUses: [], privateDataUses: [] } as unknown as RecommendationConsentPolicy;
+    const call = act === "refresh"
+      ? lifecycle.refresh({ request: { subjectId: A, requestId: "r1" } as never, policy: revoked, now: T3 })
+      : lifecycle.assessPlan({ subjectId: A, plan: packPlan(), policy: revoked });
+    await assert.rejects(call, RecommendationConsentDeniedError);
+    assert.equal(raw.has(A), false, `${act}: stored events were deleted`);
+  }
+});
+
+test("the in-memory reference store says it is ephemeral and supports compare-and-set", async () => {
+  const memory = createInMemoryRecommendationCandidateEventStore();
+  assert.equal(memory.manifest.persistence, "ephemeral");
+  assert.equal(memory.supportsCompareAndSet, true);
+  const record = { schemaVersion: "recommendation-candidate-event-record.v1", subjectId: A, updatedAt: T1, entries: [], digest: "d1" } as never;
+  await memory.save(A, record, { expectedDigest: null });
+  await assert.rejects(memory.save(A, record, { expectedDigest: null }), RecommendationCandidateEventConflictError);
+  await memory.save(A, record, { expectedDigest: "d1" });
 });

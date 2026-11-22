@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   RecommendationEvidenceVerificationError,
+  verifyRecommendationEvidence,
   assessRecommendationCandidateActionPlan,
   assessRecommendationCandidateActionPlanWithEvidence,
   createRecommendationCandidateActionPlan,
@@ -35,6 +36,10 @@ function candidate(kind: RecommendationCandidateKind, name = "1"): Recommendatio
     provenance: [{ kind: "curated_account_set", sourceId: SET_SOURCE_ID, sourceItemId: "pack-1", observedAt: MEMBER_OBSERVED_AT, trustBoundary: "same_provider" }]
   };
 }
+function accountPlan(): RecommendationCandidateActionPlan {
+  const value = candidate("account", "alice");
+  return createRecommendationCandidateActionPlan({ candidate: value, eligibility: { candidate: value, eligible: true, reasonCodes: ["eligible"], evaluatedAt: EVALUATED_AT }, provider: actionProvider("account"), createdAt: CREATED_AT });
+}
 function packPlan(): RecommendationCandidateActionPlan {
   const value = candidate("starter_pack");
   return createRecommendationCandidateActionPlan({
@@ -43,8 +48,8 @@ function packPlan(): RecommendationCandidateActionPlan {
   });
 }
 const REVOKED = (name: string): RecommendationCandidateLifecycleEvent => ({ kind: "member_consent_revoked", occurredAt: LATER, candidateId: candidate("account", name).candidateId, setSourceId: SET_SOURCE_ID });
-function verifier(verify: (evidence: unknown, kind: RecommendationEvidenceKind, subjectId: string) => unknown, timeoutMs = 50) {
-  return normalizeRecommendationEvidenceVerifierOptions({ verifier: { id: "test-keys", verify: (evidence: unknown, context: { kind: RecommendationEvidenceKind; subjectId: string }) => verify(evidence, context.kind, context.subjectId) }, timeoutMs });
+function verifier(verify: (evidence: unknown, kind: RecommendationEvidenceKind, subjectId: string) => unknown, timeoutMs = 50, extra: { maxConcurrency?: number; totalTimeoutMs?: number } = {}) {
+  return normalizeRecommendationEvidenceVerifierOptions({ verifier: { id: "test-keys", verify: (evidence: unknown, context: { kind: RecommendationEvidenceKind; subjectId: string }) => verify(evidence, context.kind, context.subjectId) }, timeoutMs, ...extra });
 }
 
 test("without a verifier the assessment is unverified and matches the plain assessment", async () => {
@@ -124,4 +129,64 @@ test("stored events are not sent back to the verifier but still count against th
   });
   assert.equal(calls, 0);
   assert.equal(result.state, "invalid");
+});
+
+test("the label says which kinds were checked and whether stored events were left out", async () => {
+  const plan = packPlan();
+  const all = await assessRecommendationCandidateActionPlanWithEvidence(plan, [REVOKED("alice")], { now: NOW, subjectId: SUBJECT, evidenceVerifier: verifier(() => ({ verified: true })) });
+  assert.equal(all.evidenceVerification, "verified");
+  assert.deepEqual(all.verifiedKinds, ["lifecycle_event", "starter_pack_consent", "starter_pack_provenance"]);
+  assert.equal(all.storedEventsNotChecked, 0);
+  const withStored = await assessRecommendationCandidateActionPlanWithEvidence(plan, [REVOKED("alice")], { now: NOW, subjectId: SUBJECT, storedEvents: [REVOKED("bob")], evidenceVerifier: verifier(() => ({ verified: true })) });
+  assert.equal(withStored.evidenceVerification, "partial");
+  assert.equal(withStored.storedEventsNotChecked, 1);
+  assert.equal(withStored.verifierId, "test-keys");
+  const onlyStored = await assessRecommendationCandidateActionPlanWithEvidence(accountPlan(), [], { now: NOW, subjectId: SUBJECT, storedEvents: [REVOKED("bob")], evidenceVerifier: verifier(() => ({ verified: true })) });
+  assert.equal(onlyStored.evidenceVerification, "unverified");
+  assert.equal(onlyStored.storedEventsNotChecked, 1);
+  assert.deepEqual(onlyStored.verifiedKinds, []);
+  const noVerifier = await assessRecommendationCandidateActionPlanWithEvidence(plan, [], { now: NOW, subjectId: SUBJECT, storedEvents: [REVOKED("bob")] });
+  assert.equal(noVerifier.evidenceVerification, "unverified");
+  assert.equal(noVerifier.storedEventsNotChecked, 1);
+});
+
+test("a direct assessment validates the subject ID before the verifier sees it", async () => {
+  let calls = 0;
+  await assert.rejects(
+    assessRecommendationCandidateActionPlanWithEvidence(packPlan(), [REVOKED("alice")], { now: NOW, subjectId: "bad id\u0000", evidenceVerifier: verifier(() => { calls += 1; return { verified: true }; }) }),
+    TypeError
+  );
+  assert.equal(calls, 0);
+});
+
+test("verification runs a bounded number of items at once", async () => {
+  let active = 0;
+  let peak = 0;
+  const configured = verifier(async () => { active += 1; peak = Math.max(peak, active); await new Promise((resolve) => setTimeout(resolve, 5)); active -= 1; return { verified: true }; }, 500, { maxConcurrency: 3 });
+  const result = await verifyRecommendationEvidence(configured, Array.from({ length: 12 }, (_, index) => ({ index })), "lifecycle_event", SUBJECT, NOW);
+  assert.equal(result.evidenceVerification, "verified");
+  assert.ok(peak > 1 && peak <= 3, `peak was ${peak}`);
+});
+
+test("a failure stops new items from being handed out", async () => {
+  let calls = 0;
+  const configured = verifier(async () => { calls += 1; await new Promise((resolve) => setTimeout(resolve, 5)); return { verified: false }; }, 500, { maxConcurrency: 2 });
+  await assert.rejects(verifyRecommendationEvidence(configured, Array.from({ length: 50 }, (_, index) => ({ index })), "lifecycle_event", SUBJECT, NOW), RecommendationEvidenceVerificationError);
+  assert.ok(calls <= 3, `calls was ${calls}`);
+});
+
+test("one call cannot run past the total time limit", async () => {
+  const started = Date.now();
+  const configured = verifier(() => new Promise((resolve) => setTimeout(() => resolve({ verified: true }), 30)), 500, { maxConcurrency: 1, totalTimeoutMs: 70 });
+  await assert.rejects(
+    verifyRecommendationEvidence(configured, Array.from({ length: 20 }, (_, index) => ({ index })), "lifecycle_event", SUBJECT, NOW),
+    (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === "timeout"
+  );
+  assert.ok(Date.now() - started < 400);
+});
+
+test("concurrency and total time options are validated", () => {
+  for (const bad of [{ maxConcurrency: 0 }, { maxConcurrency: 17 }, { maxConcurrency: 1.5 }, { totalTimeoutMs: 0 }, { totalTimeoutMs: 120_001 }]) {
+    assert.throws(() => normalizeRecommendationEvidenceVerifierOptions({ verifier: { id: "k", verify: () => ({ verified: true }) }, ...bad }), TypeError, JSON.stringify(bad));
+  }
 });
