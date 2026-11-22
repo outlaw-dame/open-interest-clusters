@@ -36,10 +36,20 @@ export interface RecommendationCuratedAccountSetChangeInput {
 export interface RecommendationCuratedAccountSetChangeReport {
   subjectId: string;
   setSourceId: string;
-  /** `unknown`: the read told us nothing. `unchanged`: nothing that makes a plan less usable. */
+  /**
+   * `unknown`: the read told us nothing. `unchanged`: nothing that makes a plan less usable.
+   * `changed`: there are events, or members who are no longer accepted (see `noLongerAcceptedCandidateIds`).
+   */
   outcome: "unknown" | "unchanged" | "changed";
   /** Ready for `reportCandidateEvents`. Canonical order, de-duplicated, at most one event per fact. */
   events: readonly RecommendationCandidateLifecycleEvent[];
+  /**
+   * Candidate IDs of members who were accepted and are now listed as `pending` or `unknown`. There is
+   * no lifecycle event for that, so a plan that still contains them stays usable unless the caller
+   * acts. Treat these members as not eligible: pass the IDs as `excludeCandidateIds` on the next
+   * `refresh`, and drop them when you rebuild a plan. Sorted and de-duplicated. Empty when the read was unknown.
+   */
+  noLongerAcceptedCandidateIds: readonly string[];
 }
 
 const MEMBER_STATES = new Set<string>(["accepted", "pending", "rejected", "revoked", "unknown"]);
@@ -94,7 +104,8 @@ function timestamp(value: unknown): string {
  * Member removal is reported as `member_consent_revoked`, since a member who is no longer listed
  * has no consent on record. It is only reported when the fresh read says its member list is complete,
  * because a partial list proves nothing about who is missing. Members that drop from accepted to
- * pending or unknown have no matching event kind and are not reported.
+ * pending or unknown have no matching event kind. They are returned in `noLongerAcceptedCandidateIds`
+ * instead, and the report is then `changed`. A caller that ignores that list keeps serving them.
  *
  * Mismatched provider or set ID, an `observedAt` that runs backwards, malformed snapshots and sets
  * above the provider member cap throw instead of returning a best guess.
@@ -108,13 +119,17 @@ export function diffRecommendationCuratedAccountSet(
   const previousAt = timestamp(previous.observedAt);
   const setSourceId = createRecommendationCuratedAccountSetSourceId(previous.provider, previous.id);
   const fresh: unknown = input.fresh;
-  const report = (outcome: "unknown" | "unchanged" | "changed", events: readonly RecommendationCandidateLifecycleEvent[]) =>
-    Object.freeze({ subjectId: input.subjectId, setSourceId, outcome, events });
+  const report = (
+    outcome: "unknown" | "unchanged" | "changed",
+    events: readonly RecommendationCandidateLifecycleEvent[],
+    noLongerAcceptedCandidateIds: readonly string[] = []
+  ) => Object.freeze({ subjectId: input.subjectId, setSourceId, outcome, events, noLongerAcceptedCandidateIds: Object.freeze([...noLongerAcceptedCandidateIds]) });
 
   if (!isRecord(fresh)) throw new TypeError("Invalid curated account set change input.");
   if (fresh.status === "unknown") return report("unknown", Object.freeze([]));
 
   const events: RecommendationCandidateLifecycleEvent[] = [];
+  let noLongerAccepted: string[] = [];
   let observedAt: string;
   if (fresh.status === "not_found") {
     if (fresh.provider !== previous.provider || fresh.setId !== previous.id) {
@@ -132,7 +147,9 @@ export function diffRecommendationCuratedAccountSet(
     if (Date.parse(observedAt) < Date.parse(previousAt)) throw new RangeError("Curated account set read is older than the previous snapshot.");
     if (previous.discoverable && !next.discoverable) events.push({ kind: "set_not_discoverable", occurredAt: observedAt, setSourceId });
     if (!previous.sensitive && next.sensitive) events.push({ kind: "set_sensitive", occurredAt: observedAt, setSourceId });
-    events.push(...memberEvents(previous, next, observedAt, setSourceId));
+    const members = memberEvents(previous, next, observedAt, setSourceId);
+    events.push(...members.events);
+    noLongerAccepted = members.noLongerAccepted;
   } else {
     throw new TypeError("Invalid curated account set change input.");
   }
@@ -140,7 +157,8 @@ export function diffRecommendationCuratedAccountSet(
   // Normalizing also sorts into the canonical order and drops duplicates. `now` is the read time, so
   // the future-dated check can only trip on a malformed timestamp.
   const normalized = normalizeRecommendationCandidateLifecycleEvents(events, { now: observedAt });
-  return report(normalized.length === 0 ? "unchanged" : "changed", normalized);
+  const ids = [...new Set(noLongerAccepted)].sort();
+  return report(normalized.length === 0 && ids.length === 0 ? "unchanged" : "changed", normalized, ids);
 }
 
 function memberEvents(
@@ -148,8 +166,9 @@ function memberEvents(
   next: RecommendationCuratedAccountSet,
   occurredAt: string,
   setSourceId: string
-): RecommendationCandidateLifecycleEvent[] {
+): { events: RecommendationCandidateLifecycleEvent[]; noLongerAccepted: string[] } {
   const events: RecommendationCandidateLifecycleEvent[] = [];
+  const noLongerAccepted: string[] = [];
   // Only accepted members with an actor URI ever became candidates, so only they can be in a plan.
   for (const member of previous.members) {
     if (member.state !== "accepted" || member.accountUri === undefined) continue;
@@ -162,6 +181,8 @@ function memberEvents(
     // Duplicate rows cannot cancel each other out: one bad row is enough.
     if (matches.some((other) => other.state === "revoked")) events.push({ kind: "member_consent_revoked", occurredAt, candidateId, setSourceId });
     if (matches.some((other) => other.state === "rejected")) events.push({ kind: "member_consent_rejected", occurredAt, candidateId, setSourceId });
+    // No event kind exists for this, so it is reported on its own list. One accepted row is enough to keep the member.
+    if (!matches.some((other) => other.state === "accepted" || other.state === "revoked" || other.state === "rejected")) noLongerAccepted.push(candidateId);
   }
-  return events;
+  return { events, noLongerAccepted };
 }

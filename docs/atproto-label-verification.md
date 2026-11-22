@@ -45,7 +45,7 @@ The caller resolves the DID document and decides how fresh it must be. Key rotat
 - A label with getters or non-plain values is refused (`malformed_label`) so that what was verified is what was digested. Bad subject, source, claim or verifier fields give `invalid_attestation_input`. The function does not throw.
 - Wrong key, tampered label, bad clock and the other failures return the fixed reasons from verification and issue nothing.
 
-Subject and source ids come from the caller and are not checked against the label. The evidence verifier matches them against what it derives from the evidence, so an attestation does not move to another subject or source set.
+Subject and source ids, and the `claim` text, come from the caller and are not checked against the label's `uri` or `val`. The claim is a note for a human reading the attestation. It is not a machine-checked statement, so describe the label truthfully and do not branch on it. The evidence verifier matches them against what it derives from the evidence, so an attestation does not move to another subject or source set.
 
 Nothing in the core imports `@atproto/*` or `@ipld/*`, and a test scans `package.json` and the compiled `dist/src` to keep it that way.
 

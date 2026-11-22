@@ -118,8 +118,23 @@ test("changes that make things better, and members that were never accepted, pro
   assert.equal(report.outcome, "unchanged");
 });
 
-test("a previously accepted member moving to pending is not reported (no matching event kind)", () => {
-  assert.equal(diff(found({ members: [member("alice", "pending"), member("bob")] })).outcome, "unchanged");
+test("a previously accepted member moving to pending or unknown is listed, since no event kind fits", () => {
+  for (const state of ["pending", "unknown"] as const) {
+    const report = diff(found({ members: [member("alice", state), member("bob")] }));
+    assert.equal(report.outcome, "changed");
+    assert.deepEqual(report.events, []);
+    assert.deepEqual(report.noLongerAcceptedCandidateIds, [candidateId("alice")]);
+    assert.ok(Object.isFrozen(report.noLongerAcceptedCandidateIds));
+  }
+  // Revoked and rejected already have events, so they are not listed twice. A duplicate accepted row keeps the member.
+  assert.deepEqual(diff(found({ members: [member("alice", "revoked"), member("bob")] })).noLongerAcceptedCandidateIds, []);
+  assert.deepEqual(diff(found({ members: [member("alice", "pending"), member("alice"), member("bob")] })).noLongerAcceptedCandidateIds, []);
+  // Sorted, and the list is empty for unknown reads, unchanged sets and removed members.
+  const two = diff(found({ members: [member("bob", "pending"), member("alice", "unknown")] }));
+  assert.deepEqual(two.noLongerAcceptedCandidateIds, [candidateId("alice"), candidateId("bob")].sort());
+  assert.deepEqual(diff({ status: "unknown" }).noLongerAcceptedCandidateIds, []);
+  assert.deepEqual(diff(found()).noLongerAcceptedCandidateIds, []);
+  assert.deepEqual(diff(found({ members: [member("bob")] })).noLongerAcceptedCandidateIds, []);
 });
 
 test("every produced event passes the library's own event validation and is exactly its normalized form", () => {
