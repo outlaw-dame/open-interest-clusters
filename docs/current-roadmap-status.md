@@ -41,8 +41,8 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 | Phase 4 — Cold-start scoring-input builder | **Complete** (PR #125) | Candidate-bound scoring bridge with stale-profile protection, bounded optional entity/graph/embedding enrichment, cancellation, and reversible scorer bindings |
 | Phase 5 — First-session recommendation orchestrator | **Complete** (PR #126) | `createRecommendationFirstSessionOrchestrator` composes profile read, cold-start discovery, injected eligibility evaluation, Phase 4 scoring input, and the existing execution orchestrator. See `recommendation-first-session-orchestrator.md` |
 | Phase 6 — Generalized recommendation action-plan contracts | **Complete** (commit d66c76b) | `createRecommendationCandidateActionPlan`: non-executable, candidate-bound plans gated on eligibility and verified provider capability. See `recommendation-candidate-action-plans.md`. The onboarding hashtag-follow plan is unchanged |
-| Phase 7 — Onboarding lifecycle and refresh | **Next** | Reuses existing retraction/invalidation/recovery architecture |
-| Phase 8 — Reference onboarding integration and UX examples | Pending | Depends on stable engine contracts |
+| Phase 7 — Onboarding lifecycle and refresh | **Implemented** (branch `feat/phase7-onboarding-lifecycle`, not yet merged) | Selection edits and removals as ledger retractions, plan staleness assessment, candidate-cache invalidation, crash-safe persistence moves. See `phase7-onboarding-lifecycle.md` for limits |
+| Phase 8 — Reference onboarding integration and UX examples | **Next** | Depends on stable engine contracts |
 
 The idempotent signal ledger and retraction architecture is **not** Phase 4. It was implemented earlier and is a prerequisite already satisfied by the current repository.
 
@@ -174,11 +174,11 @@ explicit onboarding choices
 
 Implemented in `src/recommendation/candidate-action-plan.ts`; see [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). Plans also require fresh, verified provider capability evidence for the action. The design target was to extend the existing hashtag-follow plan into protocol-neutral, non-executable, candidate-bound plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
 
-### Phase 7 — Onboarding lifecycle and refresh (next)
+### Phase 7 — Onboarding lifecycle and refresh (implemented on `feat/phase7-onboarding-lifecycle`)
 
-Support editing/removing selections, deterministic reruns, retraction propagation, source disappearance, moved/deleted identities, verification loss, candidate/explanation cache invalidation, consent revocation, deletion, and persistence-location transitions by reusing the existing ledger/invalidation/recovery architecture.
+Editing and removing selections retract through the signal ledger. Reruns write nothing when nothing changed. Reported candidate facts (consent revoked, set deleted, account moved, verification lost, source gone) mark action plans stale or invalid and durably clear the candidate and explanation caches through the existing task journal. Profile records can move between device-owned and user-owned storage with copy, verify, then delete. Details, public API changes and residual limits are in [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
 
-### Phase 8 — Reference onboarding integration and UX examples
+### Phase 8 — Reference onboarding integration and UX examples (next)
 
 Demonstrate the stable contracts without making a specific UI framework part of the engine. Local/device-owned persistence should remain the default; user-controlled ActivityPods/Solid persistence is the remote exception.
 

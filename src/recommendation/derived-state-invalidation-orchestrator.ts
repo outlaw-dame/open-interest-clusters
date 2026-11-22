@@ -7,6 +7,7 @@ import type {
   RecommendationEngineSynchronizeInput
 } from "./engine-orchestrator.js";
 import type { RecommendationProfileApplicationResult } from "./profile-application-orchestrator.js";
+import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import { sha256Hex } from "../runtime/hash.js";
@@ -22,7 +23,8 @@ export const RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS = [
   "profile_changed",
   "signal_retracted",
   "signal_expired",
-  "deletion_requested"
+  "deletion_requested",
+  "candidate_state_changed"
 ] as const;
 export type RecommendationDerivedStateInvalidationReason =
   typeof RECOMMENDATION_DERIVED_STATE_INVALIDATION_REASONS[number];
@@ -101,10 +103,23 @@ export interface RecommendationDerivedStateDeletionResult {
   propagation: RecommendationDerivedStatePropagationResult;
 }
 
+/** Targets that depend on candidate facts rather than on the profile alone. Embeddings do not. */
+export const RECOMMENDATION_CANDIDATE_DERIVED_STATE_TARGETS = [
+  "candidate_cache",
+  "explanation_cache"
+] as const satisfies readonly RecommendationDerivedStateTarget[];
+
 export interface RecommendationDerivedStateInvalidationOrchestrator {
   process(input: RecommendationEngineProcessInput): Promise<RecommendationDerivedStateProcessResult>;
   synchronize(input: RecommendationEngineSynchronizeInput): Promise<RecommendationDerivedStateSynchronizeResult>;
   repair(subjectId: string): Promise<RecommendationDerivedStatePropagationResult>;
+  /**
+   * Durably invalidates the candidate and explanation caches for a subject when a candidate fact
+   * changed (consent revoked, source gone, identity moved) without any profile change. Uses the same
+   * task store, serialization and crash recovery as profile-driven invalidation. Embeddings are left
+   * alone because the profile did not change.
+   */
+  invalidateCandidateState(input: { subjectId: string; occurredAt?: string }): Promise<RecommendationDerivedStatePropagationResult>;
   deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationDerivedStateDeletionResult>;
 }
 
@@ -345,27 +360,10 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
   if (typeof nowProvider !== "function") {
     throw new TypeError("Invalid recommendation derived-state clock.");
   }
-  const tails = new Map<string, Promise<void>>();
+  const serializer = createRecommendationKeyedSerializer();
 
   async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
-    const id = validateSubjectId(subjectId);
-    const prior = tails.get(id) ?? Promise.resolve();
-    const ready = prior.catch(() => undefined);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = ready.then(() => gate);
-    tails.set(id, tail);
-    await ready;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (tails.get(id) === tail) {
-        tails.delete(id);
-      }
-    }
+    return serializer.run(validateSubjectId(subjectId), work);
   }
 
   async function drainDerived(
@@ -506,6 +504,29 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
           "profile_changed",
           validateTimestamp(nowProvider())
         );
+      });
+    },
+
+    async invalidateCandidateState(input: { subjectId: string; occurredAt?: string }) {
+      if (!isPlainRecord(input)) throw new TypeError("Invalid recommendation candidate-state invalidation input.");
+      return runSerialized(input.subjectId, async () => {
+        const subjectId = validateSubjectId(input.subjectId);
+        const occurredAt = validateTimestamp(input.occurredAt ?? nowProvider());
+        await recoverPending(subjectId);
+        const profile = await options.engine.readProfile(subjectId);
+        // Settle any profile-driven invalidation first, so the checkpoint written when this task
+        // finishes can never claim embeddings are current when they are not.
+        await ensureCurrentProfilePropagated(subjectId, profile, "profile_changed", occurredAt);
+        const task = freezeTask({
+          subjectId,
+          reason: "candidate_state_changed",
+          profileDigest: semanticProfileDigest(profile),
+          occurredAt,
+          phase: "derived_invalidation_pending",
+          pendingTargets: RECOMMENDATION_CANDIDATE_DERIVED_STATE_TARGETS
+        });
+        await taskStore.save(task);
+        return (await resumeTask(task)).propagation;
       });
     },
 

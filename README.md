@@ -2,7 +2,7 @@
 
 A portable, privacy-preserving recommendation and semantic-interest substrate for local-first applications, federated services, and protocol-neutral recommendation systems.
 
-> **Status:** active pre-1.0 library development. The repository includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, runtime provider discovery, the cold-start scoring-input bridge, the first-session recommendation orchestrator, and generalized non-executable candidate action plans. The next architectural phase is onboarding lifecycle and refresh (Phase 7).
+> **Status:** active pre-1.0 library development. The repository includes the candidate domain, cold-start candidate generation, generalized candidate eligibility, protocol/application capability hardening, runtime provider discovery, the cold-start scoring-input bridge, the first-session recommendation orchestrator, and generalized non-executable candidate action plans. Onboarding lifecycle and refresh (Phase 7) is implemented on the Phase 7 branch stack; the next phase is the reference onboarding integration (Phase 8).
 
 ## Design principles
 
@@ -125,8 +125,8 @@ The candidate/onboarding dependency chain is now:
 6. **Phase 4 — Cold-start scoring-input builder — COMPLETE** (`#125`)
 7. **Phase 5 — First-session recommendation orchestrator — COMPLETE** (`#126`)
 8. **Phase 6 — Generalized recommendation action-plan contracts — COMPLETE** (`d66c76b`; the onboarding hashtag-follow plan is unchanged)
-9. **Phase 7 — Onboarding lifecycle and refresh — NEXT**
-10. **Phase 8 — Reference onboarding integration and UX examples — PENDING**
+9. **Phase 7 — Onboarding lifecycle and refresh — IMPLEMENTED** (pending merge; see [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md))
+10. **Phase 8 — Reference onboarding integration and UX examples — NEXT**
 
 The idempotent signal ledger/retraction layer predates this sequence and is already implemented; it is not Phase 4.
 
@@ -144,9 +144,9 @@ See:
 
 `createRecommendationCandidateActionPlan` turns an eligible candidate into a plan an application can offer. Plans are never executable, always require explicit user confirmation, and are only created when fresh provider capability evidence supports the action. See [`docs/recommendation-candidate-action-plans.md`](docs/recommendation-candidate-action-plans.md).
 
-## Immediate next phase: onboarding lifecycle and refresh
+## Implemented: onboarding lifecycle and refresh
 
-Phase 7 covers editing or removing onboarding selections, deterministic reruns, source disappearance, moved or deleted identities, verification loss, cache invalidation, consent revocation, deletion, and persistence-location transitions. It should reuse the existing ledger, invalidation, and recovery architecture rather than add a new one. Detailed acceptance criteria are in [`docs/candidate-cold-start-onboarding-roadmap.md`](docs/candidate-cold-start-onboarding-roadmap.md).
+`createRecommendationOnboardingLifecycle` edits, removes, reruns and withdraws onboarding selections as ledger retractions and applies, so reruns are idempotent and a crash resumes cleanly. `assessRecommendationCandidateActionPlan` reports whether a frozen action plan is still valid, stale or invalid after consent revocation, set deletion, moved or deleted accounts, lost verification or a vanished source. `transitionRecommendationProfilePersistence` moves the profile record between device-owned and user-owned storage without a window where neither copy exists. Plans stay non-executable and nothing here performs a provider mutation. Design, limits and tests are in [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md).
 
 ## Other remaining work
 
