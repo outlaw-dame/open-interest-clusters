@@ -1283,6 +1283,7 @@
       "state.deny.storage_authority",
       "state.deny.personal_state_provider_controlled",
       "state.deny.aggregate_domain_mismatch",
+      "state.deny.publicly_readable_store",
       "state.deny.local_adapter_requires_network",
       "state.deny.local_adapter_not_offline_capable",
       "state.deny.persistent_state_not_user_deletable",
