@@ -7,6 +7,7 @@ import {
   type RecommendationCandidateProvenance,
   type RecommendationCandidateVerification
 } from "./candidate-domain.js";
+import { hasExcludedProvenanceSource } from "./provenance-source-exclusion.js";
 import {
   isRecommendationCandidateSourceAdapter,
   readRecommendationCandidateSourceAdapter,
@@ -70,6 +71,11 @@ export interface RecommendationColdStartCandidateGenerationInput {
   perSourceLimit?: number;
   maxCandidates?: number;
   concurrency?: number;
+  /**
+   * Provenance source IDs to leave out. A candidate with any provenance entry from one of these is dropped
+   * before ranking and before the candidate cap, so it cannot take a slot from a usable candidate.
+   */
+  excludeSourceIds?: readonly string[];
   signal?: AbortSignal;
 }
 
@@ -554,6 +560,7 @@ function validateInput(input: RecommendationColdStartCandidateGenerationInput): 
   perSourceLimit: number;
   maxCandidates: number;
   concurrency: number;
+  excludeSourceIds: ReadonlySet<string>;
   signal?: AbortSignal;
 } {
   if (!isRecord(input)) throw new TypeError("Invalid cold-start candidate generation input.");
@@ -594,6 +601,15 @@ function validateInput(input: RecommendationColdStartCandidateGenerationInput): 
   if (input.signal !== undefined && !(input.signal instanceof AbortSignal)) {
     throw new TypeError("Invalid cold-start abort signal.");
   }
+  if (
+    input.excludeSourceIds !== undefined &&
+    (!Array.isArray(input.excludeSourceIds) || input.excludeSourceIds.length > MAX_CANDIDATES)
+  ) {
+    throw new TypeError("Invalid cold-start excluded source IDs.");
+  }
+  const excludeSourceIds = new Set(
+    (input.excludeSourceIds ?? []).map((id) => boundedString(id, MAX_REQUEST_ID_LENGTH, "Invalid cold-start excluded source ID."))
+  );
 
   return {
     requestId,
@@ -604,6 +620,7 @@ function validateInput(input: RecommendationColdStartCandidateGenerationInput): 
     perSourceLimit,
     maxCandidates,
     concurrency,
+    excludeSourceIds,
     ...(input.signal === undefined ? {} : { signal: input.signal })
   };
 }
@@ -671,6 +688,7 @@ export async function generateRecommendationColdStartCandidates(
   const generated: RecommendationColdStartGeneratedCandidate[] = [];
   for (const group of candidateGroups.values()) {
     const candidate = mergeCandidateGroup(group);
+    if (hasExcludedProvenanceSource(candidate, input.excludeSourceIds)) continue;
     const match = matchCandidate(candidate, profileIndex, input.languages);
     if (match === undefined) continue;
     generated.push(Object.freeze({ candidate, match }));

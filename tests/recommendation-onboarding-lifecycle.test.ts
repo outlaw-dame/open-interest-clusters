@@ -8,6 +8,8 @@ import {
   createInMemoryRecommendationProfileSignalReplacementStore,
   createRecommendationCandidateId,
   createRecommendationCatalogIndex,
+  createRecommendationCuratedAccountSetCandidateSourceAdapter,
+  createRecommendationCuratedAccountSetSourceId,
   createRecommendationDerivedStateInvalidationOrchestrator,
   createRecommendationEmbeddingSourceFingerprint,
   createRecommendationEngineOrchestrator,
@@ -15,12 +17,17 @@ import {
   createRecommendationOnboardingLifecycle,
   createRecommendationOnboardingSelection,
   type RecommendationCandidate,
+  type RecommendationCandidateKind,
   type RecommendationCandidateSourceAdapter,
   type RecommendationConsentPolicy,
+  type RecommendationCuratedAccountSet,
   type RecommendationDerivedStateInvalidationRequest,
   type RecommendationDerivedStateInvalidationTask,
   type RecommendationDerivedStateTarget,
+  type RecommendationEvidenceVerifierOptions,
+  RecommendationEvidenceVerificationError,
   type RecommendationOnboardingLifecycle,
+  type RecommendationOnboardingLifecycleWithCandidateEvents,
   type RecommendationSignalLedgerEventInput
 } from "../src/index.js";
 
@@ -41,7 +48,7 @@ function change(topics: readonly string[], now = T0, extra: Record<string, unkno
 // The lifecycle clock sits at the latest time these tests pass in, so explicit times are never ahead of it.
 let lifecycleClock = T2;
 
-function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[] } = {}) {
+function harness(options: { failures?: RecommendationDerivedStateTarget[]; firstSessionSources?: readonly RecommendationCandidateSourceAdapter[]; candidateKinds?: readonly RecommendationCandidateKind[]; evidenceVerifier?: RecommendationEvidenceVerifierOptions; ignoreSourceExclusions?: boolean } = {}) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T0 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
   const tasks = new Map<string, RecommendationDerivedStateInvalidationTask>();
@@ -60,13 +67,17 @@ function harness(options: { failures?: RecommendationDerivedStateTarget[]; first
     invalidators: { embeddings: invalidator("embeddings"), candidate_cache: invalidator("candidate_cache"), explanation_cache: invalidator("explanation_cache") }
   });
   const firstSessionCalls: unknown[] = [];
-  const firstSession = options.firstSessionSources === undefined ? undefined : createRecommendationFirstSessionOrchestrator({
+  const realFirstSession = options.firstSessionSources === undefined ? undefined : createRecommendationFirstSessionOrchestrator({
     engine,
     sources: options.firstSessionSources,
-    candidateKinds: ["account"],
+    candidateKinds: options.candidateKinds ?? ["account"],
     evaluateEligibility: ({ candidate }) => { firstSessionCalls.push(candidate.candidate.candidateId); return { candidate: candidate.candidate, eligible: true, reasonCodes: ["eligible"], evaluatedAt: T0 }; }
   });
-  const lifecycle: RecommendationOnboardingLifecycle = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock });
+  // A first-session object from before excludeSourceIds existed does not look at that field.
+  const firstSession = realFirstSession !== undefined && options.ignoreSourceExclusions === true
+    ? { execute: ({ excludeSourceIds: _ignored, ...request }: Parameters<typeof realFirstSession.execute>[0]) => realFirstSession.execute(request) }
+    : realFirstSession;
+  const lifecycle: RecommendationOnboardingLifecycleWithCandidateEvents = createRecommendationOnboardingLifecycle({ derived, engine, ...(firstSession === undefined ? {} : { firstSession }), now: () => lifecycleClock, ...(options.evidenceVerifier === undefined ? {} : { evidenceVerifier: options.evidenceVerifier }) });
   return { engine, derived, lifecycle, calls, tasks, firstSessionCalls };
 }
 
@@ -417,4 +428,231 @@ test("an omitted time falls back to the lifecycle clock", async () => {
   await lifecycle.applySelection(withoutNow);
   const history = await engine.readEventHistory(SUBJECT);
   assert.ok(history.length > 0);
+});
+
+function curatedSet(id: string, members: readonly string[]): RecommendationCuratedAccountSet {
+  return {
+    provider: "mastodon_collection", id, url: `https://social.example/collections/${id}`, curatorId: "curator-1", name: `Set ${id}`,
+    discoverable: true, sensitive: false, observedAt: T0, hashtags: ["gaming"], trustBoundary: "same_provider", membershipComplete: true,
+    members: members.map((name) => ({ accountId: `acct-${name}`, accountUri: `https://social.example/users/${name}`, handle: `${name}@social.example`, state: "accepted" as const }))
+  };
+}
+const CURATED_KINDS: readonly RecommendationCandidateKind[] = ["account", "starter_pack"];
+const SET_A = createRecommendationCuratedAccountSetSourceId("mastodon_collection", "set-a");
+const SET_B = createRecommendationCuratedAccountSetSourceId("mastodon_collection", "set-b");
+
+async function curatedRefresh(events: Parameters<RecommendationOnboardingLifecycle["refresh"]>[0]["candidateEvents"], sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["carol"])]) {
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: CURATED_KINDS });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const run = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, ...(events === undefined ? {} : { candidateEvents: events }), now: T1 });
+  return run;
+}
+const natives = (run: Awaited<ReturnType<typeof curatedRefresh>>) => run.result.recommendations.map((item) => item.candidate.nativeId).sort();
+
+test("a set-level event with no candidate ID drops that set's members and starter pack on refresh, and nothing else", async () => {
+  const baseline = natives(await curatedRefresh(undefined));
+  assert.deepEqual(baseline, [
+    "https://social.example/collections/set-a", "https://social.example/collections/set-b",
+    "https://social.example/users/alice", "https://social.example/users/bob", "https://social.example/users/carol"
+  ]);
+  for (const kind of ["set_deleted", "set_not_discoverable", "set_sensitive"] as const) {
+    const run = await curatedRefresh([{ kind, occurredAt: T1, setSourceId: SET_A }]);
+    assert.deepEqual(natives(run), ["https://social.example/collections/set-b", "https://social.example/users/carol"], kind);
+    assert.deepEqual(run.excludedSetSourceIds, [SET_A]);
+    assert.deepEqual(run.excludedCandidateIds, []);
+  }
+});
+
+test("a first-session object that ignores excludeSourceIds still cannot bring a reported set back", async () => {
+  const sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["carol"])];
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: CURATED_KINDS, ignoreSourceExclusions: true });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const run = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, candidateEvents: [{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_A }], now: T1 });
+  assert.deepEqual(natives(run), ["https://social.example/collections/set-b", "https://social.example/users/carol"]);
+  assert.deepEqual(run.result.recommendations.map((item) => item.rank), [1, 2]);
+  assert.deepEqual(run.excludedSetSourceIds, [SET_A]);
+  // With no reported set nothing is dropped.
+  const clean = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, now: T1 });
+  assert.equal(clean.result.recommendations.length, 5);
+});
+
+test("a member in two sets is dropped when either set is reported, and an unknown set source ID changes nothing", async () => {
+  const sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["bob"])];
+  const dropped = await curatedRefresh([{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_B }], sets);
+  assert.ok(!natives(dropped).includes("https://social.example/users/bob"));
+  assert.ok(natives(dropped).includes("https://social.example/users/alice"));
+  const unknown = await curatedRefresh([{ kind: "set_deleted", occurredAt: T1, setSourceId: "curated-set:v1:nope" }]);
+  assert.equal(natives(unknown).length, 5);
+});
+
+test("member consent events only exclude the named candidate, not the whole set", async () => {
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets: [curatedSet("set-a", ["alice", "bob"])] });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: CURATED_KINDS });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const before = await h.lifecycle.refresh({ request: { ...REQUEST, limit: 50 }, now: T1 });
+  const aliceId = before.result.recommendations.find((item) => item.candidate.nativeId.endsWith("/alice"))!.candidate.candidateId;
+  const run = await h.lifecycle.refresh({
+    request: { ...REQUEST, requestId: "refresh-2", limit: 50 },
+    candidateEvents: [{ kind: "member_consent_revoked", occurredAt: T1, candidateId: aliceId, setSourceId: SET_A }],
+    now: T1
+  });
+  assert.deepEqual(run.excludedSetSourceIds, []);
+  assert.deepEqual(run.result.recommendations.map((item) => item.candidate.nativeId).sort(), [
+    "https://social.example/collections/set-a", "https://social.example/users/bob"
+  ]);
+});
+
+test("set exclusions apply to the one refresh that reports them and merge with caller exclusions", async () => {
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets: [curatedSet("set-a", ["alice"]), curatedSet("set-b", ["carol"])] });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: CURATED_KINDS });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const run = await h.lifecycle.refresh({
+    request: { ...REQUEST, limit: 50, excludeSourceIds: [SET_B] },
+    candidateEvents: [{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_A }],
+    now: T1
+  });
+  assert.deepEqual(run.excludedSetSourceIds, [SET_A, SET_B].sort());
+  assert.deepEqual(run.result.recommendations, []);
+  const later = await h.lifecycle.refresh({ request: { ...REQUEST, requestId: "refresh-2", limit: 50 }, now: T1 });
+  assert.equal(later.result.recommendations.length, 4);
+});
+
+test("excluded sets do not take candidate slots from usable ones", async () => {
+  const adapter = createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets: [curatedSet("set-a", ["alice", "bob", "carol"]), curatedSet("set-b", ["dave"])] });
+  const h = harness({ firstSessionSources: [adapter], candidateKinds: ["account"] });
+  await h.lifecycle.applySelection(change(["gaming"]));
+  const run = await h.lifecycle.refresh({
+    request: { ...REQUEST, limit: 50 },
+    candidateEvents: [{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_A }],
+    now: T1
+  });
+  assert.equal(run.result.discoveredCandidateCount, 1);
+  assert.deepEqual(run.result.recommendations.map((item) => item.candidate.nativeId), ["https://social.example/users/dave"]);
+});
+
+type Harness = ReturnType<typeof harness>;
+
+/** A read-only view of the harness engine that reports every history read before returning it. */
+function spyEngine(h: Harness, onRead: (history: Awaited<ReturnType<Harness["engine"]["readEventHistory"]>>) => Promise<void> | void) {
+  return {
+    async readEventHistory(id: string) {
+      const history = await h.engine.readEventHistory(id);
+      await onRead(history);
+      return history;
+    }
+  };
+}
+
+test("lifecycle instances on one engine queue behind each other for the same subject", async () => {
+  const h = harness();
+  const trace: string[] = [];
+  const engine = spyEngine(h, async () => { trace.push("read"); await new Promise((resolve) => setImmediate(resolve)); });
+  const derived = { ...h.derived, process: ((input: Parameters<Harness["derived"]["process"]>[0]) => { trace.push("write"); return h.derived.process(input); }) as Harness["derived"]["process"] };
+  const a = createRecommendationOnboardingLifecycle({ derived, engine, now: () => lifecycleClock });
+  const b = createRecommendationOnboardingLifecycle({ derived, engine, now: () => lifecycleClock });
+  await Promise.all([a.applySelection(change(["gaming"], T0)), b.applySelection(change(["music"], T1))]);
+  assert.deepEqual(trace.slice(0, 4), ["read", "write", "read", "write"], "the second plan waits for the first write");
+});
+
+/** A lifecycle whose first history read is followed by a write from outside the lifecycle queue. */
+function lifecycleWithRival(h: Harness, rival: () => Promise<unknown>): RecommendationOnboardingLifecycleWithCandidateEvents {
+  let armed = true;
+  const engine = spyEngine(h, async () => { if (armed) { armed = false; await rival(); } });
+  return createRecommendationOnboardingLifecycle({ derived: h.derived, engine, now: () => lifecycleClock });
+}
+
+async function rivalEventsFor(topics: readonly string[]) {
+  const probe = harness();
+  await probe.lifecycle.applySelection(change(topics, T0));
+  return probe.engine.readEventHistory(SUBJECT);
+}
+
+test("a direct write racing applySelection with the same target at another time converges", async () => {
+  const rivalEvents = await rivalEventsFor(["gaming"]);
+  const h = harness();
+  const lifecycle = lifecycleWithRival(h, () => h.derived.process({ subjectId: SUBJECT, events: rivalEvents, now: T0 }));
+  const result = await lifecycle.applySelection(change(["gaming"], T1));
+  assert.ok(activeKeys(await h.engine.readProfile(SUBJECT)).includes("canonical_interest:gaming"));
+  assert.equal(result.eventCount, 0, "the replan sees the rival's signal and has nothing left to write");
+  const ids = (await h.engine.readEventHistory(SUBJECT)).map((event) => event.sourceEventId);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test("a ledger error that is not caused by a moved history is not retried", async () => {
+  const h = harness();
+  let writes = 0;
+  const derived = { ...h.derived, process: async () => { writes += 1; throw new TypeError("not a race"); } };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine: h.engine, now: () => lifecycleClock });
+  await assert.rejects(lifecycle.applySelection(change(["gaming"], T0)), /not a race/u);
+  assert.equal(writes, 1);
+});
+
+const REPORTED = { kind: "account_deleted" as const, occurredAt: T1, accountUri: "https://example.test/users/alice" };
+
+test("reported events are marked unverified when no verifier is configured", async () => {
+  const h = harness();
+  const result = await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 });
+  assert.equal(result.evidenceVerification, "unverified");
+  assert.equal(result.verifierId, undefined);
+  assert.equal(result.acceptedEventCount, 1);
+});
+
+test("a verifier that accepts marks the report verified and sees the subject, kind and time", async () => {
+  const seen: unknown[] = [];
+  const h = harness({ evidenceVerifier: { verifier: { id: "test-keys", verify: (evidence, context) => { seen.push([evidence, context.subjectId, context.kind, context.now]); return { verified: true }; } } } });
+  const result = await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 });
+  assert.equal(result.evidenceVerification, "verified");
+  assert.equal(result.verifierId, "test-keys");
+  assert.deepEqual(seen, [[REPORTED, SUBJECT, "lifecycle_event", T1]]);
+});
+
+test("a rejected, thrown, malformed or slow verification stops the report before any cache is cleared", async () => {
+  const cases: [string, () => unknown, string][] = [
+    ["rejected", () => ({ verified: false }), "rejected"],
+    ["throws", () => { throw new Error("boom"); }, "error"],
+    ["async throw", async () => { throw new Error("boom"); }, "error"],
+    ["truthy but not boolean", () => ({ verified: "yes" }), "malformed"],
+    ["bare true", () => true, "malformed"],
+    ["nothing", () => undefined, "malformed"],
+    ["never answers", () => new Promise(() => undefined), "timeout"]
+  ];
+  for (const [name, verify, failure] of cases) {
+    const h = harness({ evidenceVerifier: { verifier: { id: "test-keys", verify: verify as never }, timeoutMs: 20 } });
+    await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), (error: unknown) => error instanceof RecommendationEvidenceVerificationError && error.failure === failure, name);
+    assert.equal(h.calls.length, 0, name);
+  }
+});
+
+test("the timeout aborts the signal handed to the verifier", async () => {
+  let aborted = false;
+  const h = harness({ evidenceVerifier: { verifier: { id: "slow", verify: (_e, context) => new Promise(() => { context.signal.addEventListener("abort", () => { aborted = true; }); }) }, timeoutMs: 10 } });
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  assert.equal(aborted, true);
+});
+
+test("a verifier bound to a subject refuses evidence replayed for another subject, and a replayed nonce", async () => {
+  const issued = new Map<string, string>([["alice-event", SUBJECT]]);
+  const used = new Set<string>();
+  // Stand-in for a signature check: the proof table says which subject each event was issued for.
+  const verifier = { id: "bound", verify: (evidence: unknown, context: { subjectId: string }) => {
+    const id = (evidence as { accountUri: string }).accountUri.endsWith("alice") ? "alice-event" : "unknown";
+    if (issued.get(id) !== context.subjectId) return { verified: false };
+    const key = `${context.subjectId}:${id}`;
+    if (used.has(key)) return { verified: false };
+    used.add(key);
+    return { verified: true };
+  } };
+  const h = harness({ evidenceVerifier: { verifier } });
+  assert.equal((await h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 })).evidenceVerification, "verified");
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: "user-456", events: [REPORTED], now: T1 }), RecommendationEvidenceVerificationError);
+  await assert.rejects(h.lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [{ ...REPORTED, accountUri: "https://example.test/users/mallory" }], now: T1 }), RecommendationEvidenceVerificationError);
+});
+
+test("an invalid verifier configuration is refused when the lifecycle is created", () => {
+  for (const bad of [{ verifier: { id: "", verify: () => ({ verified: true }) } }, { verifier: { id: "x" } }, { verifier: { id: "x", verify: () => ({ verified: true }) }, timeoutMs: 0 }, { verifier: { id: "x", verify: () => ({ verified: true }) }, timeoutMs: 31_000 }, null]) {
+    assert.throws(() => harness({ evidenceVerifier: bad as never }), TypeError);
+  }
 });

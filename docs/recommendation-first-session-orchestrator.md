@@ -25,7 +25,7 @@ engine.readProfile(subjectId)
 | `perSourceLimit`, `maxCandidates`, `sourceConcurrency`, `featureConcurrency`, `maxScoredCandidates` | Optional bounds passed through to candidate generation, the scoring-input builder, and execution. |
 | `eligibilityConcurrency` | Parallel eligibility evaluations. Defaults to 8. Must be an integer from 1 to 32 or construction throws. |
 
-`execute(request)` takes `subjectId` and `requestId` (required, trimmed, at most 512 characters, no control characters) plus optional `languages`, `limit`, `minScore`, `excludeCandidateIds`, and `signal`. The optional fields are validated by the stage that consumes them.
+`execute(request)` takes `subjectId` and `requestId` (required, trimmed, at most 512 characters, no control characters) plus optional `languages`, `limit`, `minScore`, `excludeCandidateIds`, `excludeSourceIds`, and `signal`. The optional fields are validated by the stage that consumes them. `excludeSourceIds` drops candidates whose provenance includes any listed source ID (for example a curated-set source ID) during candidate generation, before ranking and the candidate cap. `excludeCandidateIds` only removes candidates after scoring.
 
 ## Result
 

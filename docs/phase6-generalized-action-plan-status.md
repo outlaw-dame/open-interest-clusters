@@ -8,7 +8,7 @@ Implemented:
 - feed/list/labeler subscription plans;
 - community follow plans;
 - hashtag follow plans;
-- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result and to accepted curated-set membership consent (caller-supplied and unsigned, so checked for consistency only; revocation after plan creation is reported as a lifecycle event and `assessRecommendationCandidateActionPlan` marks the plan invalid, see Phase 7);
+- bounded starter-pack expansion plans that bind each member to the resolved account identity from its eligibility result and to accepted curated-set membership consent (caller-supplied, with no proof verified, so checked for consistency only; revocation after plan creation is reported as a lifecycle event and `assessRecommendationCandidateActionPlan` marks the plan invalid, see Phase 7);
 - curated account sets (Mastodon Collections and similar) as `starter_pack` candidates that reuse the `starter_packs` capability;
 - eligible-instance signup navigation plans;
 - exact normalized candidate-snapshot binding, including metadata and provenance;

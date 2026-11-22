@@ -46,6 +46,8 @@ export interface RecommendationFirstSessionRequest {
   limit?: number;
   minScore?: number;
   excludeCandidateIds?: readonly string[];
+  /** Provenance source IDs (such as curated-set source IDs) whose candidates are left out before ranking. */
+  excludeSourceIds?: readonly string[];
   signal?: AbortSignal;
 }
 
@@ -122,6 +124,7 @@ function normalizeRequest(request: RecommendationFirstSessionRequest): Recommend
   if (request.limit !== undefined) normalized.limit = request.limit;
   if (request.minScore !== undefined) normalized.minScore = request.minScore;
   if (request.excludeCandidateIds !== undefined) normalized.excludeCandidateIds = request.excludeCandidateIds;
+  if (request.excludeSourceIds !== undefined) normalized.excludeSourceIds = request.excludeSourceIds;
   if (request.signal !== undefined) normalized.signal = request.signal;
   return Object.freeze(normalized);
 }
@@ -194,6 +197,7 @@ export function createRecommendationFirstSessionOrchestrator(
         ...(options.perSourceLimit === undefined ? {} : { perSourceLimit: options.perSourceLimit }),
         ...(options.maxCandidates === undefined ? {} : { maxCandidates: options.maxCandidates }),
         ...(options.sourceConcurrency === undefined ? {} : { concurrency: options.sourceConcurrency }),
+        ...(request.excludeSourceIds === undefined ? {} : { excludeSourceIds: request.excludeSourceIds }),
         ...(request.signal === undefined ? {} : { signal: request.signal })
       });
       assertNotAborted(request.signal);

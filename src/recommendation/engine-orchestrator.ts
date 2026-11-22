@@ -63,14 +63,25 @@ export interface RecommendationEngineOrchestrator {
   synchronize(input: RecommendationEngineSynchronizeInput): Promise<RecommendationProfileApplicationResult>;
   readProfile(subjectId: string): Promise<RecommendationProfileSnapshot>;
   readLedgerSnapshot(input: RecommendationEngineSynchronizeInput): Promise<RecommendationSignalLedgerSnapshot>;
+  deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult>;
+}
+
+/**
+ * Optional extension of the engine port. It is kept apart from `RecommendationEngineOrchestrator` so
+ * an app that wraps or re-implements the engine does not have to add it. The library's own engine
+ * provides it, and the onboarding lifecycle looks for it at runtime.
+ */
+export interface RecommendationEngineEventHistoryReader {
   /**
    * Returns the accepted event history for an active subject, oldest first. Lifecycle code uses it to
    * work out which events are still live without keeping a second copy of that state. Throws behind a
    * deletion replay barrier, like the other subject reads.
    */
   readEventHistory(subjectId: string): Promise<readonly RecommendationSignalLedgerEventInput[]>;
-  deleteSubject(intent: RecommendationDerivedDataDeletionIntent): Promise<RecommendationEngineDeletionResult>;
 }
+
+/** What `createRecommendationEngineOrchestrator` returns: the port plus the event history reader. */
+export type RecommendationEngineOrchestratorWithHistory = RecommendationEngineOrchestrator & RecommendationEngineEventHistoryReader;
 
 const DEFAULT_MAX_EVENTS_PER_BATCH = 10_000;
 const MAX_EVENTS_PER_BATCH = 100_000;
@@ -165,7 +176,7 @@ function createInMemoryStateStore(): RecommendationEngineSubjectStateStore {
 
 export function createRecommendationEngineOrchestrator(
   options: RecommendationEngineOrchestratorOptions
-): RecommendationEngineOrchestrator {
+): RecommendationEngineOrchestratorWithHistory {
   if (!isPlainRecord(options) || !isPlainRecord(options.profileStore)) {
     throw new TypeError("Invalid recommendation engine orchestrator options.");
   }

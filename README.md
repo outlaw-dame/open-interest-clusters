@@ -146,7 +146,7 @@ See:
 
 ## Implemented: onboarding lifecycle and refresh
 
-`createRecommendationOnboardingLifecycle` edits, removes, reruns and withdraws onboarding selections as ledger retractions and applies, so reruns are idempotent and a crash resumes cleanly. `assessRecommendationCandidateActionPlan` reports whether a frozen action plan is still valid, stale or invalid after consent revocation, set deletion, moved or deleted accounts, lost verification or a vanished source. `transitionRecommendationProfilePersistence` moves the profile record between device-owned and user-owned storage without a window where neither copy exists. Plans stay non-executable and nothing here performs a provider mutation. Design, limits and tests are in [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md).
+`createRecommendationOnboardingLifecycle` edits, removes, reruns and withdraws onboarding selections as ledger retractions and applies, so reruns are idempotent and a crash resumes cleanly. `assessRecommendationCandidateActionPlan` reports whether a frozen action plan is still valid, stale or invalid after consent revocation, set deletion, moved or deleted accounts, lost verification or a vanished source. `transitionRecommendationProfilePersistence` moves the profile record between device-owned and user-owned storage without a window where neither copy exists. Plans stay non-executable and nothing here performs a provider mutation. Design, limits and tests are in [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md). Breaking changes per release are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Other remaining work
 

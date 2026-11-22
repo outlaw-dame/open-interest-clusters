@@ -1,5 +1,13 @@
 import type { RecommendationCandidateActionPlan, RecommendationStarterPackMemberBinding } from "./candidate-action-plan.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
+import {
+  RECOMMENDATION_EVIDENCE_UNVERIFIED,
+  combineRecommendationEvidenceVerification,
+  verifyRecommendationEvidence,
+  type NormalizedRecommendationEvidenceVerifier,
+  type RecommendationEvidenceVerification
+} from "./evidence-verifier.js";
+import { assertValidRecommendationProfileSubjectId } from "./profile-store-persistence-key.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
 export const RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENT_SCHEMA_VERSION = "recommendation-candidate-lifecycle-event.v1" as const;
@@ -7,7 +15,7 @@ export const RECOMMENDATION_CANDIDATE_PLAN_ASSESSMENT_SCHEMA_VERSION = "recommen
 
 /**
  * Facts about a candidate or its source that changed after a plan was built. They are reported by the
- * caller. Nothing here is signed, so an event can only make a plan less usable, never more.
+ * caller. Nothing here verifies a proof for an event, so an event can only make a plan less usable, never more.
  */
 export const RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENT_KINDS = [
   "member_consent_revoked",
@@ -82,6 +90,14 @@ export interface RecommendationCandidatePlanAssessment {
   /** Members no event mentioned. They still need revalidation; this only says nothing was reported. */
   unaffectedMemberCandidateIds: readonly string[];
 }
+
+/**
+ * `RecommendationCandidatePlanAssessment` plus what an evidence verifier checked. The library's
+ * assessment functions return this. It is a separate interface so an assessment built by hand against
+ * the earlier shape still compiles. Verification can only reject evidence, so it never makes a plan more usable.
+ */
+export interface RecommendationCandidatePlanAssessmentWithEvidence
+  extends RecommendationCandidatePlanAssessment, RecommendationEvidenceVerification {}
 
 export interface RecommendationCandidatePlanAssessmentOptions {
   now: string;
@@ -199,6 +215,7 @@ export function normalizeRecommendationCandidateLifecycleEvents(
 /**
  * Candidate IDs a caller should keep out of a rerun. Set-level and provider-level events carry no
  * candidate ID of their own, so they only contribute the optional `candidateId` the reporter gave.
+ * Set-level events are handled by `listRecommendationLifecycleExcludedSetSourceIds`.
  */
 export function listRecommendationLifecycleExcludedCandidateIds(
   events: readonly RecommendationCandidateLifecycleEvent[]
@@ -206,6 +223,23 @@ export function listRecommendationLifecycleExcludedCandidateIds(
   const ids = new Set<string>();
   for (const event of events) {
     if (event.candidateId !== undefined) ids.add(event.candidateId);
+  }
+  return Object.freeze([...ids].sort());
+}
+
+const SET_LEVEL_KINDS = new Set<RecommendationCandidateLifecycleEventKind>(["set_deleted", "set_not_discoverable", "set_sensitive"]);
+
+/**
+ * Curated-set source IDs a rerun should leave out. Only set-level events count. Consent events also
+ * name a set, but they concern one member, so they must not take the rest of the set down with them.
+ * Candidates are matched by their `curated_account_set` provenance source ID, so no candidate ID is needed.
+ */
+export function listRecommendationLifecycleExcludedSetSourceIds(
+  events: readonly RecommendationCandidateLifecycleEvent[]
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (SET_LEVEL_KINDS.has(event.kind) && event.setSourceId !== undefined) ids.add(event.setSourceId);
   }
   return Object.freeze([...ids].sort());
 }
@@ -278,7 +312,7 @@ export function assessRecommendationCandidateActionPlan(
   planInput: RecommendationCandidateActionPlan,
   eventsInput: readonly RecommendationCandidateLifecycleEvent[],
   options: RecommendationCandidatePlanAssessmentOptions
-): RecommendationCandidatePlanAssessment {
+): RecommendationCandidatePlanAssessmentWithEvidence {
   assertPlanShape(planInput);
   const plan = planInput;
   if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
@@ -370,8 +404,44 @@ export function assessRecommendationCandidateActionPlan(
     executable: false as const,
     requiresRevalidation: true as const,
     assessedAt,
+    ...RECOMMENDATION_EVIDENCE_UNVERIFIED,
     reasons: Object.freeze(reasons),
     affectedMemberCandidateIds: Object.freeze(affected),
     unaffectedMemberCandidateIds: Object.freeze([...memberIds].filter((id) => !affectedMembers.has(id)).sort())
   });
+}
+
+export interface RecommendationCandidatePlanEvidenceAssessmentOptions extends RecommendationCandidatePlanAssessmentOptions {
+  subjectId: string;
+  evidenceVerifier?: NormalizedRecommendationEvidenceVerifier;
+  /** Events read back from the candidate event store. They were checked when they were reported, so they are not checked again. */
+  storedEvents?: readonly RecommendationCandidateLifecycleEvent[];
+}
+
+/**
+ * Same decision as `assessRecommendationCandidateActionPlan`, but first asks the verifier (if any) about
+ * the extra events, each starter-pack member's consent and the candidate's curated-set provenance.
+ * A verifier that rejects, throws, times out or returns something malformed makes this throw, so the
+ * plan is not reported usable on unchecked evidence. Without a verifier nothing changes and the result
+ * stays `unverified`.
+ */
+export async function assessRecommendationCandidateActionPlanWithEvidence(
+  planInput: RecommendationCandidateActionPlan,
+  eventsInput: readonly RecommendationCandidateLifecycleEvent[],
+  options: RecommendationCandidatePlanEvidenceAssessmentOptions
+): Promise<RecommendationCandidatePlanAssessmentWithEvidence> {
+  if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
+  const { subjectId, evidenceVerifier, storedEvents, ...assessOptions } = options;
+  assertPlanShape(planInput);
+  assertValidRecommendationProfileSubjectId(subjectId);
+  const now = normalizeStrictRfc3339Timestamp(options.now, "Invalid recommendation plan assessment timestamp.");
+  const events = normalizeRecommendationCandidateLifecycleEvents(eventsInput, { now });
+  const provenance = planInput.candidate.provenance.filter((item) => item.kind === "curated_account_set");
+  const verification = combineRecommendationEvidenceVerification([
+    await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members ?? [], "starter_pack_consent", subjectId, now),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members === undefined ? [] : provenance, "starter_pack_provenance", subjectId, now)
+  ], storedEvents?.length ?? 0);
+  const assessment = assessRecommendationCandidateActionPlan(planInput, [...(storedEvents ?? []), ...events], assessOptions);
+  return Object.freeze({ ...assessment, ...verification });
 }

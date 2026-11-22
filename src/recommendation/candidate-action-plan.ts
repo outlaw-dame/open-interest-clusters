@@ -12,7 +12,7 @@ export type RecommendationCandidateAction = typeof RECOMMENDATION_CANDIDATE_ACTI
 export interface RecommendationCandidateActionPlanInput { candidate: RecommendationCandidate; eligibility: RecommendationCandidateEligibilityResult; provider: RecommendationProviderDescriptor; createdAt: string; maxStarterPackMembers?: number; starterPackMembers?: readonly RecommendationStarterPackMemberInput[]; }
 /**
  * One starter-pack member as supplied by the caller: its eligibility result plus the curated-set
- * membership state it was read under. The consent fields are caller-supplied and unsigned.
+ * membership state it was read under. The consent fields are caller-supplied and nothing here checks a proof for them.
  */
 export interface RecommendationStarterPackMemberInput { eligibility: RecommendationCandidateEligibilityResult; consent: { state: RecommendationCuratedAccountMembershipState; setProvider: string; setId: string; observedAt: string }; }
 /** One starter-pack member, bound to the account identity its eligibility result resolved and to its accepted membership. */
