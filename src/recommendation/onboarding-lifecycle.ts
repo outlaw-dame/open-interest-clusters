@@ -60,6 +60,11 @@ import type {
   RecommendationSignalRetractionReason
 } from "./signal-ledger.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
+import {
+  normalizeRecommendationSubjectLockOptions,
+  withRecommendationSubjectLock,
+  type RecommendationSubjectLockOptions
+} from "./subject-lock.js";
 
 /** Reasons a caller may give when withdrawing every onboarding selection at once. */
 export const RECOMMENDATION_ONBOARDING_WITHDRAWAL_REASONS = ["source_retracted", "consent_revoked"] as const;
@@ -152,6 +157,16 @@ export interface RecommendationOnboardingLifecycleOptions {
   engine: object & Partial<RecommendationEngineEventHistoryReader>;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
   now?: () => string;
+  /**
+   * Optional lock the application provides (Web Locks, a database advisory lock, and so on) so
+   * writes for one subject do not overlap across processes or devices. The library has none of its
+   * own and gives no cross-process guarantee without it. When set, `applySelection`,
+   * `withdrawSelections`, `reportCandidateEvents`, `assessPlan` and `refresh` take it after the
+   * in-process queue and hold it until the call finishes, including any verifier, source or
+   * first-session call made inside. Acquire failure, timeout or abort rejects with a
+   * `RecommendationSubjectLockError` before anything is written.
+   */
+  subjectLock?: RecommendationSubjectLockOptions;
   /**
    * Optional check that reported events and plan consent and provenance are real. Without it they are
    * used as supplied and results say `unverified`. With it, evidence the verifier does not accept
@@ -363,6 +378,11 @@ export function createRecommendationOnboardingLifecycle(
   const clock = options.now ?? (() => new Date().toISOString());
   // Keyed by the engine, so every lifecycle built on one engine queues per subject in one line.
   const serializer = getSharedRecommendationKeyedSerializer(options.engine);
+  const subjectLock = options.subjectLock === undefined ? undefined : normalizeRecommendationSubjectLockOptions(options.subjectLock);
+  // Order is always: engine queue, then the application's lock, then the store queue. Nothing takes them the other way round.
+  function locked<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
+    return serializer.run(subjectId, subjectLock === undefined ? work : () => withRecommendationSubjectLock(subjectLock, subjectId, work));
+  }
 
   const evidenceVerifier: NormalizedRecommendationEvidenceVerifier | undefined =
     options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerifierOptions(options.evidenceVerifier);
@@ -609,7 +629,7 @@ export function createRecommendationOnboardingLifecycle(
       if ("profileStore" in input) throw new TypeError("Recommendation onboarding selection changes cannot take a profile store.");
       const { now: rawNow, ...seedInput } = input;
       const now = timestamp(rawNow);
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async () => {
         // The seed does the catalog, sensitivity and consent checks. Consent is enforced on every
         // call, so a policy that no longer allows personalization stops the change before any write.
         let seed;
@@ -635,7 +655,7 @@ export function createRecommendationOnboardingLifecycle(
       }
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async () => {
         if (input.reason === "consent_revoked") await clearStoredEvents(input.subjectId);
         return reconcile(input.subjectId, now, new Map(), input.reason);
       });
@@ -645,7 +665,7 @@ export function createRecommendationOnboardingLifecycle(
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding candidate report.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, () => report(input.subjectId, input.events, now, input.policy));
+      return locked(input.subjectId, () => report(input.subjectId, input.events, now, input.policy));
     },
 
     async listReportedCandidateEvents(input: { subjectId: string; now?: string }) {
@@ -662,7 +682,7 @@ export function createRecommendationOnboardingLifecycle(
       if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
       const now = timestamp(input.now);
       const policy: RecommendationConsentPolicy | undefined = input.policy as RecommendationConsentPolicy | undefined;
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async () => {
         if (policy !== undefined) await requireStoreConsent(input.subjectId, policy);
         const stored = await readStoredEvents(input.subjectId, now);
         return assessRecommendationCandidateActionPlanWithEvidence(input.plan, input.events ?? [], {
@@ -684,7 +704,7 @@ export function createRecommendationOnboardingLifecycle(
       assertValidRecommendationProfileSubjectId(subjectId);
       const now = timestamp(input.now);
       const firstSession = options.firstSession;
-      return serializer.run(subjectId, async () => {
+      return locked(subjectId, async () => {
         const events = input.candidateEvents === undefined
           ? undefined
           : normalizeRecommendationCandidateLifecycleEvents(input.candidateEvents, { now });

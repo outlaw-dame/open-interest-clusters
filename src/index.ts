@@ -33,6 +33,15 @@ export * from "./recommendation/candidate-lifecycle.js";
 export * from "./recommendation/evidence-verifier.js";
 export * from "./recommendation/evidence-attestation.js";
 export * from "./recommendation/onboarding-lifecycle.js";
+export {
+  RECOMMENDATION_SUBJECT_LOCK_DEFAULT_TIMEOUT_MS,
+  RECOMMENDATION_SUBJECT_LOCK_MAX_TIMEOUT_MS,
+  RecommendationSubjectLockError,
+  type RecommendationSubjectLock,
+  type RecommendationSubjectLockFailureReason,
+  type RecommendationSubjectLockOptions,
+  type RecommendationSubjectLockRelease
+} from "./recommendation/subject-lock.js";
 export * from "./recommendation/profile-persistence-transition.js";
 export * from "./recommendation/curated-account-set-candidate-source.js";
 export * from "./recommendation/curated-account-set-change-diff.js";

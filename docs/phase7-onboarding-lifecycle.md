@@ -210,7 +210,7 @@ State after the limit-reduction work, with what each item does and does not cove
 
 1. **No proof is verified by default.** Candidate lifecycle events and the consent and provenance inside plans are caller-supplied. Nothing in the repository verifies the protocol proofs behind them (see "What is and is not verified today"). The optional `evidenceVerifier` hook (see "Evidence verification") lets the application reject evidence, and a rejection or failure blocks the report or assessment. Without a verifier, results say `evidenceVerification: "unverified"`, and a consistent fabrication of plan evidence is not detectable. Plan assessment also rejects malformed provenance, identity fields and timestamps, but a well-formed forgery passes. Evidence can only make a plan less usable, with or without a verifier.
 2. **Reported events are lost on restart: fixed when a store is configured, opt-in.** With `candidateEvents: { store }` events are kept (see "Persisted candidate events"). With no store, only the cache invalidation they cause is durable, as before.
-3. **Write interleaving: fixed in process per engine, cross-process remains.** Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). The ledger raises its conflict as a plain `TypeError` and has no dedicated error class, so a `TypeError` is only treated as a conflict when the operation IDs in the history changed since it was read. An unrelated ledger error is returned on the first failure; a validation `TypeError` that coincides with an outside write costs at most the 5 attempts before it is returned. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call. There is no cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
+3. **Write interleaving: fixed in process per engine, cross-process remains.** Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). The ledger raises its conflict as a plain `TypeError` and has no dedicated error class, so a `TypeError` is only treated as a conflict when the operation IDs in the history changed since it was read. An unrelated ledger error is returned on the first failure; a validation `TypeError` that coincides with an outside write costs at most the 5 attempts before it is returned. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call. There is no cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), which the optional `subjectLock` hook can call for it (see "The `subjectLock` hook"), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
 4. **Set-level events needing candidate IDs: fixed.** Set events exclude by source ID on refresh (see decision 4).
 
 Gaps that remain by design or by scope:
@@ -241,6 +241,49 @@ Gaps that remain by design or by scope:
 5. When a lock attempt fails, wait with exponential backoff and jitter (for example 1s, 2s, 4s up to a cap, each scaled by a random factor between 0.5 and 1) before trying again, and give up after a handful of attempts.
 
 Treat the lock as an efficiency measure only. Refresh stays safe without it, because every stored write is still guarded by compare-and-set when the store supports it.
+
+### The `subjectLock` hook
+
+If you want the lifecycle to hold your lock around its writes instead of wrapping every call yourself, pass `subjectLock`:
+
+```ts
+createRecommendationOnboardingLifecycle({
+  derived, engine,
+  subjectLock: {
+    acquire: async (subjectId, { signal }) => /* take the lock, resolve to a function that frees it */,
+    timeoutMs: 5000,        // longest wait for acquire, and for a release (default 5000, at most 60000)
+    signal: shutdown.signal, // optional: aborting stops every wait
+    onReleaseError: (error) => log.warn(error.reason)
+  }
+});
+```
+
+**The library itself provides no cross-process guarantee.** There is no default lock. Leave the option out and nothing changes. With a lock you supply, `applySelection`, `withdrawSelections`, `reportCandidateEvents`, `assessPlan` (it can delete events when consent is denied) and `refresh` run inside it. `listReportedCandidateEvents` only reads and does not take it. The library adds no lease, no expiry and no clock beyond a bounded wait, so what the lock guarantees is whatever your lock guarantees.
+
+- **Ordering.** The call joins the in-process per-subject queue first, then takes your lock, then does its work (the candidate event store has its own queue inside that). It never takes them in the other order, so a call that holds your lock is never waiting for the queue, and two calls in one process never both wait on your lock for the same subject. Locks for different subjects are independent.
+- **Fail closed.** If `acquire` throws, rejects, times out or is aborted, the call rejects with `RecommendationSubjectLockError` (`reason`: `acquire_failed`, `acquire_timeout` or `aborted`) before anything is read or written. The error message never contains the subject ID, and the underlying error is on `cause`. If `acquire` resolves to something that is not a function the call fails with `invalid_release`. If the lock is granted after the library gave up waiting, it is released at once.
+- **Abort.** `acquire` gets an `AbortSignal` that fires on timeout and when the lifecycle's own `signal` aborts. Pass it on to your lock (see the Web Locks recipe). An already aborted `signal` fails the call without calling `acquire`.
+- **Release.** The release function runs once, in a `finally`, and waits at most `timeoutMs`. A throwing, rejecting or hanging release never changes the result or the error of the write. It is reported to `onReleaseError` as a `RecommendationSubjectLockError` (`release_failed` or `release_timeout`), and errors thrown by that callback are ignored. Without the callback a release failure is not visible, so set it.
+- **How long it is held.** The lock is held for the whole call. For `reportCandidateEvents`, `refresh` and `assessPlan` that includes the evidence verifier, and for `refresh` it also includes the first-session call and its source reads. Those are not shortened by `timeoutMs`, which only bounds the wait for `acquire` and release. If your lock can expire (a lease, a database session timeout), make it longer than the slowest verifier and source you plug in, or expect the lock to be gone before the write finishes.
+
+**Web Locks (browser or service worker).** `navigator.locks.request` holds the lock until the callback's promise settles, so resolve a promise when the library releases:
+
+```ts
+acquire: (subjectId, { signal }) => new Promise((resolveAcquire, rejectAcquire) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  navigator.locks.request(`oic:${subjectId}`, { signal }, () => {
+    resolveAcquire(() => release());
+    return held;
+  }).catch(rejectAcquire);
+})
+```
+
+The `signal` makes a queued request stop waiting when it aborts, and the request rejects with an `AbortError`, which the lifecycle reports as `acquire_failed` or `acquire_timeout` depending on what fired first. Web Locks are shared by one origin in one browser profile. They do not span devices.
+
+**A database lock.** Take a transaction-scoped or session advisory lock on a key derived from the subject ID (for example `pg_advisory_lock(hashtextextended($1, 0))` on a dedicated connection). Resolve with a function that unlocks and returns the connection to the pool. Use `pg_try_advisory_lock` in a short backoff loop that checks `signal.aborted`, because a plain blocking `pg_advisory_lock` cannot be cancelled by the signal. A session lock is dropped by the database if the connection dies, which covers a crashed holder.
+
+**Conditional writes (`If-Match`).** Where the store can refuse a stale write, you do not need a lock. This is what `supportsCompareAndSet` and `expectedDigest` already do for the candidate event store, and it protects stored events only. For other state, read the resource, remember its `ETag`, and send `If-Match` with the write, retrying from the read on a `412`. A `subjectLock` is for the case where the store cannot do that.
 
 ## Evidence verification
 
