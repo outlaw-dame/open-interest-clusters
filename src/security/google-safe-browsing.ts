@@ -106,7 +106,7 @@ export class GoogleSafeBrowsingClient {
     const payload = {
       client: {
         clientId: "open-interest-clusters",
-        clientVersion: "0.2.0"
+        clientVersion: "0.3.0"
       },
       threatInfo: {
         threatTypes: [

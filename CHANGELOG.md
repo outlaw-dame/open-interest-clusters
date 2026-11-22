@@ -4,6 +4,8 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+## 0.3.0
+
 Changes from PR #136, on top of 0.2.0.
 
 ### Added
