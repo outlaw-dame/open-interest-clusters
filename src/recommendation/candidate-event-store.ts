@@ -244,12 +244,17 @@ export function recommendationCandidateEventRecordDigest(raw: unknown): string |
  * never evicted to make room, because losing one makes the set eligible again, and an event being
  * added now is never dropped to make room either. If the cap would force either out, this throws and
  * nothing is changed; set-level events leave only when they expire (after `setExclusionRetentionMs`).
+ *
+ * `recordedAtFor` lets a caller that is moving events between stores keep each event's original
+ * recording time, so a move does not restart its retention clock. It is given the very event objects
+ * passed in `incoming`; anything it does not know gets `now`.
  */
 export function mergeRecommendationCandidateEventEntries(
   current: readonly RecommendationStoredCandidateEvent[],
   incoming: readonly RecommendationCandidateLifecycleEvent[],
   limits: RecommendationCandidateEventStoreLimits,
-  now: string
+  now: string,
+  recordedAtFor?: (event: RecommendationCandidateLifecycleEvent) => string | undefined
 ): { entries: readonly RecommendationStoredCandidateEvent[]; changed: boolean } {
   const byKey = new Map<string, RecommendationStoredCandidateEvent>();
   let changed = false;
@@ -268,7 +273,7 @@ export function mergeRecommendationCandidateEventEntries(
     const key = slotKey(event);
     const held = byKey.get(key);
     if (held === undefined || supersedes(event, held.event)) {
-      const entry = Object.freeze({ recordedAt: now, event });
+      const entry = Object.freeze({ recordedAt: recordedAtFor?.(event) ?? now, event });
       byKey.set(key, entry);
       added.add(entry);
       changed = true;

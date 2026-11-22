@@ -73,6 +73,17 @@ The derived-state orchestrator's checkpoint is a digest of the profile, so a can
 
 Adapter and verification failures are retried with exponential backoff and full jitter (default 3 attempts, 200 ms base, doubling, capped at 30 s). Consent and placement denials are never retried. Provider-hosted, server-profile, ephemeral and operator placements are refused twice: by target and by the adapter placement manifest. A transition whose two sides resolve to the same adapter and key is rejected so a record cannot delete itself. Per-subject calls are serialized in process. An abort signal also interrupts a backoff wait, so a pending retry delay does not hold the call open.
 
+Stored candidate events move in the same call when both locations set `candidateEventStore`. They are the same kind of private, subject-level data, so the same rules apply:
+
+- Consent for a remote destination is checked before anything is touched, so a denial leaves the profile and the events where they were.
+- The source events are read and validated first. A record that names another subject, fails its digest or holds an invalid event stops the move with nothing written. Events are merged into whatever the destination already holds and keep their original recording times, so a move does not restart retention. Pass the same `candidateEventLimits` the lifecycle uses, otherwise set-level exclusions older than the default retention would be dropped on the way.
+- The destination is read back and checked against the digest of what was written. A compare-and-set store is written with `expectedDigest`, and a conflict is retried with the same backoff.
+- Source events are deleted after the destination is verified and before the source profile, so the profile stays as the marker for a rerun. If the delete fails the error is `source_cleanup_pending` and the same call finishes it without a second write.
+- With a store on only one side, events are left alone and the result carries `candidateEvents: "skipped_store_missing"`. Without any event store the field is absent.
+- The move runs inside both stores' per-subject queues, so a report that is mid-save finishes first. Store methods must not call back into the lifecycle for the same subject, because that waits on the same queue. Passing one store object on both sides is refused.
+
+Only profile records and candidate events move. The engine's event-history store and derived caches have their own placement.
+
 ### 7. Scoring bindings
 
 No change was needed. The Phase 4 builder already rejects a candidate bound to a different profile fingerprint, and any retraction or edit changes the profile digest. A test covers a binding made before a removal being rejected afterward.
@@ -168,7 +179,7 @@ State after the limit-reduction work, with what each item does and does not cove
 
 Gaps that remain by design or by scope:
 
-- The profile transition moves the profile record only. It does not move reported candidate events, the engine's event-history store or derived caches. Each has its own placement, owned by the application.
+- The profile transition moves the profile record and, when both sides pass a `candidateEventStore`, reported candidate events. It does not move the engine's event-history store or derived caches. Each has its own placement, owned by the application.
 - A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
 - Deletion waits for an in-flight save only within one process and one store object (see the race note above).
 - Event stores that do not implement compare-and-set, or that fail `checkRecommendationCandidateEventStoreCompareAndSet`, stay single-writer. There is no lease or lock across processes (see "Several processes and scheduled refresh").

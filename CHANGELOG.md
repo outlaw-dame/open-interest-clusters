@@ -9,6 +9,8 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 - `checkRecommendationCandidateEventStoreCompareAndSet(store)`. It tests a store's `supportsCompareAndSet` claim by trying a stale write on a throwaway probe subject, and returns `passed`, `failed` (with a fixed reason) or `inconclusive` when the store threw. The onboarding lifecycle runs it once before its first guarded write.
 - `candidateEvents.setExclusionRetentionMs` on `createRecommendationOnboardingLifecycle`, and `MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS` (365 days). It lets set-level events outlive ordinary ones so a hidden set stays hidden longer. It defaults to `retentionMs`, so nothing changes unless you set it, and it may not be shorter than `retentionMs`. Deletion and revoked consent still clear these events immediately.
 
+- `transitionRecommendationProfilePersistence` can now move stored candidate events along with the profile. Give both locations a `candidateEventStore` (and optionally `candidateEventLimits`). Events are copied, read back, and deleted from the source before the source profile is removed, with the same consent check, backoff and rerun behavior as the profile. The result gains an optional `candidateEvents` field (`moved`, `nothing_to_move` or `skipped_store_missing`). Callers that pass no event store see no change.
+
 ### Changed
 
 - A candidate event store that declares `supportsCompareAndSet` but accepts stale writes (or refuses current ones) is no longer trusted. The lifecycle falls back to its per-subject queue without `expectedDigest`, the same as a store that never declared support. Before this, a store that lied let two devices overwrite each other without any signal.
