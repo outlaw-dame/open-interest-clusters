@@ -97,7 +97,7 @@ No change was needed. The Phase 4 builder already rejects a candidate bound to a
 
 ## Public API changes
 
-New exports are additive. Interfaces that an application implements by hand (engine and derived-state ports, stores, verifiers) gained no required members. Where Phase 7 needs a new capability from such a port, it lives on a separate extension interface that the lifecycle looks for at runtime:
+New exports are additive. Compared with 0.2.0, interfaces that an application implements by hand (engine and derived-state ports, stores, verifiers) have no required Phase 7 members. Where Phase 7 needs a new capability from such a port, it lives on a separate extension interface that the lifecycle looks for at runtime:
 
 - `readEventHistory(subjectId)` is on `RecommendationEngineEventHistoryReader`, not on `RecommendationEngineOrchestrator`. `createRecommendationEngineOrchestrator` returns `RecommendationEngineOrchestratorWithHistory`, so code using the package's engine sees it. A wrapper or test double that lacks it still compiles. A lifecycle built on an engine without it throws a `TypeError` from `applySelection` and `withdrawSelections` before anything is written. Event reports, `assessPlan` and `refresh` do not need it.
 - `invalidateCandidateState(input)` is on `RecommendationCandidateStateInvalidator`, not on `RecommendationDerivedStateInvalidationOrchestrator`. The factory returns `RecommendationDerivedStateInvalidationOrchestratorWithCandidateState`. A lifecycle built on a derived-state port without it throws a `TypeError` from `reportCandidateEvents` (and from a `refresh` that reports events) before consent is read or anything is stored, because the candidate caches could not be cleared. Selections, `assessPlan` and a `refresh` with no events still work.
@@ -123,17 +123,7 @@ These lists can grow in a minor release, so code that branches on them needs a d
 
 `tests/public-api-surface.test.ts` pins the exported names and the member lists of the interfaces above against `tests/fixtures/public-api-surface.json`. After an intentional API change, run `pnpm build && UPDATE_API_SURFACE=1 node --test dist/tests/public-api-surface.test.js`, review the fixture diff and commit it with the change.
 
-Because of these items this ships as 0.2.0, a minor bump in the pre-1.0 range.
-
-### 0.2.0 breaking changes
-
-Everything below breaks existing callers, not only the Phase 7 interface additions:
-
-- The interface and type changes listed above under "Public API changes".
-- The `collections` capability is now `communities`. There is no alias, so callers have to rename it.
-- `starterPackMembers` takes `{ eligibility, consent }` wrappers instead of bare members.
-- Member candidates must carry `curated_account_set` provenance.
-- The curated-set source also emits `starter_pack` candidates when asked for that kind.
+Version 0.2.0 shipped with `readEventHistory` and `invalidateCandidateState` as required members of the engine and derived-state orchestrator interfaces. The extension interfaces above relax that, so code written against 0.2.0 keeps compiling. The full list of breaking changes per release, with migration notes, is in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Clocks
 
