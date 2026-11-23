@@ -70,6 +70,17 @@ import {
 /** Stands in for the hold signal when no subject lock is configured, so the same code path runs either way. */
 const NEVER_ABORTED: AbortSignal = new AbortController().signal;
 
+/**
+ * The signal for the first session. The caller's own signal still counts, so either one stops it. With
+ * no lock the hold signal never aborts and is not passed on. Combining with it would leave a new
+ * entry on that one long-lived signal for every refresh, which Node does not release promptly, and it
+ * would hand the first session a signal where it got none before.
+ */
+function firstSessionSignal(caller: AbortSignal | undefined, hold: AbortSignal): { signal?: AbortSignal } {
+  if (hold === NEVER_ABORTED) return caller === undefined ? {} : { signal: caller };
+  return { signal: caller === undefined ? hold : AbortSignal.any([caller, hold]) };
+}
+
 /** Reasons a caller may give when withdrawing every onboarding selection at once. */
 export const RECOMMENDATION_ONBOARDING_WITHDRAWAL_REASONS = ["source_retracted", "consent_revoked"] as const;
 export type RecommendationOnboardingWithdrawalReason = typeof RECOMMENDATION_ONBOARDING_WITHDRAWAL_REASONS[number];
@@ -757,8 +768,7 @@ export function createRecommendationOnboardingLifecycle(
         checkpoint(signal);
         const result = await firstSession.execute({
           ...input.request,
-          // The caller's own signal still counts. Either one stops the first session.
-          signal: input.request.signal === undefined ? signal : AbortSignal.any([input.request.signal, signal]),
+          ...firstSessionSignal(input.request.signal, signal),
           excludeCandidateIds: excludedCandidateIds,
           excludeSourceIds: excludedSetSourceIds
         });
