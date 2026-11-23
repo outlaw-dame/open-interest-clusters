@@ -707,3 +707,13 @@ test("many refreshes without a lock do not pile up on one shared signal", async 
     AbortSignal.any = original;
   }
 });
+
+test("applySelection refuses an explicit server_allowed label for a device selection even with server-side consent", async () => {
+  const { lifecycle, engine } = harness();
+  const serverPolicy: RecommendationConsentPolicy = { ...POLICY, serverSideDataUses: ["local_personalization"] };
+  await assert.rejects(
+    lifecycle.applySelection(change(["gaming"], T0, { policy: serverPolicy, privacyBoundary: "server_allowed" })),
+    /local_app storage target must use the local_only privacy boundary/u
+  );
+  assert.deepEqual((await engine.readLedgerSnapshot({ subjectId: SUBJECT, now: T0 })).activeSignals, []);
+});
