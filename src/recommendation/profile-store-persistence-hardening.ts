@@ -262,9 +262,12 @@ export async function writeRecommendationProfileStoreRecordSafely(adapter: Recom
   const verifyWrite = optionalBoolean(input.verifyWrite, "Invalid recommendation profile persistence verification option.");
   const deleteOnFailure = optionalBoolean(input.deleteOnVerificationFailure, "Invalid recommendation profile persistence cleanup option.");
   const validated = createRecommendationProfileStoreRecord(input);
-  // A profile written to the pod carries the pod's label. Interests stored as local_only (what 0.2.0
-  // and 0.3.0 wrote into a pod) are relabelled here, so the next write heals them.
-  const relabelled = storageTarget === "user_pod" ? relabelRecommendationProfileForTarget(validated.profile, "user_pod") : validated.profile;
+  // The label follows the placement: a pod profile carries server_allowed (this also heals what 0.2.0 and
+  // 0.3.0 wrote there as local_only), a device profile carries local_only. Moving to the device only
+  // makes the label stricter, so it needs no consent, same as the transition. Other targets are
+  // refused later and are left as they are.
+  const labelTarget = storageTarget === "user_pod" || storageTarget === "local_app" ? storageTarget : undefined;
+  const relabelled = labelTarget === undefined ? validated.profile : relabelRecommendationProfileForTarget(validated.profile, labelTarget);
   const record = relabelled === validated.profile ? validated : createRecommendationProfileStoreRecord({ ...input, profile: relabelled });
   const consent = await enforceWriteConsent(input, storageTarget, record.profile);
   assertManifestMatchesTarget(manifest, storageTarget, "write");

@@ -295,3 +295,81 @@ test("safe profile persistence deletes by derived subject key using a deletion i
   assert.equal(deleted.signalCount, 0);
   assert.equal(deleted.updatedAt, deletionIntent.requestedAt);
 });
+
+// The label on a profile's interests follows where it is written: local_only on the device,
+// server_allowed in the user's pod. A label that doesn't fit is either fixed the way a profile move
+// would fix it, or refused.
+const labelsOf = (stored: unknown) => (stored as RecommendationProfileStoreRecord).profile.entries.map((entry) => [...entry.privacyBoundaries]);
+
+test("a device write relabels a server_allowed profile to local_only and needs no policy", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter();
+  const input = { ...writeInput(), profile: profileSnapshot(["server_allowed"]) };
+  const result = await writeRecommendationProfileStoreRecordSafely(adapter, input);
+  const stored = adapter.records.get(result.record.subjectKey);
+  assert.deepEqual(labelsOf(stored), [["local_only"]]);
+  assert.deepEqual(labelsOf(result.record), [["local_only"]]);
+  assert.equal(result.verified, true);
+  // Nothing but the label changes.
+  const { privacyBoundaries: _before, ...contentBefore } = input.profile.entries[0]!;
+  const { privacyBoundaries: _after, ...contentAfter } = (stored as RecommendationProfileStoreRecord).profile.entries[0]!;
+  assert.deepEqual(contentAfter, contentBefore);
+  assert.equal(result.consent, undefined);
+});
+
+test("a device write collapses a mixed local_only and server_allowed label to local_only", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter();
+  const result = await writeRecommendationProfileStoreRecordSafely(adapter, { ...writeInput(), profile: profileSnapshot(["local_only", "server_allowed"]) });
+  assert.deepEqual(labelsOf(adapter.records.get(result.record.subjectKey)), [["local_only"]]);
+});
+
+test("a device write of a local_only profile stores it unchanged", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter();
+  const input = writeInput();
+  const result = await writeRecommendationProfileStoreRecordSafely(adapter, input);
+  assert.deepEqual(result.record.profile, input.profile);
+  assert.deepEqual(labelsOf(adapter.records.get(result.record.subjectKey)), [["local_only"]]);
+});
+
+test("a device write refuses an explicit server_allowed boundary and stores nothing", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter();
+  await assert.rejects(
+    () => writeRecommendationProfileStoreRecordSafely(adapter, { ...writeInput(), profile: profileSnapshot(["server_allowed"]), privacyBoundary: "server_allowed", policy: explicitProfileConsent("subject-1") }),
+    /must use the local_only privacy boundary/u
+  );
+  assert.equal(adapter.records.size, 0);
+});
+
+test("a pod write relabels a server_allowed profile as it is, and heals a legacy local_only one", async () => {
+  for (const labels of [["server_allowed"], ["local_only"], ["local_only", "server_allowed"]] as const) {
+    const adapter = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
+    const result = await writeRecommendationProfileStoreRecordSafely(adapter, {
+      ...writeInput(), storageTarget: "user_pod", profile: profileSnapshot(labels), policy: explicitProfileConsent("subject-1")
+    });
+    assert.deepEqual(labelsOf(adapter.records.get(result.record.subjectKey)), [["server_allowed"]], labels.join("+"));
+  }
+});
+
+test("a pod write still needs a policy, even for a server_allowed profile, and refuses a local_only boundary", async () => {
+  const adapter = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
+  await assert.rejects(
+    () => writeRecommendationProfileStoreRecordSafely(adapter, { ...writeInput(), storageTarget: "user_pod", profile: profileSnapshot(["server_allowed"]) }),
+    (error) => assertPersistenceError(error, "persistence.deny.server_consent_required")
+  );
+  await assert.rejects(
+    () => writeRecommendationProfileStoreRecordSafely(adapter, { ...writeInput(), storageTarget: "user_pod", privacyBoundary: "local_only", policy: explicitProfileConsent("subject-1") }),
+    /must use the server_allowed privacy boundary/u
+  );
+  assert.equal(adapter.records.size, 0);
+});
+
+test("aggregate_only profiles are refused on both targets and nothing is written", async () => {
+  for (const [manifest, storageTarget] of [[LOCAL_MANIFEST, "local_app"], [POD_MANIFEST, "user_pod"]] as const) {
+    const adapter = new MemoryProfilePersistenceAdapter(manifest);
+    await assert.rejects(
+      () => writeRecommendationProfileStoreRecordSafely(adapter, { ...writeInput(), storageTarget, profile: profileSnapshot(["aggregate_only"]), policy: explicitProfileConsent("subject-1") }),
+      (error) => assertPersistenceError(error, "persistence.deny.aggregate_subject_profile"),
+      storageTarget
+    );
+    assert.equal(adapter.records.size, 0, storageTarget);
+  }
+});
