@@ -75,6 +75,8 @@ const ONBOARDING_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "user_owned
 const USER_OWNED_POD_PREFERENCE_TARGETS: ReadonlySet<string> = new Set(["activitypods_pod", "solid_pod"]);
 /** A private space on the user's own PDS. There is deliberately no target for a public repo. */
 const USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET = "atproto_private_space";
+/** The selection target for interests kept on the user's own device. */
+const DEVICE_PREFERENCE_TARGET = "local_app";
 const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_SIGNAL_COUNT = 10_000;
 
@@ -137,8 +139,10 @@ function isUserOwnedServerTarget(storageTarget: string): boolean {
 
 /**
  * With no explicit choice, a selection kept in the user's own pod is labelled `server_allowed` and
- * anything else `local_only`. An explicit `local_only` for a pod selection is refused rather than
- * rewritten: the label has to say where the interests are processed.
+ * anything else `local_only`. An explicit `local_only` for a pod selection and an explicit
+ * `server_allowed` for a device selection are refused rather than rewritten: the label has to say where
+ * the interests are processed. Other targets (encrypted sync, provider storage) are not checked here and
+ * the signal policy refuses server-side labels for them.
  */
 function resolvePrivacyBoundary(
   explicit: RecommendationInterestPrivacyBoundary | undefined,
@@ -148,6 +152,9 @@ function resolvePrivacyBoundary(
   if (explicit === undefined) return inUserPod ? "server_allowed" : DEFAULT_PRIVACY_BOUNDARY;
   if (inUserPod && explicit === "local_only") {
     throw new TypeError("Recommendation onboarding profile seed for a user-owned pod or space must use the server_allowed privacy boundary.");
+  }
+  if (selection.storageTarget === DEVICE_PREFERENCE_TARGET && explicit === "server_allowed") {
+    throw new TypeError("Recommendation onboarding profile seed for the local_app storage target must use the local_only privacy boundary.");
   }
   return explicit;
 }
