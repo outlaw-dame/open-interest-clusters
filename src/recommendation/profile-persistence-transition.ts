@@ -1,6 +1,7 @@
 import {
   assertRecommendationCandidateEventStore,
   buildRecommendationCandidateEventRecord,
+  checkRecommendationCandidateEventStoreCompareAndSet,
   mergeRecommendationCandidateEventEntries,
   MAX_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS,
   MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS,
@@ -22,7 +23,7 @@ import {
   writeRecommendationProfileStoreRecordSafely,
   type RecommendationProfilePersistenceReasonCode
 } from "./profile-store-persistence-hardening.js";
-import { relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
+import { manifestFitsProfileTarget, relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
 import { assertValidRecommendationProfileSubjectId, createRecommendationProfileSubjectKey } from "./profile-store-persistence-key.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
 
@@ -217,14 +218,10 @@ async function storeCall<T>(
   }
 }
 
-/** Same placement rule the profile adapters get: device-owned and local-only for the app, user-owned for the pod. */
+/** The placement rule the profile adapters get, shared through one helper. */
 function assertEventStoreMatchesTarget(store: RecommendationCandidateEventStore, target: RecommendationProfileTransitionTarget): void {
   assertRecommendationCandidateEventStore(store);
-  const { authority, processingBoundary } = store.manifest;
-  const allowed = target === "local_app"
-    ? authority === "device_owned" && processingBoundary === "local_only"
-    : authority === "user_owned" && processingBoundary === "server_allowed";
-  if (!allowed) throw new RecommendationProfilePersistenceError("write", "persistence.deny.storage_placement_policy", target);
+  if (!manifestFitsProfileTarget(store.manifest, target)) throw new RecommendationProfilePersistenceError("write", "persistence.deny.storage_placement_policy", target);
 }
 
 interface CandidateEventMove {
@@ -249,12 +246,24 @@ function moveCandidateEvents(move: CandidateEventMove): Promise<RecommendationPr
   const toStore = to.candidateEventStore;
   const load = (store: RecommendationCandidateEventStore, target: RecommendationProfileTransitionTarget) =>
     storeCall("read", "persistence.error.adapter_read_failed", target, () => store.load(subjectId));
+  // A destination that only claims compare-and-set is checked before `expectedDigest` is trusted, the same
+  // as the lifecycle does. A definite fail means plain writes (this call already holds both queues). A check
+  // that cannot finish is retried with backoff and then fails the move, with the source untouched.
+  let guard: Promise<boolean> | undefined;
+  const destinationHonorsCompareAndSet = (): Promise<boolean> => guard ??= toStore.supportsCompareAndSet !== true
+    ? Promise.resolve(false)
+    : withBackoff(async () => {
+      const verdict = await checkRecommendationCandidateEventStoreCompareAndSet(toStore);
+      if (verdict.status === "inconclusive") throw new RecommendationProfilePersistenceError("write", "persistence.error.adapter_write_failed", to.storageTarget);
+      return verdict.status === "passed";
+    }, retry, signal);
   return getSharedRecommendationKeyedSerializer(fromStore).run(subjectId, () => getSharedRecommendationKeyedSerializer(toStore).run(subjectId, async () => {
     const sourceRaw = await withBackoff(() => load(fromStore, from.storageTarget), retry, signal);
     if (sourceRaw === undefined) return "nothing_to_move" as const;
     const sourceEntries = readRecommendationCandidateEventRecord(sourceRaw, subjectId, limits, now);
     if (sourceEntries.length > 0) {
       const recordedAt = new Map(sourceEntries.map((entry) => [entry.event, entry.recordedAt] as const));
+      const guarded = await destinationHonorsCompareAndSet();
       await withBackoff(async () => {
         const destinationRaw = await load(toStore, to.storageTarget);
         const merged = mergeRecommendationCandidateEventEntries(
@@ -265,7 +274,7 @@ function moveCandidateEvents(move: CandidateEventMove): Promise<RecommendationPr
         if (!merged.changed) return;
         const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
         const expectedDigest = recommendationCandidateEventRecordDigest(destinationRaw);
-        await storeCall("write", "persistence.error.adapter_write_failed", to.storageTarget, () => toStore.supportsCompareAndSet === true
+        await storeCall("write", "persistence.error.adapter_write_failed", to.storageTarget, () => guarded
           ? toStore.save(subjectId, record, { expectedDigest })
           : toStore.save(subjectId, record));
         const readBack = await load(toStore, to.storageTarget);

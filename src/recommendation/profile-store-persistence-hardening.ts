@@ -28,7 +28,7 @@ import {
   createRecommendationProfileStoreRecord,
   normalizeRecommendationProfileStoreRecord
 } from "./profile-store-persistence-record.js";
-import { privacyBoundaryForProfileTarget, relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
+import { manifestFitsProfileTarget, privacyBoundaryForProfileTarget, relabelRecommendationProfileForTarget } from "./profile-privacy-label.js";
 import { createEmptyRecommendationProfileSnapshot } from "./profile-store-persistence-snapshot.js";
 import type { RecommendationProfileEntry, RecommendationProfileSnapshot } from "./profile-store.js";
 import type { RecommendationStateStorageAdapterManifest } from "./state-placement-policy.js";
@@ -194,12 +194,7 @@ function createPersistenceError(operation: RecommendationProfilePersistenceOpera
   return new RecommendationProfilePersistenceError(operation, reason, storageTarget);
 }
 function assertManifestMatchesTarget(manifest: RecommendationStateStorageAdapterManifest, target: RecommendationProfilePersistenceStorageTarget, operation: RecommendationProfilePersistenceOperation): void {
-  const allowed = target === "local_app"
-    ? manifest.authority === "device_owned" && manifest.processingBoundary === "local_only"
-    : target === "user_pod"
-      ? manifest.authority === "user_owned" && manifest.processingBoundary === "server_allowed"
-      : false;
-  if (!allowed) throw createPersistenceError(operation, "persistence.deny.storage_placement_policy", target);
+  if (!manifestFitsProfileTarget(manifest, target)) throw createPersistenceError(operation, "persistence.deny.storage_placement_policy", target);
 }
 function requiresServerSideConsent(target: RecommendationProfilePersistenceStorageTarget): boolean { return target === "user_pod"; }
 function shouldVerifyWrite(value: boolean | undefined, consistency: RecommendationProfilePersistenceVerificationConsistency): boolean {

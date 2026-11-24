@@ -17,6 +17,7 @@ import {
   type RecommendationProfileStoreRecord,
   type RecommendationStateStorageAdapterManifest
 } from "../src/index.js";
+import { manifestFitsProfileTarget } from "../src/recommendation/profile-privacy-label.js";
 
 const SUBJECT = "user-123";
 const NOW = new Date().toISOString();
@@ -46,30 +47,37 @@ class ProfileAdapter implements RecommendationProfilePersistenceAdapter {
 }
 
 /** Wraps the in-memory store so a test can break specific calls and see what was called. */
-function flakyStore(manifest: RecommendationStateStorageAdapterManifest) {
+function flakyStore(manifest: RecommendationStateStorageAdapterManifest, supportsCompareAndSet = true) {
   const inner = createInMemoryRecommendationCandidateEventStore(manifest);
   const calls: string[] = [];
-  const state = { failSaves: 0, failDeletes: 0, dropSaves: false, corruptReads: false };
+  const probeCalls: string[] = [];
+  const state = { failSaves: 0, failDeletes: 0, dropSaves: false, corruptReads: false, ignoreExpectedDigest: false, failProbeSaves: 0 };
+  const realSaveOptions: unknown[] = [];
+  // The compare-and-set conformance probe uses its own random subject, so it is tracked apart and never breaks on purpose.
+  const track = (subjectId: string, call: string) => { (subjectId === SUBJECT ? calls : probeCalls).push(call); return subjectId === SUBJECT; };
   const store: RecommendationCandidateEventStore = {
     manifest,
-    supportsCompareAndSet: true,
+    ...(supportsCompareAndSet ? { supportsCompareAndSet: true as const } : {}),
     async load(subjectId) {
-      calls.push("load");
+      const real = track(subjectId, "load");
       const value = await inner.load(subjectId);
-      return state.corruptReads && value !== undefined ? { ...(value as object), digest: "0".repeat(64) } : value;
+      return real && state.corruptReads && value !== undefined ? { ...(value as object), digest: "0".repeat(64) } : value;
     },
     async save(subjectId, record, options) {
-      calls.push("save");
+      const real = track(subjectId, "save");
+      if (!real && state.failProbeSaves > 0) { state.failProbeSaves -= 1; throw new Error("probe outage"); }
+      if (!real) return state.ignoreExpectedDigest ? inner.save(subjectId, record) : inner.save(subjectId, record, options);
+      realSaveOptions.push(options);
       if (state.failSaves > 0) { state.failSaves -= 1; throw new Error("secret store detail"); }
       if (!state.dropSaves) await inner.save(subjectId, record, options);
     },
     async delete(subjectId) {
-      calls.push("delete");
-      if (state.failDeletes > 0) { state.failDeletes -= 1; throw new Error("delete failed"); }
+      const real = track(subjectId, "delete");
+      if (real && state.failDeletes > 0) { state.failDeletes -= 1; throw new Error("delete failed"); }
       await inner.delete(subjectId);
     }
   };
-  return { store, inner, calls, state };
+  return { store, inner, calls, probeCalls, realSaveOptions, state };
 }
 
 async function seed(store: RecommendationCandidateEventStore, events: readonly unknown[], subjectId = SUBJECT, recordedAt = RECORDED): Promise<RecommendationCandidateEventRecord> {
@@ -153,6 +161,57 @@ test("limits the caller passes still narrow what moves", async () => {
   const day = 24 * 60 * 60 * 1000;
   await run({ candidateEventLimits: { retentionMs: day, setExclusionRetentionMs: day } });
   assert.equal(await pod.inner.load(SUBJECT), undefined, "an explicit short window is honoured");
+});
+
+test("the destination's compare-and-set claim is checked before expectedDigest is relied on", async () => {
+  const honest = setup();
+  await seed(honest.local.store, [bobRevoked]);
+  await honest.run();
+  assert.ok(honest.pod.probeCalls.includes("save"), "the conformance probe ran against the destination");
+  assert.deepEqual(honest.pod.realSaveOptions, [{ expectedDigest: null }]);
+
+  const liar = setup();
+  liar.pod.state.ignoreExpectedDigest = true;
+  await seed(liar.local.store, [bobRevoked]);
+  await liar.run();
+  assert.deepEqual(liar.pod.realSaveOptions, [undefined], "a store that ignores the digest gets a plain write");
+  assert.equal((await liar.pod.inner.load(SUBJECT) as RecommendationCandidateEventRecord).entries.length, 1);
+});
+
+test("a destination that never claims compare-and-set is not probed", async () => {
+  const { local } = setup();
+  const plainPod = flakyStore(EVENT_POD, false);
+  await seed(local.store, [bobRevoked]);
+  const localProfile = new ProfileAdapter(PROFILE_MANIFEST);
+  const key = createRecommendationProfileSubjectKey({ subjectId: SUBJECT });
+  localProfile.records.set(key, createRecommendationProfileStoreRecord({ subjectId: SUBJECT, profile: snapshot(), writtenAt: "2026-10-01T00:00:01.000Z" }));
+  await transitionRecommendationProfilePersistence({
+    subjectId: SUBJECT, from: { adapter: localProfile, storageTarget: "local_app", candidateEventStore: local.store },
+    to: { adapter: new ProfileAdapter(POD_PROFILE_MANIFEST), storageTarget: "user_pod", candidateEventStore: plainPod.store },
+    policy: POLICY, now: NOW, retry: { sleep: async () => undefined, random: () => 0.5, maxAttempts: 3 }
+  });
+  assert.deepEqual(plainPod.probeCalls, []);
+  assert.deepEqual(plainPod.realSaveOptions, [undefined]);
+});
+
+test("a one-off probe error is retried with backoff and the move still goes through guarded", async () => {
+  const { local, pod, run } = setup();
+  await seed(local.store, [bobRevoked]);
+  pod.state.failProbeSaves = 1;
+  const delays: number[] = [];
+  await run({ retry: { sleep: async (ms: number) => { delays.push(ms); }, random: () => 0.5, maxAttempts: 3 } });
+  assert.equal(delays.length, 1, "one backoff wait for the one failed check");
+  assert.deepEqual(pod.realSaveOptions, [{ expectedDigest: null }]);
+});
+
+test("a probe that keeps failing stops the move with nothing written and the source kept", async () => {
+  const { local, pod, localProfile, key, run } = setup();
+  await seed(local.store, [bobRevoked]);
+  pod.state.failProbeSaves = 99;
+  await assert.rejects(run(), (error: unknown) => error instanceof RecommendationProfilePersistenceError && error.reason === "persistence.error.adapter_write_failed");
+  assert.deepEqual(pod.realSaveOptions, [], "no write reached the destination without the check");
+  assert.ok(await local.inner.load(SUBJECT));
+  assert.ok(localProfile.records.has(key));
 });
 
 test("a delete that fails leaves the source profile and events, and a rerun finishes without a duplicate", async () => {
@@ -368,4 +427,14 @@ test("events carry no label, so they move unchanged while the profile is relabel
   assert.deepEqual(held.entries.map((entry) => entry.event), seeded.entries.map((entry) => entry.event));
   assert.equal(localProfile.records.has(key), false);
   assert.deepEqual((podProfile.records.get(key) as RecommendationProfileStoreRecord).profile.entries[0]!.privacyBoundaries, ["server_allowed"]);
+});
+
+test("one placement rule serves both the profile adapters and the event stores", () => {
+  assert.equal(manifestFitsProfileTarget(EVENT_LOCAL, "local_app"), true);
+  assert.equal(manifestFitsProfileTarget(EVENT_POD, "user_pod"), true);
+  assert.equal(manifestFitsProfileTarget(EVENT_POD, "local_app"), false);
+  assert.equal(manifestFitsProfileTarget(EVENT_LOCAL, "user_pod"), false);
+  assert.equal(manifestFitsProfileTarget({ ...EVENT_POD, authority: "provider_owned" }, "user_pod"), false);
+  assert.equal(manifestFitsProfileTarget({ ...EVENT_LOCAL, processingBoundary: "server_allowed" }, "local_app"), false);
+  assert.equal(manifestFitsProfileTarget(EVENT_LOCAL, "ephemeral_session"), false);
 });
