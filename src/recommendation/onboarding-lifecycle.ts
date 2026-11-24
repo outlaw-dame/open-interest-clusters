@@ -272,6 +272,14 @@ export interface RecommendationOnboardingLifecycleWithCandidateEvents extends Re
 /** A few quick replans with jittered backoff. A lost race normally settles on the first one. */
 const STALE_PLAN_RETRY = Object.freeze({ attempts: 5, initialDelayMs: 5, maxDelayMs: 100, jitterRatio: 0.5 });
 
+/** The store's compare-and-set claim could not be checked, so the write was not attempted. */
+class RecommendationCandidateEventCompareAndSetUnverifiedError extends Error {
+  constructor() {
+    super("The candidate event store's compare-and-set claim could not be verified, so nothing was written.");
+    this.name = "RecommendationCandidateEventCompareAndSetUnverifiedError";
+  }
+}
+
 const CANDIDATE_EVENT_STORE_RETRY = Object.freeze({ attempts: 4, initialDelayMs: 25, maxDelayMs: 400, jitterRatio: 0.5 });
 
 /** Reload-and-merge attempts when a compare-and-set store reports that another writer got there first. */
@@ -456,17 +464,22 @@ export function createRecommendationOnboardingLifecycle(
     return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
   }
 
-  // A store that claims compare-and-set is checked once. Only a definite answer is remembered, so a
-  // store that was briefly down is checked again on the next write instead of being trusted or doubted for good.
+  // A store that claims compare-and-set is checked once. Only a definite answer is remembered. If the
+  // check itself cannot finish (the store threw), it is retried with the same backoff as other store
+  // calls, and if it still cannot finish the write fails. Sending the write without the guard on a
+  // guess could overwrite another device's events, so only a definite "failed" falls back to the
+  // per-subject queue.
   let casCheck: Promise<boolean> | undefined;
-  function storeHonorsCompareAndSet(): Promise<boolean> {
+  function storeHonorsCompareAndSet(signal: AbortSignal): Promise<boolean> {
     if (eventStore!.supportsCompareAndSet !== true) return Promise.resolve(false);
     if (casCheck !== undefined) return casCheck;
-    const attempt = checkRecommendationCandidateEventStoreCompareAndSet(eventStore!).then((result) => {
-      if (result.status === "inconclusive") casCheck = undefined;
+    const attempt = executeWithRetry(async () => {
+      const result = await checkRecommendationCandidateEventStoreCompareAndSet(eventStore!);
+      if (result.status === "inconclusive") throw new RecommendationCandidateEventCompareAndSetUnverifiedError();
       return result.status === "passed";
-    }, () => { casCheck = undefined; return false; });
+    }, { ...eventRetry, shouldRetry: ({ error }) => !signal.aborted && error instanceof RecommendationCandidateEventCompareAndSetUnverifiedError });
     casCheck = attempt;
+    attempt.catch(() => { if (casCheck === attempt) casCheck = undefined; });
     return attempt;
   }
 
@@ -485,7 +498,7 @@ export function createRecommendationOnboardingLifecycle(
       shouldRetry: ({ error }) => !signal.aborted && error instanceof RecommendationCandidateEventConflictError
     };
     checkpoint(signal);
-    const useCompareAndSet = await storeHonorsCompareAndSet();
+    const useCompareAndSet = await storeHonorsCompareAndSet(signal);
     await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
       checkpoint(signal);
       const raw = await storeIo((store) => store.load(subjectId), signal);

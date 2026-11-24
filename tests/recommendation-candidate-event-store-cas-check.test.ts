@@ -46,11 +46,15 @@ const benign = (name: string) => ({ kind: "account_deleted", occurredAt: T1, can
 const noop = { async invalidate() {} };
 
 function lifecycleFor(store: RecommendationCandidateEventStore) {
+  return createRecommendationOnboardingLifecycleWith(store, { retrySleeper: NO_SLEEP });
+}
+
+function createRecommendationOnboardingLifecycleWith(store: RecommendationCandidateEventStore, retry: NonNullable<NonNullable<Parameters<typeof createRecommendationOnboardingLifecycle>[0]["candidateEvents"]>["retry"]>) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
   const derived = createRecommendationDerivedStateInvalidationOrchestrator({ engine, now: () => T1, invalidators: { embeddings: noop, candidate_cache: noop, explanation_cache: noop } });
   return createRecommendationOnboardingLifecycle({
     derived, engine, now: () => T2,
-    candidateEvents: { store, retry: { retrySleeper: NO_SLEEP } }
+    candidateEvents: { store, retry }
   });
 }
 
@@ -130,18 +134,43 @@ test("lifecycle checks only once after a definite answer", async () => {
   assert.equal(probeSaves(), after);
 });
 
-test("an inconclusive check is retried on the next write instead of being remembered", async () => {
-  const { store, log } = fakeStore("honest");
+function failingProbe(store: RecommendationCandidateEventStore, failures: () => boolean) {
   const realSave = store.save.bind(store);
-  let failProbe = true;
   store.save = async (id, record, options) => {
-    if (failProbe && id !== SUBJECT) throw new Error("brief outage");
+    if (id !== SUBJECT && failures()) throw new Error("brief outage");
     await realSave(id, record, options);
   };
-  const lifecycle = lifecycleFor(store);
+}
+
+test("a one-off probe error is retried with backoff and the write still goes out guarded", async () => {
+  const { store, log } = fakeStore("honest");
+  let probeFailures = 2;
+  failingProbe(store, () => probeFailures-- > 0);
+  const delays: number[] = [];
+  const lifecycle = createRecommendationOnboardingLifecycleWith(store, { retrySleeper: async (ms) => { delays.push(ms); }, random: () => 0, jitterRatio: 0 });
   await report(lifecycle);
-  assert.equal(log.find((entry) => entry.id === SUBJECT)?.expected, undefined, "falls back while unverified");
-  failProbe = false;
+  const real = log.filter((entry) => entry.id === SUBJECT);
+  assert.equal(real.length, 1);
+  assert.deepEqual(real[0]?.expected, { expectedDigest: null }, "never sent without the guard");
+  assert.deepEqual(delays, [25, 50], "exponential backoff between probe attempts");
+});
+
+test("a store that keeps failing the probe fails the write closed and stores nothing", async () => {
+  const { store, log, held } = fakeStore("honest");
+  failingProbe(store, () => true);
+  const lifecycle = lifecycleFor(store);
+  await assert.rejects(report(lifecycle), /could not be verified, so nothing was written/u);
+  assert.equal(log.filter((entry) => entry.id === SUBJECT).length, 0, "no unguarded save reached the real subject");
+  assert.equal(held.has(SUBJECT), false);
+});
+
+test("an inconclusive check is not remembered, so the next write re-checks and is guarded", async () => {
+  const { store, log } = fakeStore("honest");
+  let down = true;
+  failingProbe(store, () => down);
+  const lifecycle = lifecycleFor(store);
+  await assert.rejects(report(lifecycle));
+  down = false;
   await lifecycle.reportCandidateEvents({ subjectId: SUBJECT, policy: POLICY, now: T2, events: [benign("c-2")] });
   const last = log.filter((entry) => entry.id === SUBJECT).at(-1);
   assert.ok(last?.expected !== undefined, "guard is used once the store checks out");
