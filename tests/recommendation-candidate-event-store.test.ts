@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   RecommendationCandidateEventConflictError,
   RecommendationConsentDeniedError,
+  RecommendationDerivedStateInvalidationPendingError,
   createInMemoryRecommendationCandidateEventStore,
   createInMemoryRecommendationProfileSignalReplacementStore,
   createRecommendationCandidateActionPlan,
@@ -12,6 +13,7 @@ import {
   createRecommendationDerivedStateInvalidationOrchestrator,
   createRecommendationEngineOrchestrator,
   createRecommendationOnboardingLifecycle,
+  MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS,
   type RecommendationCandidate,
   type RecommendationCandidateEventStore,
   type RecommendationConsentPolicy,
@@ -83,7 +85,7 @@ function rawStore(manifest?: Partial<RecommendationStateStorageAdapterManifest>,
   return { store, raw, counts, fail, hooks };
 }
 
-function build(store: RecommendationCandidateEventStore, extra: { retentionMs?: number; maxEvents?: number } = {}, clock = { now: NOW }) {
+function build(store: RecommendationCandidateEventStore, extra: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number } = {}, clock = { now: NOW }) {
   const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
   const calls: RecommendationDerivedStateInvalidationRequest[] = [];
   const invalidator = { async invalidate(request: RecommendationDerivedStateInvalidationRequest) { calls.push(request); } };
@@ -225,26 +227,47 @@ test("deleting the subject through the derived orchestrator clears stored events
   assert.equal(raw.has(B), true, "other subjects are untouched");
 });
 
-test("a report that is mid-save while the subject is deleted leaves its events behind, and deleting again clears them", async () => {
+test("a report that is mid-save while the subject is deleted is cleared by the deletion, not resurrected", async () => {
   const { store, raw } = rawStore();
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const realSave = store.save.bind(store);
   let saveStarted: () => void = () => undefined;
   const started = new Promise<void>((resolve) => { saveStarted = resolve; });
+  const order: string[] = [];
+  const realDelete = store.delete.bind(store);
   const slow: RecommendationCandidateEventStore = {
     ...store,
-    async save(id, record) { saveStarted(); await gate; await realSave(id, record); }
+    async save(id, record) { saveStarted(); await gate; await realSave(id, record); order.push("save"); },
+    async delete(id) { order.push("delete"); await realDelete(id); }
   };
   const { lifecycle, derived } = build(slow);
   const pending = lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
   await started;
-  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  const deletion = derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  // Let the deletion run as far as it can on its own, across several event loop turns.
+  for (let turn = 0; turn < 10; turn += 1) await new Promise<void>((resolve) => { setImmediate(resolve); });
+  assert.deepEqual(order, [], "the store delete waits for the save that is in flight");
   release();
-  await pending.catch(() => undefined);
-  assert.equal(raw.has(A), true, "the deletion does not wait for the in-flight report, so the save lands after it");
+  await pending;
+  await deletion;
+  assert.deepEqual(order, ["save", "delete"]);
+  assert.equal(raw.has(A), false, "the events saved just before the deletion are gone afterwards");
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), []);
+  // Other subjects are not held up by it.
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [bobRevoked], policy: POLICY(B), now: T2 });
+  assert.equal(raw.has(B), true);
+});
+
+test("a failed in-flight save does not wedge the deletion queue, and deleting again still clears", async () => {
+  const { store, raw, fail } = rawStore();
+  const { lifecycle, derived } = build(store);
+  fail.save = 100;
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 }), /save down/);
+  fail.save = 0;
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
   await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
-  assert.equal(raw.has(A), false, "a repeated deletion always clears the events");
+  assert.equal(raw.has(A), false);
 });
 
 test("withdrawing consent, a denied policy, or a missing policy never leaves events behind or stores new ones", async () => {
@@ -333,7 +356,9 @@ test("a compare-and-set store keeps both events when two writers race, and a pla
   for (const cas of [true, false]) {
     const { store, raw, hooks } = rawStore(undefined, { cas });
     const first = build(store);
-    const second = build(store); // another process: its own engine, so its own queue
+    // Another process: its own engine and its own store client over the same records, so it shares
+    // neither the lifecycle queue nor the store queue with the first writer.
+    const second = build({ ...store });
     // Load 1 is the dedupe read, load 2 is the merge read. The other writer lands right after load 2.
     hooks.afterLoad = { onLoad: 2, run: async () => { await second.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("theirs")], policy: POLICY(A), now: T2 }); } };
     await first.lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("mine")], policy: POLICY(A), now: T3 });
@@ -414,4 +439,257 @@ test("the in-memory reference store says it is ephemeral and supports compare-an
   await memory.save(A, record, { expectedDigest: null });
   await assert.rejects(memory.save(A, record, { expectedDigest: null }), RecommendationCandidateEventConflictError);
   await memory.save(A, record, { expectedDigest: "d1" });
+});
+
+const setAt = (kind: "set_deleted" | "set_not_discoverable" | "set_sensitive", setSourceId: string, occurredAt: string, candidateId?: string) =>
+  ({ kind, occurredAt, setSourceId, ...(candidateId === undefined ? {} : { candidateId }) }) as const;
+
+test("repeated reports for one set keep one entry per kind and the later report wins", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 3 });
+  const times = ["2026-09-26T06:10:00.000Z", "2026-09-26T06:20:00.000Z", T1, T2];
+  for (const occurredAt of times) {
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, occurredAt)], policy: POLICY(A), now: occurredAt });
+  }
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]!.occurredAt, T2);
+  // A different kind for the same set is a different fact and gets its own entry.
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T2)], policy: POLICY(A), now: T3 });
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 })).length, 2);
+  // An older report of the same fact is already covered: nothing is written.
+  const before = JSON.stringify(raw.get(A));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T3 });
+  assert.equal(JSON.stringify(raw.get(A)), before);
+});
+
+test("a flood of reports for one set cannot fill the cap, so other facts still fit", async () => {
+  const { store } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 3 });
+  const flood = Array.from({ length: 60 }, (_, index) => setAt("set_sensitive", SET_SOURCE_ID, `2026-09-26T06:${String(10 + Math.floor(index / 2)).padStart(2, "0")}:${index % 2 === 0 ? "00" : "30"}.000Z`));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: flood, policy: POLICY(A), now: NOW });
+  for (let round = 0; round < 5; round += 1) {
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, `2026-09-26T06:3${round}:30.000Z`)], policy: POLICY(A), now: NOW });
+  }
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("later")], policy: POLICY(A), now: NOW });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: NOW });
+  assert.equal(kept.filter((event) => event.kind === "set_sensitive").length, 1);
+  assert.ok(kept.some((event) => event.candidateId === "later"));
+});
+
+test("many distinct sets reach the cap and fail closed without dropping an exclusion", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store, { maxEvents: 4 });
+  const setIds = Array.from({ length: 4 }, (_, index) => createRecommendationCuratedAccountSetSourceId(MEMBER_SET.setProvider, `flood-${index}`));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: setIds.map((id) => setAt("set_sensitive", id, T1)), policy: POLICY(A), now: T1 });
+  const before = JSON.stringify(raw.get(A));
+  const extra = createRecommendationCuratedAccountSetSourceId(MEMBER_SET.setProvider, "flood-extra");
+  await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", extra, T2)], policy: POLICY(A), now: T2 }), /no room/);
+  assert.equal(JSON.stringify(raw.get(A)), before, "nothing was evicted or changed");
+  // Re-reporting a set that already holds a slot still works at the cap, because it replaces in place.
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", setIds[0]!, T3)], policy: POLICY(A), now: T3 });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T3 });
+  assert.deepEqual(kept.map((event) => event.setSourceId).sort(), [...setIds].sort());
+});
+
+test("coalescing does not depend on arrival order and keeps a different candidate ID as its own fact", async () => {
+  const early = setAt("set_deleted", SET_SOURCE_ID, T1);
+  const late = setAt("set_deleted", SET_SOURCE_ID, T2);
+  const withCandidate = setAt("set_deleted", SET_SOURCE_ID, T2, candidate("account", "bob").candidateId);
+  const stored = async (events: readonly (typeof early | typeof late | typeof withCandidate)[]) => {
+    const { store, raw } = rawStore();
+    const { lifecycle } = build(store);
+    await lifecycle.reportCandidateEvents({ subjectId: A, events: [...events], policy: POLICY(A), now: T3 });
+    return (raw.get(A) as { digest: string; entries: { event: unknown }[] });
+  };
+  const forward = await stored([early, late, withCandidate]);
+  const backward = await stored([withCandidate, late, early]);
+  assert.deepEqual(forward.entries.map((entry) => entry.event), backward.entries.map((entry) => entry.event));
+  assert.equal(forward.digest, backward.digest);
+  assert.equal(forward.entries.length, 2, "the plain and the candidate-bound reports are separate facts");
+});
+
+test("a hostile flood through refresh and report cannot evict set exclusions or grow the record", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle, seen } = build(store, { maxEvents: 5 });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T1 });
+  for (let round = 0; round < 20; round += 1) {
+    const at = `2026-09-26T06:${String(31 + (round % 10)).padStart(2, "0")}:00.000Z`;
+    await lifecycle.refresh({ request: { subjectId: A, requestId: `r${round}` } as never, candidateEvents: [setAt("set_deleted", SET_SOURCE_ID, at), benign(`n${round}`)], policy: POLICY(A), now: NOW });
+  }
+  const entries = (raw.get(A) as { entries: { event: { kind: string } }[] }).entries;
+  assert.equal(entries.filter((entry) => entry.event.kind === "set_deleted").length, 1);
+  assert.ok(entries.length <= 5);
+  assert.deepEqual((seen.at(-1) as { excludeSourceIds: string[] }).excludeSourceIds, [SET_SOURCE_ID]);
+});
+
+test("a stored record with duplicate set slots from before coalescing is repaired on the next save", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle } = build(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T1 });
+  const record = raw.get(A) as { entries: { recordedAt: string; event: unknown }[]; digest: string; updatedAt: string; subjectId: string; schemaVersion: string };
+  const { buildRecommendationCandidateEventRecord } = await import("../src/recommendation/candidate-event-store.js");
+  const older = { recordedAt: "2026-09-26T06:20:00.000Z", event: setAt("set_deleted", SET_SOURCE_ID, "2026-09-26T06:20:00.000Z") };
+  raw.set(A, buildRecommendationCandidateEventRecord(A, [older, ...record.entries] as never, T1));
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [benign("x")], policy: POLICY(A), now: T2 });
+  const kept = await lifecycle.listReportedCandidateEvents({ subjectId: A, now: T2 });
+  assert.equal(kept.filter((event) => event.kind === "set_deleted").length, 1);
+  assert.equal(kept.find((event) => event.kind === "set_deleted")!.occurredAt, T1);
+});
+
+/** A lifecycle on the library's derived orchestrator with plain invalidators, so nothing is wrapped by hand. */
+function buildUnwrapped(store: RecommendationCandidateEventStore | undefined, invalidators?: Partial<Record<"embeddings" | "candidate_cache" | "explanation_cache", { invalidate(request: RecommendationDerivedStateInvalidationRequest): Promise<void> }>>) {
+  const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => T1 });
+  const calls: RecommendationDerivedStateInvalidationRequest[] = [];
+  const plain = { async invalidate(request: RecommendationDerivedStateInvalidationRequest) { calls.push(request); } };
+  const derived = createRecommendationDerivedStateInvalidationOrchestrator({
+    engine, now: () => T1,
+    invalidators: { embeddings: plain, candidate_cache: plain, explanation_cache: plain, ...invalidators }
+  });
+  const lifecycle = createRecommendationOnboardingLifecycle({
+    derived, engine, now: () => NOW,
+    ...(store === undefined ? {} : { candidateEvents: { store, retry: { retrySleeper: NO_SLEEP } } })
+  });
+  return { lifecycle, derived, engine, calls };
+}
+const DELETE = { requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] } as const;
+
+test("deleteSubject clears stored events by default when the lifecycle has a store", async () => {
+  const { store, raw, counts } = rawStore();
+  const { lifecycle, derived, calls } = buildUnwrapped(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [bobRevoked], policy: POLICY(B), now: T2 });
+  await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(raw.has(A), false);
+  assert.equal(raw.has(B), true, "only the deleted subject is cleared");
+  assert.equal(counts.delete, 1);
+  assert.ok(calls.some((call) => call.reason === "deletion_requested" && call.target === "candidate_cache"), "the app's own invalidator still runs");
+  // Two lifecycles sharing the store on one orchestrator still delete once.
+  createRecommendationOnboardingLifecycle({ derived, engine: buildUnwrapped(undefined).engine, candidateEvents: { store } });
+  await derived.deleteSubject({ subjectId: B, ...DELETE });
+  assert.equal(counts.delete, 2);
+  assert.equal(raw.has(B), false);
+});
+
+test("a store the app already wrapped is not deleted twice", async () => {
+  const { store, raw, counts } = rawStore();
+  const { lifecycle, derived } = build(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(raw.has(A), false);
+  assert.equal(counts.delete, 1);
+});
+
+test("a failed default deletion surfaces as pending and the next call finishes it", async () => {
+  const { store, raw, fail } = rawStore();
+  const { lifecycle, derived } = buildUnwrapped(store);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  fail.delete = 1;
+  await assert.rejects(derived.deleteSubject({ subjectId: A, ...DELETE }), (error: unknown) => {
+    assert.ok(error instanceof RecommendationDerivedStateInvalidationPendingError);
+    assert.ok(error.pendingTargets.includes("candidate_cache"));
+    return true;
+  });
+  assert.equal(raw.has(A), true, "nothing claims the events are gone");
+  await derived.repair(A);
+  assert.equal(raw.has(A), false, "recovery retries the pending deletion");
+});
+
+test("a lifecycle without a store leaves deletion exactly as before", async () => {
+  const unrelated = rawStore();
+  const { lifecycle, derived, calls } = buildUnwrapped(undefined);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], now: T2 });
+  const result = await derived.deleteSubject({ subjectId: A, ...DELETE });
+  assert.deepEqual([...result.propagation.invalidatedTargets].sort(), ["candidate_cache", "embeddings", "explanation_cache"]);
+  assert.equal(calls.filter((call) => call.reason === "deletion_requested").length, 3);
+  assert.equal(unrelated.counts.delete, 0);
+});
+
+test("a derived port that is not the library's orchestrator is not changed by the lifecycle", async () => {
+  const { store, raw, counts } = rawStore();
+  const inner = buildUnwrapped(undefined);
+  const wrapper = {
+    process: inner.derived.process.bind(inner.derived),
+    synchronize: inner.derived.synchronize.bind(inner.derived),
+    repair: inner.derived.repair.bind(inner.derived),
+    deleteSubject: inner.derived.deleteSubject.bind(inner.derived),
+    invalidateCandidateState: inner.derived.invalidateCandidateState.bind(inner.derived)
+  };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived: wrapper, engine: inner.engine, now: () => NOW, candidateEvents: { store } });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [bobRevoked], policy: POLICY(A), now: T2 });
+  await wrapper.deleteSubject({ subjectId: A, ...DELETE });
+  assert.equal(counts.delete, 0, "the app has to wire the deletion invalidator itself for its own port");
+  assert.equal(raw.has(A), true);
+});
+
+const MINUTE = 60 * 1000;
+const at = (base: string, minutes: number) => new Date(Date.parse(base) + minutes * MINUTE).toISOString();
+
+test("a set exclusion outlives ordinary events when given its own retention, and expires at that bound", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle, seen } = build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 60 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1), benign("plain")], policy: POLICY(A), now: T2 });
+  clock.now = at(T2, 30); // ordinary event is past its 10 minutes, the set event is not past its 60
+  assert.deepEqual((await lifecycle.listReportedCandidateEvents({ subjectId: A })).map((event) => event.kind), ["set_deleted"]);
+  const run = await lifecycle.refresh({ request: { subjectId: A, requestId: "r-late" } as never });
+  assert.deepEqual(run.excludedSetSourceIds, [SET_SOURCE_ID], "refresh still keeps the set out");
+  assert.deepEqual((seen.at(-1) as { excludeSourceIds: string[] }).excludeSourceIds, [SET_SOURCE_ID]);
+  clock.now = at(T2, 59);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 1);
+  clock.now = at(T2, 60);
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), [], "it expires at its own bound");
+});
+
+test("without setExclusionRetentionMs set events expire with everything else, as before", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle } = build(store, { retentionMs: 10 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  clock.now = at(T2, 10);
+  assert.deepEqual(await lifecycle.listReportedCandidateEvents({ subjectId: A }), []);
+});
+
+test("re-reporting a set extends its exclusion from the new report, not past the bound from it", async () => {
+  const { store } = rawStore();
+  const clock = { now: T2 };
+  const { lifecycle } = build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 20 * MINUTE }, clock);
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  const later = at(T2, 15);
+  clock.now = later;
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_sensitive", SET_SOURCE_ID, at(T1, 15))], policy: POLICY(A) });
+  clock.now = at(later, 19);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 1);
+  clock.now = at(later, 20);
+  assert.equal((await lifecycle.listReportedCandidateEvents({ subjectId: A })).length, 0);
+});
+
+test("a long-lived set exclusion is still removed at once by deletion and by revoked consent", async () => {
+  const { store, raw } = rawStore();
+  const { lifecycle, derived } = build(store, { setExclusionRetentionMs: MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS });
+  await lifecycle.reportCandidateEvents({ subjectId: A, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(A), now: T2 });
+  await derived.deleteSubject({ subjectId: A, requestedAt: T3, scope: "recommendation_derived_data", targets: ["profile", "event_history"] });
+  assert.equal(raw.has(A), false);
+  // A deleted subject is blocked by the engine afterwards, so the consent paths use another subject.
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(B), now: T2 });
+  await lifecycle.withdrawSelections({ subjectId: B, reason: "consent_revoked", now: T3 });
+  assert.equal(raw.has(B), false);
+  await lifecycle.reportCandidateEvents({ subjectId: B, events: [setAt("set_deleted", SET_SOURCE_ID, T1)], policy: POLICY(B), now: T2 });
+  await assert.rejects(lifecycle.refresh({ request: { subjectId: B, requestId: "r-denied" } as never, policy: { subjectId: B, allowedDataUses: [], revokedAt: T2 }, now: T3 }), RecommendationConsentDeniedError);
+  assert.equal(raw.has(B), false);
+});
+
+test("set exclusion retention is bounded and never shorter than the event retention", () => {
+  const { store } = rawStore();
+  for (const bad of [
+    { setExclusionRetentionMs: MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS + 1 },
+    { retentionMs: 20 * MINUTE, setExclusionRetentionMs: 10 * MINUTE },
+    { setExclusionRetentionMs: 1.5 * MINUTE },
+    { setExclusionRetentionMs: Number.NaN },
+    { setExclusionRetentionMs: Number.POSITIVE_INFINITY },
+    { setExclusionRetentionMs: "3600000" as unknown as number }
+  ]) {
+    assert.throws(() => build(store, bad), /set exclusion retention/, JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => build(store, { retentionMs: 10 * MINUTE, setExclusionRetentionMs: 10 * MINUTE }));
 });

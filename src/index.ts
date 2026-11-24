@@ -31,6 +31,7 @@ export * from "./recommendation/first-session-orchestrator.js";
 export * from "./recommendation/candidate-event-store.js";
 export * from "./recommendation/candidate-lifecycle.js";
 export * from "./recommendation/evidence-verifier.js";
+export * from "./recommendation/evidence-attestation.js";
 export * from "./recommendation/onboarding-lifecycle.js";
 export * from "./recommendation/profile-persistence-transition.js";
 export * from "./recommendation/curated-account-set-candidate-source.js";

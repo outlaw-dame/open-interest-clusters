@@ -130,10 +130,10 @@ async function verifyOne(
   callSignal: AbortSignal
 ): Promise<void> {
   const controller = new AbortController();
-  // The call as a whole failing aborts this item too, so a sibling does not keep running unobserved.
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onCallAbort: () => void = () => undefined;
   const timeout = new Promise<never>((_, reject) => {
+    // The call as a whole failing aborts this item too, so a sibling does not keep running unobserved.
     // Stop waiting as well, so a verifier that ignores its signal does not hold this item open.
     onCallAbort = () => {
       controller.abort();
@@ -168,9 +168,10 @@ async function verifyOne(
 /**
  * Verifies the items with bounded concurrency and an overall deadline, and stops handing out work
  * after the first failure. The first failure also aborts the `signal` of every verifier call still
- * running, so nothing keeps working after the caller has the error. With no verifier the items are left alone and the result says
- * `unverified`. With a verifier and nothing to check it also says `unverified`, because no check
- * ran. A verifier can only reject; it never widens what evidence may do.
+ * running, so nothing keeps working after the caller has the error. With no verifier the items are
+ * left alone and the result says `unverified`. With a verifier and nothing to check it also says
+ * `unverified`, because no check ran. A verifier can only reject; it never widens what evidence
+ * may do.
  */
 export async function verifyRecommendationEvidence(
   configured: NormalizedRecommendationEvidenceVerifier | undefined,

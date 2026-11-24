@@ -1,7 +1,17 @@
+import {
+  assertRecommendationCandidateEventStore,
+  buildRecommendationCandidateEventRecord,
+  mergeRecommendationCandidateEventEntries,
+  normalizeRecommendationCandidateEventStoreLimits,
+  readRecommendationCandidateEventRecord,
+  recommendationCandidateEventRecordDigest,
+  type RecommendationCandidateEventStore
+} from "./candidate-event-store.js";
 import { assertRecommendationTimestampNotAhead } from "./candidate-lifecycle.js";
 import type { RecommendationConsentPolicy, RecommendationDataUse } from "./consent.js";
+import { requireRecommendationConsent } from "./consent-enforcement.js";
 import type { RecommendationInterestPrivacyBoundary } from "./interest-signal.js";
-import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import { createRecommendationKeyedSerializer, getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
 import type { RecommendationProfilePersistenceAdapter, RecommendationProfileStoreRecord } from "./profile-store-persistence.js";
 import {
   RecommendationProfilePersistenceError,
@@ -22,6 +32,11 @@ export interface RecommendationProfilePersistenceLocation {
   storageTarget: RecommendationProfileTransitionTarget;
   namespace?: string;
   salt?: string;
+  /**
+   * The store that holds this subject's reported candidate events at this location. Events move only
+   * when both locations have one; with just one side set they are left alone and the result says so.
+   */
+  candidateEventStore?: RecommendationCandidateEventStore;
 }
 
 export interface RecommendationProfilePersistenceRetryOptions {
@@ -45,8 +60,19 @@ export interface RecommendationProfilePersistenceTransitionInput {
   /** Timestamp for the source deletion intent. Defaults to the current time. */
   now?: string;
   retry?: RecommendationProfilePersistenceRetryOptions;
+  /**
+   * Retention limits used when stored events are read and rewritten. Pass the same values the
+   * lifecycle uses, otherwise longer-lived set-level exclusions could be dropped during the move.
+   */
+  candidateEventLimits?: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number };
   signal?: AbortSignal;
 }
+
+/**
+ * What happened to stored candidate events. Only present when at least one location has an event store.
+ * `skipped_store_missing`: only one side has a store, so nothing was read, written or deleted there.
+ */
+export type RecommendationProfilePersistenceCandidateEventsOutcome = "moved" | "nothing_to_move" | "skipped_store_missing";
 
 export type RecommendationProfilePersistenceTransitionOutcome =
   /** The profile was copied, verified, and removed from the source. */
@@ -60,6 +86,7 @@ export interface RecommendationProfilePersistenceTransitionResult {
   outcome: RecommendationProfilePersistenceTransitionOutcome;
   from: RecommendationProfileTransitionTarget;
   to: RecommendationProfileTransitionTarget;
+  candidateEvents?: RecommendationProfilePersistenceCandidateEventsOutcome;
 }
 
 export type RecommendationProfilePersistenceTransitionReason =
@@ -166,14 +193,101 @@ function newer(left: RecommendationProfileStoreRecord, right: RecommendationProf
   return Date.parse(left.profile.updatedAt) > Date.parse(right.profile.updatedAt);
 }
 
+/** Store failures are mapped to fixed reasons so withBackoff can retry them and no store message leaks out. */
+async function storeCall<T>(
+  operation: "read" | "write" | "delete",
+  reason: RecommendationProfilePersistenceReasonCode,
+  target: RecommendationProfileTransitionTarget,
+  work: () => Promise<T>
+): Promise<T> {
+  try {
+    return await work();
+  } catch {
+    throw new RecommendationProfilePersistenceError(operation, reason, target);
+  }
+}
+
+/** Same placement rule the profile adapters get: device-owned and local-only for the app, user-owned for the pod. */
+function assertEventStoreMatchesTarget(store: RecommendationCandidateEventStore, target: RecommendationProfileTransitionTarget): void {
+  assertRecommendationCandidateEventStore(store);
+  const { authority, processingBoundary } = store.manifest;
+  const allowed = target === "local_app"
+    ? authority === "device_owned" && processingBoundary === "local_only"
+    : authority === "user_owned" && processingBoundary === "server_allowed";
+  if (!allowed) throw new RecommendationProfilePersistenceError("write", "persistence.deny.storage_placement_policy", target);
+}
+
+interface CandidateEventMove {
+  subjectId: string;
+  from: RecommendationProfilePersistenceLocation & { candidateEventStore: RecommendationCandidateEventStore };
+  to: RecommendationProfilePersistenceLocation & { candidateEventStore: RecommendationCandidateEventStore };
+  limits: ReturnType<typeof normalizeRecommendationCandidateEventStoreLimits>;
+  now: string;
+  retry: RecommendationProfilePersistenceRetryOptions;
+  signal: AbortSignal | undefined;
+}
+
+/**
+ * Copies a subject's stored events to the destination store, checks them by reading back, and only
+ * then deletes the source. A record that fails validation stops the move before any write. Runs
+ * inside both stores' own per-subject queues, so a report that is mid-save finishes first. The stores
+ * are never called back into the lifecycle, which would wait on these same queues.
+ */
+function moveCandidateEvents(move: CandidateEventMove): Promise<RecommendationProfilePersistenceCandidateEventsOutcome> {
+  const { subjectId, from, to, limits, now, retry, signal } = move;
+  const fromStore = from.candidateEventStore;
+  const toStore = to.candidateEventStore;
+  const load = (store: RecommendationCandidateEventStore, target: RecommendationProfileTransitionTarget) =>
+    storeCall("read", "persistence.error.adapter_read_failed", target, () => store.load(subjectId));
+  return getSharedRecommendationKeyedSerializer(fromStore).run(subjectId, () => getSharedRecommendationKeyedSerializer(toStore).run(subjectId, async () => {
+    const sourceRaw = await withBackoff(() => load(fromStore, from.storageTarget), retry, signal);
+    if (sourceRaw === undefined) return "nothing_to_move" as const;
+    const sourceEntries = readRecommendationCandidateEventRecord(sourceRaw, subjectId, limits, now);
+    if (sourceEntries.length > 0) {
+      const recordedAt = new Map(sourceEntries.map((entry) => [entry.event, entry.recordedAt] as const));
+      await withBackoff(async () => {
+        const destinationRaw = await load(toStore, to.storageTarget);
+        const merged = mergeRecommendationCandidateEventEntries(
+          readRecommendationCandidateEventRecord(destinationRaw, subjectId, limits, now),
+          sourceEntries.map((entry) => entry.event), limits, now, (event) => recordedAt.get(event)
+        );
+        // The destination already holds everything, so an earlier run got this far.
+        if (!merged.changed) return;
+        const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
+        const expectedDigest = recommendationCandidateEventRecordDigest(destinationRaw);
+        await storeCall("write", "persistence.error.adapter_write_failed", to.storageTarget, () => toStore.supportsCompareAndSet === true
+          ? toStore.save(subjectId, record, { expectedDigest })
+          : toStore.save(subjectId, record));
+        const readBack = await load(toStore, to.storageTarget);
+        let verified = false;
+        try {
+          readRecommendationCandidateEventRecord(readBack, subjectId, limits, now);
+          verified = recommendationCandidateEventRecordDigest(readBack) === record.digest;
+        } catch { /* a record that does not validate is a failed write, handled below */ }
+        if (!verified) throw new RecommendationProfilePersistenceError("write", "persistence.error.write_verification_failed", to.storageTarget);
+      }, retry, signal);
+    }
+    abortIf(signal);
+    try {
+      await withBackoff(() => storeCall("delete", "persistence.error.adapter_delete_failed", from.storageTarget, () => fromStore.delete(subjectId)), retry, signal);
+    } catch (error) {
+      if (error instanceof RecommendationProfilePersistenceTransitionError) throw error;
+      throw new RecommendationProfilePersistenceTransitionError("transition.error.source_cleanup_pending", { cause: error });
+    }
+    return "moved" as const;
+  }));
+}
+
 /**
  * Moves a subject's profile record between device-owned and user-owned storage. The order is fixed so
  * a crash at any point loses nothing: copy, verify by reading back, and only then delete the source.
  * Running it again after a failure is safe. Provider-owned and operator-owned placements are refused
  * by the target check here and again by the adapter placement policy.
  *
- * It moves the stored profile record only. The accepted event history and derived caches have their
- * own stores, which the application places and migrates.
+ * Stored candidate events move too when both locations carry a `candidateEventStore`: they are merged
+ * into the destination (keeping their original recording times), read back, and deleted from the
+ * source before the source profile is removed. Derived caches and the accepted event history have
+ * their own stores, which the application places and migrates.
  */
 export async function transitionRecommendationProfilePersistence(
   input: RecommendationProfilePersistenceTransitionInput
@@ -192,6 +306,23 @@ export async function transitionRecommendationProfilePersistence(
   const retry = input.retry ?? {};
   if (!isRecord(retry)) throw new TypeError("Invalid recommendation profile persistence retry options.");
   const signal = input.signal;
+  const limits = normalizeRecommendationCandidateEventStoreLimits(input.candidateEventLimits);
+  const fromEvents = from.candidateEventStore;
+  const toEvents = to.candidateEventStore;
+  const movesEvents = fromEvents !== undefined && toEvents !== undefined;
+  if (movesEvents) {
+    assertEventStoreMatchesTarget(fromEvents, from.storageTarget);
+    assertEventStoreMatchesTarget(toEvents, to.storageTarget);
+    // Both sides queue on their store, so one store on both sides would wait on itself.
+    if (fromEvents === toEvents) throw new RecommendationProfilePersistenceTransitionError("transition.deny.same_location");
+  } else if (fromEvents !== undefined) assertEventStoreMatchesTarget(fromEvents, from.storageTarget);
+  else if (toEvents !== undefined) assertEventStoreMatchesTarget(toEvents, to.storageTarget);
+  const moveEvents = async (): Promise<{ candidateEvents?: RecommendationProfilePersistenceCandidateEventsOutcome }> => {
+    if (fromEvents === undefined && toEvents === undefined) return {};
+    if (!movesEvents) return { candidateEvents: "skipped_store_missing" };
+    abortIf(signal);
+    return { candidateEvents: await moveCandidateEvents({ subjectId: input.subjectId, from: { ...from, candidateEventStore: fromEvents }, to: { ...to, candidateEventStore: toEvents }, limits, now: requestedAt, retry, signal }) };
+  };
 
   const readFrom = (location: RecommendationProfilePersistenceLocation) => withBackoff(() => readRecommendationProfileStoreRecordSafely(location.adapter, {
     subjectId: input.subjectId, storageTarget: location.storageTarget,
@@ -200,11 +331,27 @@ export async function transitionRecommendationProfilePersistence(
   }), retry, signal);
 
   return serializer.run(input.subjectId, async () => {
+    // Events are subject-level private data too, so a remote destination needs the same consent as the profile.
+    // It is checked up front, so a denial leaves both the profile and the events where they were.
+    if (movesEvents && to.storageTarget === "user_pod") {
+      if (input.policy === undefined || input.policy === null) throw new RecommendationProfilePersistenceError("write", "persistence.deny.server_consent_required", to.storageTarget);
+      await requireRecommendationConsent(input.policy, Object.freeze({
+        subjectId: input.subjectId,
+        dataUse: input.dataUse ?? "local_personalization",
+        protocol: "app_local",
+        sourceVisibility: "local_only",
+        accessBasis: "owner",
+        containsPrivateData: true,
+        containsThirdPartyData: false,
+        serverSideProcessing: true
+      }));
+    }
     const source = await readFrom(from);
     const existing = await readFrom(to);
     if (source === null) {
       if (existing === null) throw new RecommendationProfilePersistenceTransitionError("transition.error.source_missing");
-      return Object.freeze({ outcome: "already_moved" as const, from: from.storageTarget, to: to.storageTarget });
+      const events = await moveEvents();
+      return Object.freeze({ outcome: "already_moved" as const, from: from.storageTarget, to: to.storageTarget, ...events });
     }
 
     const keepDestination = existing !== null && newer(existing, source);
@@ -225,6 +372,8 @@ export async function transitionRecommendationProfilePersistence(
       }), retry, signal);
     }
 
+    // Events go before the source profile is deleted, so a failure here leaves the profile as the retry marker.
+    const events = await moveEvents();
     abortIf(signal);
     try {
       await withBackoff(() => deleteRecommendationProfileStoreRecordSafely(from.adapter, {
@@ -237,6 +386,6 @@ export async function transitionRecommendationProfilePersistence(
       if (error instanceof RecommendationProfilePersistenceTransitionError) throw error;
       throw new RecommendationProfilePersistenceTransitionError("transition.error.source_cleanup_pending", { cause: error });
     }
-    return Object.freeze({ outcome: keepDestination ? "kept_newer_destination" as const : "moved" as const, from: from.storageTarget, to: to.storageTarget });
+    return Object.freeze({ outcome: keepDestination ? "kept_newer_destination" as const : "moved" as const, from: from.storageTarget, to: to.storageTarget, ...events });
   });
 }

@@ -9,6 +9,7 @@ import {
   recommendationCandidateEventRecordDigest,
   selectNewRecommendationCandidateEvents,
   RecommendationCandidateEventConflictError,
+  checkRecommendationCandidateEventStoreCompareAndSet,
   type RecommendationCandidateEventStore,
   type RecommendationCandidateEventStoreLimits
 } from "./candidate-event-store.js";
@@ -48,6 +49,7 @@ import type {
 import type { RecommendationInterestSignal } from "./interest-signal.js";
 import { hasExcludedProvenanceSource } from "./provenance-source-exclusion.js";
 import { getSharedRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import { deleteStoredRecommendationCandidateEvents, registerRecommendationCandidateEventStoreForDeletion } from "./candidate-event-deletion-registry.js";
 import {
   buildRecommendationOnboardingSignals,
   type RecommendationOnboardingProfileSeedInput
@@ -164,6 +166,12 @@ export interface RecommendationOnboardingLifecycleOptions {
     store: RecommendationCandidateEventStore;
     /** How long a stored event counts. Default 30 days, at most 90. */
     retentionMs?: number;
+    /**
+     * How long set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) count, so a
+     * "never show this set" can outlive ordinary events. Defaults to `retentionMs`. It may not be
+     * shorter than `retentionMs` and is at most 365 days. Deletion and revoked consent still clear them at once.
+     */
+    setExclusionRetentionMs?: number;
     /** Cap per subject. The oldest events are compacted first. Default and maximum 1000. */
     maxEvents?: number;
     /** Backoff for store reads, writes and deletes. Defaults to 4 attempts from 25 ms, doubling, with jitter. */
@@ -322,6 +330,11 @@ function applyEvent(sourceEventId: string, signal: RecommendationInterestSignal,
  * The library's own first-session orchestrator already leaves these out. A first-session object
  * written before `excludeSourceIds` existed ignores it, and without this check candidates from a
  * reported (deleted, hidden or sensitive) set would come back.
+ *
+ * This only removes. It does not call the first session again to fill the gap, because a second call
+ * could repeat consent checks or source reads. Such an old object has already cut its list to `limit`
+ * before this runs, so fewer than `limit` results can come back. The library's own orchestrator
+ * applies `excludeSourceIds` before the cut and fills the limit.
  */
 function dropExcludedSetCandidates(result: RecommendationFirstSessionResult, sourceIds: readonly string[]): RecommendationFirstSessionResult {
   if (sourceIds.length === 0) return result;
@@ -359,7 +372,13 @@ export function createRecommendationOnboardingLifecycle(
     if (!isRecord(options.candidateEvents)) throw new TypeError("Invalid recommendation onboarding lifecycle options.");
     assertRecommendationCandidateEventStore(options.candidateEvents.store);
     eventLimits = normalizeRecommendationCandidateEventStoreLimits(options.candidateEvents);
+    // With the library's own derived orchestrator, deleteSubject now clears these events by default.
+    // Any other derived port ignores this, and the app wires createRecommendationCandidateEventDeletionInvalidator itself.
+    registerRecommendationCandidateEventStoreForDeletion(options.derived, options.candidateEvents.store);
   }
+  // Writes and deletes against the store share one queue per subject, keyed by the store object, so a
+  // deletion that arrives while a report is saving waits for the save and then clears what it wrote.
+  const storeQueue = eventStore === undefined ? undefined : getSharedRecommendationKeyedSerializer(eventStore);
   const eventRetry: RetryPolicyOptions = { ...CANDIDATE_EVENT_STORE_RETRY, ...options.candidateEvents?.retry };
 
   /** Store calls fail closed: they retry with backoff, then surface the last error. */
@@ -376,11 +395,26 @@ export function createRecommendationOnboardingLifecycle(
     return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
   }
 
+  // A store that claims compare-and-set is checked once. Only a definite answer is remembered, so a
+  // store that was briefly down is checked again on the next write instead of being trusted or doubted for good.
+  let casCheck: Promise<boolean> | undefined;
+  function storeHonorsCompareAndSet(): Promise<boolean> {
+    if (eventStore!.supportsCompareAndSet !== true) return Promise.resolve(false);
+    if (casCheck !== undefined) return casCheck;
+    const attempt = checkRecommendationCandidateEventStoreCompareAndSet(eventStore!).then((result) => {
+      if (result.status === "inconclusive") casCheck = undefined;
+      return result.status === "passed";
+    }, () => { casCheck = undefined; return false; });
+    casCheck = attempt;
+    return attempt;
+  }
+
   /**
    * Loads, merges and saves. A store that supports compare-and-set is told which record version the
    * merge was built from, so a write from another process or device in between is noticed: the save is
    * refused, and this reloads and merges again instead of overwriting it. A store that does not
-   * declare support is single-writer, and last write wins.
+   * declare support, or declares it but fails the conformance check, is treated as single-writer:
+   * writes from this process are still serialized per subject, but another process can overwrite.
    */
   async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string): Promise<void> {
     const retry: RetryPolicyOptions = {
@@ -389,19 +423,20 @@ export function createRecommendationOnboardingLifecycle(
       ...(eventRetry.retrySleeper === undefined ? {} : { retrySleeper: eventRetry.retrySleeper }),
       shouldRetry: ({ error }) => error instanceof RecommendationCandidateEventConflictError
     };
-    await executeWithRetry(async () => {
+    const useCompareAndSet = await storeHonorsCompareAndSet();
+    await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
       const raw = await storeIo((store) => store.load(subjectId));
       const merged = mergeRecommendationCandidateEventEntries(readRecommendationCandidateEventRecord(raw, subjectId, eventLimits!, now), events, eventLimits!, now);
       if (!merged.changed) return;
       const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
-      const expected = eventStore!.supportsCompareAndSet === true ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
+      const expected = useCompareAndSet ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
       await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected));
-    }, retry);
+    }, retry));
   }
 
   /** Revoked or denied consent removes what was kept. If the removal fails, the call fails with it. */
   async function clearStoredEvents(subjectId: string): Promise<void> {
-    if (eventStore !== undefined) await storeIo((store) => store.delete(subjectId));
+    if (eventStore !== undefined) await storeIo((store) => deleteStoredRecommendationCandidateEvents(store, subjectId));
   }
 
   async function requireStoreConsent(subjectId: string, policy: RecommendationConsentPolicy | undefined): Promise<void> {

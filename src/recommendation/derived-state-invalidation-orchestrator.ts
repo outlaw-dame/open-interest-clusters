@@ -8,6 +8,11 @@ import type {
 } from "./engine-orchestrator.js";
 import type { RecommendationProfileApplicationResult } from "./profile-application-orchestrator.js";
 import { createRecommendationKeyedSerializer } from "./keyed-serializer.js";
+import {
+  deleteStoredRecommendationCandidateEvents,
+  recommendationCandidateEventDeletionInvalidatorStore,
+  registeredRecommendationCandidateEventStores
+} from "./candidate-event-deletion-registry.js";
 import type { RecommendationProfileSnapshot } from "./profile-store.js";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import { sha256Hex } from "../runtime/hash.js";
@@ -374,6 +379,25 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
     throw new TypeError("Invalid recommendation derived-state clock.");
   }
   const serializer = createRecommendationKeyedSerializer();
+  // Event stores the app already wired in through createRecommendationCandidateEventDeletionInvalidator.
+  // A lifecycle that registers one of these is not cleared a second time.
+  const wrappedEventStores = new Set(
+    RECOMMENDATION_DERIVED_STATE_TARGETS.map((target) => recommendationCandidateEventDeletionInvalidatorStore(options.invalidators[target]))
+  );
+
+  /**
+   * On deletion the candidate_cache target also clears event stores registered by lifecycles built on
+   * this orchestrator. It runs before the app's invalidator and inside the same durable task, so a
+   * failure leaves candidate_cache pending and the next call for the subject retries it.
+   */
+  async function invalidateTarget(request: RecommendationDerivedStateInvalidationRequest): Promise<void> {
+    if (request.target === "candidate_cache" && request.reason === "deletion_requested") {
+      for (const store of registeredRecommendationCandidateEventStores(orchestrator)) {
+        if (!wrappedEventStores.has(store)) await deleteStoredRecommendationCandidateEvents(store, request.subjectId);
+      }
+    }
+    await options.invalidators[request.target].invalidate(request);
+  }
 
   async function runSerialized<T>(subjectId: string, work: () => Promise<T>): Promise<T> {
     return serializer.run(validateSubjectId(subjectId), work);
@@ -387,7 +411,7 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
     const completed: RecommendationDerivedStateTarget[] = [];
     for (const target of [...task.pendingTargets]) {
       try {
-        await options.invalidators[target].invalidate(Object.freeze({
+        await invalidateTarget(Object.freeze({
           subjectId: task.subjectId,
           target,
           reason: task.reason,
@@ -474,7 +498,7 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
     return (await resumeTask(task)).propagation;
   }
 
-  return Object.freeze({
+  const orchestrator = Object.freeze({
     async process(input: RecommendationEngineProcessInput) {
       return runSerialized(input.subjectId, async () => {
         await recoverPending(input.subjectId);
@@ -568,4 +592,5 @@ export function createRecommendationDerivedStateInvalidationOrchestrator(
       });
     }
   });
+  return orchestrator;
 }

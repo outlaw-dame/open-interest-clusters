@@ -1,3 +1,5 @@
+import { deleteStoredRecommendationCandidateEvents, markRecommendationCandidateEventDeletionInvalidator } from "./candidate-event-deletion-registry.js";
+import { randomUUID } from "node:crypto";
 import { sha256Hex } from "../runtime/hash.js";
 import {
   MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS,
@@ -18,6 +20,8 @@ export const RECOMMENDATION_CANDIDATE_EVENT_STATE_DOMAIN = "candidate_lifecycle_
 
 export const DEFAULT_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+/** Upper bound for `setExclusionRetentionMs`. Set-level exclusions may outlive ordinary events, but not forever. */
+export const MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 const MIN_RETENTION_MS = 60 * 1000;
 
 export interface RecommendationStoredCandidateEvent {
@@ -68,7 +72,14 @@ export class RecommendationCandidateEventConflictError extends Error {
 export interface RecommendationCandidateEventStoreLimits {
   retentionMs: number;
   maxEvents: number;
+  /**
+   * How long set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) count. Never
+   * shorter than `retentionMs`. Left out, they expire with everything else after `retentionMs`.
+   */
+  setExclusionRetentionMs?: number;
 }
+
+const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -90,7 +101,7 @@ function digestOf(subjectId: string, updatedAt: string, entries: readonly Recomm
 }
 
 export function normalizeRecommendationCandidateEventStoreLimits(
-  input: { retentionMs?: number; maxEvents?: number } | undefined
+  input: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number } | undefined
 ): RecommendationCandidateEventStoreLimits {
   const retentionMs = input?.retentionMs ?? DEFAULT_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS;
   const maxEvents = input?.maxEvents ?? MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS;
@@ -100,7 +111,14 @@ export function normalizeRecommendationCandidateEventStoreLimits(
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > MAX_RECOMMENDATION_CANDIDATE_LIFECYCLE_EVENTS) {
     throw new TypeError("Invalid recommendation candidate event limit.");
   }
-  return Object.freeze({ retentionMs, maxEvents });
+  const setExclusionRetentionMs = input?.setExclusionRetentionMs ?? retentionMs;
+  if (
+    !Number.isSafeInteger(setExclusionRetentionMs) || setExclusionRetentionMs < retentionMs ||
+    setExclusionRetentionMs > MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS
+  ) {
+    throw new TypeError("Invalid recommendation candidate set exclusion retention.");
+  }
+  return Object.freeze({ retentionMs, maxEvents, setExclusionRetentionMs });
 }
 
 /** Checks the store can hold subject-level events: placement policy allows it and the methods exist. */
@@ -160,23 +178,54 @@ export function readRecommendationCandidateEventRecord(
   }
   if (record.digest !== digestOf(subjectId, updatedAt, entries)) return bad();
   // Expired events are dropped on read, so an old record can never keep a plan unusable forever.
-  const cutoff = Date.parse(now) - limits.retentionMs;
-  return Object.freeze(entries.filter((entry) => Date.parse(entry.recordedAt) > cutoff));
+  // Set-level events can be given a longer, still bounded, lifetime of their own.
+  const nowMs = Date.parse(now);
+  const cutoff = nowMs - limits.retentionMs;
+  const setCutoff = nowMs - Math.max(limits.retentionMs, limits.setExclusionRetentionMs ?? limits.retentionMs);
+  return Object.freeze(entries.filter((entry) => Date.parse(entry.recordedAt) > (SET_LEVEL_KINDS.has(entry.event.kind) ? setCutoff : cutoff)));
 }
 
-const SET_LEVEL_KINDS: ReadonlySet<string> = new Set(["set_deleted", "set_not_discoverable", "set_sensitive"]);
+/**
+ * What identifies "the same fact" for a set-level event. Reporting the same set again with a later
+ * time is the same fact seen again, so it must not take a second slot. A different candidate ID is a
+ * different fact, because that candidate is excluded everywhere, not only inside the set.
+ */
+function slotKey(event: RecommendationCandidateLifecycleEvent): string {
+  return SET_LEVEL_KINDS.has(event.kind)
+    ? JSON.stringify([event.kind, event.setSourceId, event.candidateId ?? null])
+    : eventKey(event);
+}
 
-/** The incoming events that are not already held, with repeats inside the batch removed. */
+/** True when `candidate` should replace `held` for the same slot. Later report time wins, ties go to the larger key so the result never depends on arrival order. */
+function supersedes(candidate: RecommendationCandidateLifecycleEvent, held: RecommendationCandidateLifecycleEvent): boolean {
+  if (candidate.occurredAt !== held.occurredAt) return Date.parse(candidate.occurredAt) > Date.parse(held.occurredAt);
+  return eventKey(candidate) > eventKey(held);
+}
+
+/** One event per slot, keeping the winner. Order of the input does not change the result. */
+function coalesceEvents(events: readonly RecommendationCandidateLifecycleEvent[]): RecommendationCandidateLifecycleEvent[] {
+  const bySlot = new Map<string, RecommendationCandidateLifecycleEvent>();
+  for (const event of events) {
+    const key = slotKey(event);
+    const held = bySlot.get(key);
+    if (held === undefined || supersedes(event, held)) bySlot.set(key, event);
+  }
+  return [...bySlot.values()];
+}
+
+/**
+ * The incoming events that would change what is held. Repeats inside the batch are removed, and so are
+ * set-level events the store already covers with the same or a later report.
+ */
 export function selectNewRecommendationCandidateEvents(
   current: readonly RecommendationStoredCandidateEvent[],
   incoming: readonly RecommendationCandidateLifecycleEvent[]
 ): readonly RecommendationCandidateLifecycleEvent[] {
-  const seen = new Set(current.map((entry) => eventKey(entry.event)));
+  const heldBySlot = new Map(current.map((entry) => [slotKey(entry.event), entry.event] as const));
   const fresh: RecommendationCandidateLifecycleEvent[] = [];
-  for (const event of incoming) {
-    const key = eventKey(event);
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const event of coalesceEvents(incoming)) {
+    const held = heldBySlot.get(slotKey(event));
+    if (held !== undefined && !supersedes(event, held)) continue;
     fresh.push(event);
   }
   return fresh;
@@ -189,25 +238,42 @@ export function recommendationCandidateEventRecordDigest(raw: unknown): string |
 
 /**
  * Merges new events into the live ones. Events already held keep their first recording time, so
- * replaying a report changes nothing. Past the cap the oldest entries that are not set-level events
+ * replaying a report changes nothing. A set-level event for a set that already has one of the same
+ * kind replaces it only when it is later, so a set uses at most one slot per kind. Past the cap the oldest entries that are not set-level events
  * are compacted away. Set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`) are
  * never evicted to make room, because losing one makes the set eligible again, and an event being
  * added now is never dropped to make room either. If the cap would force either out, this throws and
- * nothing is changed; set-level events leave only when they expire.
+ * nothing is changed; set-level events leave only when they expire (after `setExclusionRetentionMs`).
+ *
+ * `recordedAtFor` lets a caller that is moving events between stores keep each event's original
+ * recording time, so a move does not restart its retention clock. It is given the very event objects
+ * passed in `incoming`; anything it does not know gets `now`.
  */
 export function mergeRecommendationCandidateEventEntries(
   current: readonly RecommendationStoredCandidateEvent[],
   incoming: readonly RecommendationCandidateLifecycleEvent[],
   limits: RecommendationCandidateEventStoreLimits,
-  now: string
+  now: string,
+  recordedAtFor?: (event: RecommendationCandidateLifecycleEvent) => string | undefined
 ): { entries: readonly RecommendationStoredCandidateEvent[]; changed: boolean } {
-  const byKey = new Map(current.map((entry) => [eventKey(entry.event), entry] as const));
+  const byKey = new Map<string, RecommendationStoredCandidateEvent>();
   let changed = false;
+  for (const entry of current) {
+    // A record written before coalescing may hold several entries for one slot. Keep the winner.
+    const key = slotKey(entry.event);
+    const held = byKey.get(key);
+    if (held === undefined) byKey.set(key, entry);
+    else {
+      changed = true;
+      if (supersedes(entry.event, held.event)) byKey.set(key, entry);
+    }
+  }
   const added = new Set<RecommendationStoredCandidateEvent>();
-  for (const event of incoming) {
-    const key = eventKey(event);
-    if (!byKey.has(key)) {
-      const entry = Object.freeze({ recordedAt: now, event });
+  for (const event of coalesceEvents(incoming)) {
+    const key = slotKey(event);
+    const held = byKey.get(key);
+    if (held === undefined || supersedes(event, held.event)) {
+      const entry = Object.freeze({ recordedAt: recordedAtFor?.(event) ?? now, event });
       byKey.set(key, entry);
       added.add(entry);
       changed = true;
@@ -242,6 +308,58 @@ export function buildRecommendationCandidateEventRecord(
     entries: Object.freeze(entries.map((entry) => Object.freeze({ recordedAt: entry.recordedAt, event: { ...entry.event } }))),
     digest: digestOf(subjectId, updatedAt, entries)
   });
+}
+
+/** Outcome of `checkRecommendationCandidateEventStoreCompareAndSet`. Reasons are fixed strings; store errors are never copied in. */
+export type RecommendationCandidateEventCompareAndSetCheck =
+  | { status: "passed" }
+  | { status: "failed"; reason: "not_declared" | "accepted_stale_write" | "refused_current_write" }
+  | { status: "inconclusive"; reason: "store_error" };
+
+/**
+ * Exercises a store's compare-and-set claim against a throwaway subject, so a store that says
+ * `supportsCompareAndSet` but ignores `expectedDigest` is caught before anyone relies on it.
+ * It writes a few empty records under a random probe subject id and deletes it afterwards, so run it
+ * against the real store you will use, not a mock. `failed` means the store gave a definite wrong
+ * answer. `inconclusive` means the store threw something other than a conflict, so nothing was learned.
+ */
+export async function checkRecommendationCandidateEventStoreCompareAndSet(
+  store: RecommendationCandidateEventStore,
+  options: { now?: () => number; probeSubjectId?: string } = {}
+): Promise<RecommendationCandidateEventCompareAndSetCheck> {
+  assertRecommendationCandidateEventStore(store);
+  if (store.supportsCompareAndSet !== true) return { status: "failed", reason: "not_declared" };
+  const subjectId = options.probeSubjectId ?? `cas-conformance-probe-${randomUUID()}`;
+  assertValidRecommendationProfileSubjectId(subjectId);
+  const base = (options.now ?? Date.now)();
+  const at = (offset: number) => new Date(base + offset).toISOString();
+  const first = buildRecommendationCandidateEventRecord(subjectId, [], at(0));
+  const second = buildRecommendationCandidateEventRecord(subjectId, [], at(1));
+  const third = buildRecommendationCandidateEventRecord(subjectId, [], at(2));
+  const rejects = async (record: RecommendationCandidateEventRecord, expectedDigest: string | null): Promise<boolean> => {
+    try {
+      await store.save(subjectId, record, { expectedDigest });
+      return false;
+    } catch (error) {
+      if (error instanceof RecommendationCandidateEventConflictError) return true;
+      throw error;
+    }
+  };
+  try {
+    // The first write expects no record and must land. A store that refuses it refuses everything.
+    if (await rejects(first, null)) return { status: "failed", reason: "refused_current_write" };
+    // The store now holds `first`, so "expect nothing" is stale and has to be refused.
+    if (!await rejects(second, null)) return { status: "failed", reason: "accepted_stale_write" };
+    // The current digest must still be accepted, otherwise the store just rejects every write.
+    if (await rejects(second, first.digest)) return { status: "failed", reason: "refused_current_write" };
+    // And the old digest is stale now.
+    if (!await rejects(third, first.digest)) return { status: "failed", reason: "accepted_stale_write" };
+    return { status: "passed" };
+  } catch {
+    return { status: "inconclusive", reason: "store_error" };
+  } finally {
+    try { await store.delete(subjectId); } catch { /* best effort; the probe id is random and holds no events */ }
+  }
 }
 
 const DEVICE_MANIFEST: RecommendationStateStorageAdapterManifest = Object.freeze({
@@ -292,7 +410,9 @@ export function createInMemoryRecommendationCandidateEventStore(
 
 /**
  * Wraps an invalidator so a deletion request also clears the subject's stored candidate events. Attach
- * it to one derived-state target (the candidate cache is the natural one). The orchestrator already
+ * it to one derived-state target (the candidate cache is the natural one). When the lifecycle is given
+ * the library's own derived-state orchestrator, it does this for you; use this helper when `derived`
+ * is your own port or a wrapper around it. The orchestrator already
  * keeps a durable deletion task and retries a failed target, so a crash mid-delete finishes on
  * recovery. Other invalidation reasons pass straight through, because a profile change does not
  * make a reported candidate fact any less true.
@@ -302,10 +422,14 @@ export function createRecommendationCandidateEventDeletionInvalidator(
   inner?: RecommendationDerivedStateInvalidator
 ): RecommendationDerivedStateInvalidator {
   assertRecommendationCandidateEventStore(store);
-  return Object.freeze({
+  const invalidator = Object.freeze({
     async invalidate(request: Parameters<RecommendationDerivedStateInvalidator["invalidate"]>[0]) {
-      if (request.reason === "deletion_requested") await store.delete(request.subjectId);
+      // Same queue the lifecycle saves through, so a report that is mid-save finishes first and this delete clears it.
+      if (request.reason === "deletion_requested") await deleteStoredRecommendationCandidateEvents(store, request.subjectId);
       if (inner !== undefined) await inner.invalidate(request);
     }
   });
+  // Lets the library's orchestrator see that this store is already handled, so it does not clear it twice.
+  markRecommendationCandidateEventDeletionInvalidator(invalidator, store);
+  return invalidator;
 }

@@ -478,6 +478,25 @@ test("a first-session object that ignores excludeSourceIds still cannot bring a 
   assert.equal(clean.result.recommendations.length, 5);
 });
 
+test("an ignoring first session can return fewer than limit after the post-filter, an honoring one fills the limit", async () => {
+  const sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["carol", "dave"])];
+  const adapter = () => createRecommendationCuratedAccountSetCandidateSourceAdapter({ id: "curated.sets", sets });
+  const events = [{ kind: "set_deleted" as const, occurredAt: T1, setSourceId: SET_A }];
+  const isFromSetA = (item: { candidate: { nativeId: string } }) => /set-a|alice|bob/.test(item.candidate.nativeId);
+  const honoring = harness({ firstSessionSources: [adapter()], candidateKinds: CURATED_KINDS });
+  await honoring.lifecycle.applySelection(change(["gaming"]));
+  const filled = await honoring.lifecycle.refresh({ request: { ...REQUEST, limit: 3 }, candidateEvents: events, now: T1 });
+  assert.equal(filled.result.recommendations.length, 3);
+  assert.ok(!filled.result.recommendations.some(isFromSetA));
+  const ignoring = harness({ firstSessionSources: [adapter()], candidateKinds: CURATED_KINDS, ignoreSourceExclusions: true });
+  await ignoring.lifecycle.applySelection(change(["gaming"]));
+  // The old object cuts to its limit before refresh sees the result, and refresh does not call it again.
+  const short = await ignoring.lifecycle.refresh({ request: { ...REQUEST, limit: 3 }, candidateEvents: events, now: T1 });
+  assert.ok(short.result.recommendations.length < 3);
+  assert.ok(!short.result.recommendations.some(isFromSetA));
+  assert.deepEqual(short.result.recommendations.map((item) => item.rank), short.result.recommendations.map((_, index) => index + 1));
+});
+
 test("a member in two sets is dropped when either set is reported, and an unknown set source ID changes nothing", async () => {
   const sets = [curatedSet("set-a", ["alice", "bob"]), curatedSet("set-b", ["bob"])];
   const dropped = await curatedRefresh([{ kind: "set_deleted", occurredAt: T1, setSourceId: SET_B }], sets);

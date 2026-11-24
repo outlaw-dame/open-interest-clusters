@@ -4,6 +4,26 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+### Added
+
+- Evidence attestations. `createRecommendationEvidenceAttestation` records that a check ran (subject, source ids, kind, mechanism, authority from the provider-discovery vocabulary, time). `createRecommendationAttestationEvidenceVerifier` plugs into the existing `evidenceVerifier` hook and says `verified` only for an attestation issued by that function that matches the subject, kind and source ids, is fresh (default 15 minutes) and strong enough. Origin-only evidence such as a Mastodon Collection read is an `origin` attestation and is refused wherever a `signature` proof is required. No protocol signature is verified by the library and no dependency was added. `recommendationProviderDiscoveryAuthorityAtLeast` compares authorities.
+- `checkRecommendationCandidateEventStoreCompareAndSet(store)`. It tests a store's `supportsCompareAndSet` claim by trying a stale write on a throwaway probe subject, and returns `passed`, `failed` (with a fixed reason) or `inconclusive` when the store threw. The onboarding lifecycle runs it once before its first guarded write.
+- `candidateEvents.setExclusionRetentionMs` on `createRecommendationOnboardingLifecycle`, and `MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS` (365 days). It lets set-level events outlive ordinary ones so a hidden set stays hidden longer. It defaults to `retentionMs`, so nothing changes unless you set it, and it may not be shorter than `retentionMs`. Deletion and revoked consent still clear these events immediately.
+
+- `transitionRecommendationProfilePersistence` can now move stored candidate events along with the profile. Give both locations a `candidateEventStore` (and optionally `candidateEventLimits`). Events are copied, read back, and deleted from the source before the source profile is removed, with the same consent check, backoff and rerun behavior as the profile. The result gains an optional `candidateEvents` field (`moved`, `nothing_to_move` or `skipped_store_missing`). Callers that pass no event store see no change.
+
+### Changed
+
+- A candidate event store that declares `supportsCompareAndSet` but accepts stale writes (or refuses current ones) is no longer trusted. The lifecycle falls back to its per-subject queue without `expectedDigest`, the same as a store that never declared support. Before this, a store that lied let two devices overwrite each other without any signal.
+- A lifecycle with `candidateEvents: { store }` built on the library's own derived-state orchestrator now clears the stored events on `derived.deleteSubject` without any extra wiring. The delete is part of the durable `candidate_cache` deletion step, so a failure is reported as pending and retried on the next call. If you already wrap an invalidator with `createRecommendationCandidateEventDeletionInvalidator`, that store is not deleted twice. A custom or wrapped `derived` port still needs the helper.
+- `derived.deleteSubject` no longer races a report that is saving candidate events. Store saves and deletes share a per-subject queue keyed by the store object, so the deletion waits for the save and then clears it. Previously the save could land after the deletion and a second deletion was needed. This holds within one process using one store object.
+- The candidate event store now keeps one slot per set, kind and candidate ID for set-level events (`set_deleted`, `set_not_discoverable`, `set_sensitive`). Reporting the same set again with a later time replaces the earlier event instead of adding another, so repeated reports cannot fill the cap. At the cap a report for a new set still fails and nothing is evicted. Records written earlier that hold duplicates are tidied on the next save.
+
+### Documented
+
+- Several processes and scheduled refresh: the library never refreshes on its own (the application calls `refresh`) and cannot lock across processes without shared storage. The Phase 7 doc now explains why there is no built-in lease and gives a concrete lock recipe with expiry, crash recovery and backoff.
+- `lifecycle.refresh` can return fewer than `limit` recommendations when the first-session object ignores `excludeSourceIds` and had already cut its list to `limit`. The refresh filter only removes and does not rerun the first session. The library's own orchestrator is not affected.
+
 ## 0.3.0
 
 Changes from PR #136, on top of 0.2.0.
