@@ -116,14 +116,43 @@ test("events merge into what the destination already holds and never drop it", a
   assert.deepEqual(held.entries.map((entry) => entry.event.kind).sort(), ["account_deleted", "member_consent_revoked"]);
 });
 
-test("set-level exclusions older than the default retention survive the move when the same limits are passed", async () => {
+test("set-level exclusions older than the default retention survive a move with no limits passed", async () => {
   const { local, pod, run } = setup();
   const oldAt = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
   await seed(local.store, [{ ...setDeleted, occurredAt: new Date(Date.parse(oldAt) - 1000).toISOString() }], SUBJECT, oldAt);
-  await run({ candidateEventLimits: { setExclusionRetentionMs: 300 * 24 * 60 * 60 * 1000 } });
+  await run();
   const held = await pod.inner.load(SUBJECT) as RecommendationCandidateEventRecord;
   assert.equal(held.entries.length, 1);
   assert.equal(held.entries[0]!.recordedAt, oldAt);
+  assert.equal(await local.inner.load(SUBJECT), undefined, "source is only cleared after the copy holds the exclusion");
+});
+
+test("a longer-lived exclusion already at the destination is not dropped when new events are merged in", async () => {
+  const { local, pod, run } = setup();
+  const oldAt = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+  const older = { ...setDeleted, setSourceId: "pack-old", occurredAt: new Date(Date.parse(oldAt) - 1000).toISOString() };
+  await seed(pod.store, [older], SUBJECT, oldAt);
+  await seed(local.store, [bobRevoked]);
+  await run();
+  const held = await pod.inner.load(SUBJECT) as RecommendationCandidateEventRecord;
+  assert.deepEqual(held.entries.map((entry) => entry.event.kind).sort(), ["member_consent_revoked", "set_deleted"]);
+});
+
+test("ordinary events older than the default retention also move when no limits are passed", async () => {
+  const { local, pod, run } = setup();
+  const oldAt = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+  await seed(local.store, [{ ...carolDeleted, occurredAt: new Date(Date.parse(oldAt) - 1000).toISOString() }], SUBJECT, oldAt);
+  await run();
+  assert.equal((await pod.inner.load(SUBJECT) as RecommendationCandidateEventRecord).entries.length, 1);
+});
+
+test("limits the caller passes still narrow what moves", async () => {
+  const { local, pod, run } = setup();
+  const oldAt = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+  await seed(local.store, [{ ...setDeleted, occurredAt: new Date(Date.parse(oldAt) - 1000).toISOString() }], SUBJECT, oldAt);
+  const day = 24 * 60 * 60 * 1000;
+  await run({ candidateEventLimits: { retentionMs: day, setExclusionRetentionMs: day } });
+  assert.equal(await pod.inner.load(SUBJECT), undefined, "an explicit short window is honoured");
 });
 
 test("a delete that fails leaves the source profile and events, and a rerun finishes without a duplicate", async () => {

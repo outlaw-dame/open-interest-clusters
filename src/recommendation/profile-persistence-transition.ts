@@ -2,6 +2,8 @@ import {
   assertRecommendationCandidateEventStore,
   buildRecommendationCandidateEventRecord,
   mergeRecommendationCandidateEventEntries,
+  MAX_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS,
+  MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS,
   normalizeRecommendationCandidateEventStoreLimits,
   readRecommendationCandidateEventRecord,
   recommendationCandidateEventRecordDigest,
@@ -66,8 +68,11 @@ export interface RecommendationProfilePersistenceTransitionInput {
   now?: string;
   retry?: RecommendationProfilePersistenceRetryOptions;
   /**
-   * Retention limits used when stored events are read and rewritten. Pass the same values the
-   * lifecycle uses, otherwise longer-lived set-level exclusions could be dropped during the move.
+   * Retention limits used when stored events are read and rewritten. Anything left out defaults to the
+   * longest the lifecycle allows (90 days for events, 365 for set-level exclusions), not to the
+   * lifecycle's own defaults, so a move can never drop an exclusion the lifecycle was still keeping.
+   * The lifecycle applies its own limits when it next reads the events. Pass shorter values only if you
+   * want older events left behind on purpose.
    */
   candidateEventLimits?: { retentionMs?: number; maxEvents?: number; setExclusionRetentionMs?: number };
   signal?: AbortSignal;
@@ -319,7 +324,13 @@ export async function transitionRecommendationProfilePersistence(
   const retry = input.retry ?? {};
   if (!isRecord(retry)) throw new TypeError("Invalid recommendation profile persistence retry options.");
   const signal = input.signal;
-  const limits = normalizeRecommendationCandidateEventStoreLimits(input.candidateEventLimits);
+  // The source is deleted after the copy, so anything the limits drop here is gone for good. Start from the
+  // widest retention the lifecycle can be configured with, and let the caller narrow it on purpose.
+  const limits = normalizeRecommendationCandidateEventStoreLimits({
+    retentionMs: MAX_RECOMMENDATION_CANDIDATE_EVENT_RETENTION_MS,
+    setExclusionRetentionMs: MAX_RECOMMENDATION_CANDIDATE_SET_EXCLUSION_RETENTION_MS,
+    ...input.candidateEventLimits
+  });
   const fromEvents = from.candidateEventStore;
   const toEvents = to.candidateEventStore;
   const movesEvents = fromEvents !== undefined && toEvents !== undefined;
