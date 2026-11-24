@@ -159,6 +159,17 @@ export interface RecommendationOnboardingRefreshResult {
 export interface RecommendationOnboardingRefreshResultWithSetExclusions extends RecommendationOnboardingRefreshResult {
   /** Curated-set source IDs left out because a set-level event was reported for them. */
   excludedSetSourceIds: readonly string[];
+  /**
+   * What the evidence verifier (and the attestation policy, if `minimumAttestation` is set) checked
+   * during this refresh. Only events reported in this call can be checked. Stored events that were not
+   * reported in this call are counted in `storedEventsNotChecked`, and the state is `partial` when
+   * something was checked and some stored events were not. `unverified` means nothing was checked
+   * here. Optional so a result built before this field existed still fits the type.
+   */
+  evidenceVerification?: RecommendationEvidenceVerification["evidenceVerification"];
+  verifierId?: string;
+  verifiedKinds?: RecommendationEvidenceVerification["verifiedKinds"];
+  storedEventsNotChecked?: number;
 }
 
 export interface RecommendationOnboardingLifecycleOptions {
@@ -652,9 +663,22 @@ export function createRecommendationOnboardingLifecycle(
     policy?: RecommendationConsentPolicy,
     attestations?: readonly unknown[]
   ): Promise<RecommendationOnboardingCandidateReportResultWithEvidence> {
+    return (await reportChecked(subjectId, rawEvents, now, signal, policy, attestations)).result;
+  }
+
+  /** Also returns the events that went through the verifier in this call, so `refresh` can tell them from stored ones. */
+  async function reportChecked(
+    subjectId: string,
+    rawEvents: readonly RecommendationCandidateLifecycleEvent[],
+    now: string,
+    signal: AbortSignal,
+    policy?: RecommendationConsentPolicy,
+    attestations?: readonly unknown[]
+  ): Promise<{ result: RecommendationOnboardingCandidateReportResultWithEvidence; checked: readonly RecommendationCandidateLifecycleEvent[] }> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
-      return Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+      const result = Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+      return { result, checked: [] };
     }
     // With a store, consent comes first and events it already holds are not verified again. A replay
     // detecting verifier would reject the retry of a report whose save failed, and the held events
@@ -675,13 +699,14 @@ export function createRecommendationOnboardingLifecycle(
     if (eventStore !== undefined) await persistEvents(subjectId, events, now, signal);
     checkpoint(signal);
     const propagation = await invalidate({ subjectId, occurredAt: now });
-    return Object.freeze({
+    const result = Object.freeze({
       subjectId,
       ...verification,
       acceptedEventCount: events.length,
       excludedCandidateIds: listRecommendationLifecycleExcludedCandidateIds(events),
       propagation
     });
+    return { result, checked: fresh };
   }
 
   return Object.freeze({
@@ -778,14 +803,22 @@ export function createRecommendationOnboardingLifecycle(
           ? undefined
           : normalizeRecommendationCandidateLifecycleEvents(input.candidateEvents, { now });
         // Finish whatever an earlier crash left behind before deciding what to serve.
-        const propagation = events === undefined || events.length === 0
-          ? await options.derived.repair(subjectId)
-          : (await report(subjectId, events, now, signal, input.policy, attestations)).propagation!;
+        let reported: Awaited<ReturnType<typeof reportChecked>> | undefined;
+        if (events !== undefined && events.length > 0) reported = await reportChecked(subjectId, events, now, signal, input.policy, attestations);
+        const propagation = reported === undefined ? await options.derived.repair(subjectId) : reported.result.propagation!;
         if (eventStore !== undefined && (events === undefined || events.length === 0) && input.policy !== undefined) {
           await requireStoreConsent(subjectId, input.policy);
         }
         // Stored events keep excluding after a restart. They are read after the report, so they include it.
-        const known = eventStore === undefined ? (events ?? []) : [...(events ?? []), ...await readStoredEvents(subjectId, now)];
+        const stored = eventStore === undefined ? [] : await readStoredEvents(subjectId, now);
+        const known = [...(events ?? []), ...stored];
+        // Stored events were only verified if they went through the verifier in this very call. Anything else
+        // that still excludes candidates here was taken on trust from the store.
+        const checkedNow = new Set((reported?.checked ?? []).map((event) => JSON.stringify(event)));
+        const verification = combineRecommendationEvidenceVerification(
+          reported === undefined ? [] : [reported.result],
+          stored.filter((event) => !checkedNow.has(JSON.stringify(event))).length
+        );
         const excluded = new Set(input.request.excludeCandidateIds ?? []);
         for (const id of listRecommendationLifecycleExcludedCandidateIds(known)) excluded.add(id);
         const excludedCandidateIds = Object.freeze([...excluded].sort());
@@ -804,7 +837,7 @@ export function createRecommendationOnboardingLifecycle(
           excludeCandidateIds: excludedCandidateIds,
           excludeSourceIds: excludedSetSourceIds
         });
-        return Object.freeze({ result: dropExcludedSetCandidates(result, excludedSetSourceIds), excludedCandidateIds, excludedSetSourceIds, propagation });
+        return Object.freeze({ result: dropExcludedSetCandidates(result, excludedSetSourceIds), excludedCandidateIds, excludedSetSourceIds, propagation, ...verification });
       });
     }
   });

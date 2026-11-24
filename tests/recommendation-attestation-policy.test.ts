@@ -11,6 +11,7 @@ import {
   createRecommendationDerivedStateInvalidationOrchestrator,
   createRecommendationEngineOrchestrator,
   createRecommendationEvidenceAttestation,
+  createInMemoryRecommendationCandidateEventStore,
   createRecommendationOnboardingLifecycle,
   normalizeRecommendationCandidateLifecycleEvents,
   normalizeRecommendationEvidenceVerificationOptions,
@@ -19,6 +20,7 @@ import {
   type RecommendationCandidate,
   type RecommendationCandidateActionPlan,
   type RecommendationCandidateLifecycleEvent,
+  type RecommendationConsentPolicy,
   type RecommendationDerivedStateInvalidationRequest,
   type RecommendationEvidenceAttestationInput,
   type RecommendationEvidenceKind
@@ -249,4 +251,56 @@ test("the lifecycle bounds the attestation list", async () => {
   await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REVOKED], attestations: tooMany, now: NOW }), TypeError);
   await assert.rejects(lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REVOKED], attestations: "nope" as never, now: NOW }), TypeError);
   assert.equal(calls.length, 0);
+});
+
+const CONSENT: RecommendationConsentPolicy = { subjectId: SUBJECT, allowedDataUses: ["local_personalization"], privateDataUses: ["local_personalization"] };
+const REQUEST = { subjectId: SUBJECT, requestId: "r-1", languages: ["en"], limit: 5 };
+const OTHER_EVENT: RecommendationCandidateLifecycleEvent = { kind: "account_deleted", occurredAt: LATER, candidateId: candidate("account", "bob").candidateId };
+const [OTHER_NORMALIZED] = normalizeRecommendationCandidateLifecycleEvents([OTHER_EVENT], { now: NOW });
+
+function refreshLifecycle(evidenceVerifier: unknown, withStore: boolean) {
+  const engine = createRecommendationEngineOrchestrator({ profileStore: createInMemoryRecommendationProfileSignalReplacementStore(), allowEmptySubjectInitialization: true, now: () => LATER });
+  const invalidator = { async invalidate() {} };
+  const derived = createRecommendationDerivedStateInvalidationOrchestrator({ engine, now: () => LATER, invalidators: { embeddings: invalidator, candidate_cache: invalidator, explanation_cache: invalidator } });
+  const firstSession = { async execute() { return { recommendations: [] } as never; } };
+  return createRecommendationOnboardingLifecycle({
+    derived, engine, firstSession, now: () => NOW, evidenceVerifier: evidenceVerifier as never,
+    ...(withStore ? { candidateEvents: { store: createInMemoryRecommendationCandidateEventStore() } } : {})
+  });
+}
+
+test("refresh says what it verified: attested reported events are verified under the policy", async () => {
+  const lifecycle = refreshLifecycle({ minimumAttestation: "signature" }, false);
+  const refreshed = await lifecycle.refresh({ request: REQUEST, candidateEvents: [REVOKED], attestations: [attest("lifecycle_event", EVENT)], now: NOW });
+  assert.equal(refreshed.evidenceVerification, "verified");
+  assert.deepEqual(refreshed.verifiedKinds, ["lifecycle_event"]);
+  assert.equal(refreshed.storedEventsNotChecked, 0);
+  assert.deepEqual(refreshed.excludedCandidateIds, [EVENT!.candidateId!]);
+});
+
+test("refresh under the policy still refuses unattested events and reports nothing verified for a plain rerun", async () => {
+  const lifecycle = refreshLifecycle({ minimumAttestation: "signature" }, false);
+  await refused(lifecycle.refresh({ request: REQUEST, candidateEvents: [REVOKED], now: NOW }), "lifecycle_event");
+  const plain = await lifecycle.refresh({ request: REQUEST, now: NOW });
+  assert.equal(plain.evidenceVerification, "unverified");
+  assert.deepEqual(plain.verifiedKinds, []);
+});
+
+test("refresh without a verifier labels itself unverified even when it reported events", async () => {
+  const lifecycle = refreshLifecycle(undefined, false);
+  const refreshed = await lifecycle.refresh({ request: REQUEST, candidateEvents: [REVOKED], now: NOW });
+  assert.equal(refreshed.evidenceVerification, "unverified");
+});
+
+test("refresh counts stored events it relied on without checking, and calls the mix partial", async () => {
+  const lifecycle = refreshLifecycle({ minimumAttestation: "signature" }, true);
+  await lifecycle.reportCandidateEvents({ subjectId: SUBJECT, events: [REVOKED], attestations: [attest("lifecycle_event", EVENT)], policy: CONSENT, now: NOW });
+  const rerun = await lifecycle.refresh({ request: REQUEST, policy: CONSENT, now: NOW });
+  assert.equal(rerun.evidenceVerification, "unverified", "the stored event was not checked in this call");
+  assert.equal(rerun.storedEventsNotChecked, 1);
+  assert.deepEqual(rerun.excludedCandidateIds, [EVENT!.candidateId!], "it still excludes, which only ever removes candidates");
+  const mixed = await lifecycle.refresh({ request: REQUEST, policy: CONSENT, candidateEvents: [OTHER_EVENT], attestations: [attest("lifecycle_event", OTHER_NORMALIZED)], now: NOW });
+  assert.equal(mixed.evidenceVerification, "partial");
+  assert.equal(mixed.storedEventsNotChecked, 1, "only the earlier stored event is unchecked; the new one went through the verifier");
+  assert.deepEqual(mixed.verifiedKinds, ["lifecycle_event"]);
 });
