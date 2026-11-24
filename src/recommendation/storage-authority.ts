@@ -20,6 +20,20 @@ export const RECOMMENDATION_STORAGE_AUTHORITY_REASONS = [
 export type RecommendationStorageAuthorityReason =
   typeof RECOMMENDATION_STORAGE_AUTHORITY_REASONS[number];
 
+/**
+ * Where a store runs, and who may operate it. This is a property of the store (its manifest), not of the
+ * interests kept in it, which carry their own `privacyBoundary` label.
+ *
+ * - `local_only`: the store runs on the user's device. Only `device_owned` fits.
+ * - `server_allowed`: the store is a remote service. Only a `user_owned` one fits, such as the user's own
+ *   ActivityPods or Solid pod. Provider and operator services are refused.
+ * - `aggregate_only`: shared infrastructure for statistics that identify nobody.
+ *
+ * The interests kept in a store carry the matching label on their own `privacyBoundary`: `local_only` on
+ * a device, `server_allowed` in a user-owned server store. The label says where the interests are
+ * processed. A user-owned server is still a server, even though the user controls it, so using one needs
+ * the user's server-side consent.
+ */
 export type RecommendationProcessingBoundary =
   | "local_only"
   | "server_allowed"

@@ -64,11 +64,14 @@ The derived-state orchestrator's checkpoint is a digest of the profile, so a can
 
 ### 6. Persistence-location transitions
 
+The placement evidence for a pod or private ATProto space comes from the `storageTarget` in the selection. The library does not check it against the place the profile is actually written, so the application must pass the same target to both. Pod records written as `local_only` by older releases keep that label until the next pod write or a transition; nothing flags them on read, and the stale label is the stricter one.
+
 `transitionRecommendationProfilePersistence` moves the profile record between `local_app` (device-owned) and `user_pod` (user-owned). Order is fixed: read source, write destination (consent enforced for the remote side, verified by reading back), delete source last. A crash at any point leaves at least one complete copy, and rerunning is safe:
 
 - a destination write that fails or fails verification leaves the source untouched;
 - if only the source delete fails, the error is `source_cleanup_pending`, and the same call finishes it;
 - if the source is already gone and the destination has the record, the result is `already_moved`;
+  - if that destination record still carries the wrong label (for example a pod record written as `local_only` by an older release), the rerun rewrites it, and a pod destination needs the consent policy for that write. A rerun without a policy fails closed instead of returning `already_moved`;
 - a destination copy with a newer `updatedAt` is kept and only the stale source is removed.
 
 Adapter and verification failures are retried with exponential backoff and full jitter (default 3 attempts, 200 ms base, doubling, capped at 30 s). Consent and placement denials are never retried. Provider-hosted, server-profile, ephemeral and operator placements are refused twice: by target and by the adapter placement manifest. A transition whose two sides resolve to the same adapter and key is rejected so a record cannot delete itself. Per-subject calls are serialized in process. An abort signal also interrupts a backoff wait, so a pending retry delay does not hold the call open.
@@ -152,6 +155,33 @@ The lifecycle reads its own clock (`now` option, defaulting to the system time).
 
 The seed's `observedAt` and the lifecycle's `now` are separate clocks. `observedAt` defaults to `selection.selectedAt` and records when the user made the choice. `now` is when the lifecycle runs and stamps `occurredAt` on the events it writes. A selection made well before `now` therefore has signals whose evidence time is older than their event time. That is intended, and expiry is judged against `now`.
 
+## Noticing that a curated set changed
+
+The library never polls, so something in your app has to look at a curated account set again (when the user opens onboarding, or from your own scheduler) and say what it saw. `diffRecommendationCuratedAccountSet` turns "last snapshot plus fresh read" into lifecycle events. It is pure: no network, no timers, and the only time it uses is the `observedAt` you supply with the reads.
+
+```ts
+const report = diffRecommendationCuratedAccountSet({
+  subjectId,
+  previous: lastSnapshot,          // the RecommendationCuratedAccountSet you saved earlier
+  fresh: await readAgain()         // { status: "found", set } | { status: "not_found", provider, setId, observedAt } | { status: "unknown" }
+});
+if (report.events.length > 0) {
+  await lifecycle.reportCandidateEvents({ subjectId: report.subjectId, events: report.events, policy });
+  // or pass the events to lifecycle.refresh
+}
+// Save fresh.set as the new snapshot only after the report went through.
+```
+
+What it reports, always as events that make a plan less usable:
+
+- `not_found` gives `set_deleted`. A set that stops being discoverable gives `set_not_discoverable`, and one that becomes sensitive gives `set_sensitive`.
+- A member that moved to `revoked` or `rejected` gives `member_consent_revoked` or `member_consent_rejected`, with the member's candidate ID. A member that is no longer listed also gives `member_consent_revoked`, but only when the fresh set says `membershipComplete`. A partial list cannot show who is missing.
+- Only members that were accepted and had an actor URI in the previous snapshot can be reported, because only those became candidates. A member that fell back to pending or unknown has no matching event kind, so it is not an event. It is returned in `report.noLongerAcceptedCandidateIds` and the report is `changed`. **Act on that list.** A plan that still holds those members stays usable, because nothing in the lifecycle marks them. Pass the IDs as `excludeCandidateIds` on the next `refresh` and leave them out when you rebuild a plan.
+
+What it will not do. `unknown` means the read failed or told you nothing (timeout, 5xx, rate limit, parse error). It returns no events, so an outage cannot hide a set. Your code must map only a real "gone" answer from the provider to `not_found`. Sets getting better (discoverable again, gaining members) never produce events, because an event can never reopen a plan. It also throws instead of guessing when the provider or set ID differs from the previous snapshot, when `observedAt` runs backwards, when either set has more than 150 members, or when a snapshot is malformed. Events are in canonical order, de-duplicated, and tied to the `subjectId` and `setSourceId` in the report. Row order and duplicate rows in the read do not change the result, and a duplicate accepted row cannot cancel a revoked one.
+
+The library still never polls. The diff does nothing until your code calls it, and `reportCandidateEvents` or `refresh` is still what clears caches and applies the exclusion.
+
 ## Persisted candidate events
 
 By default `reportCandidateEvents` only clears caches. Pass `candidateEvents: { store }` to `createRecommendationOnboardingLifecycle` and the events are also kept, so `assessPlan` and `refresh` still honor them after a restart. Leaving the option out keeps the old behavior exactly.
@@ -169,19 +199,28 @@ Race note: saves and deletes against the event store go through one in-process q
 
 Compatibility: the `candidateEvents` option and the `policy` field on report and refresh input are additive. Without a store, `listReportedCandidateEvents` and `assessPlan` throw. The interface and state domain changes are in "Public API changes".
 
+## Matching interests without sending them
+
+Interests are labelled `local_only` on the device and `server_allowed` in a user-owned pod (see `privacy-model.md`). Either way the lifecycle works by asking remote apps and servers to check public candidates or report updates, while the matching against the profile happens against the user's own profile and the profile is not sent to them.
+
+- Remote candidate sources get a redacted query (kinds, limit, cursor, hashed request ID). Interests and languages are removed before the call, and only a `local` adapter sees them. The curated account-set clients send a fixed public URL. The label query sends URI patterns and never the subject ID. Tests cover each of these.
+- Subject-level state is refused for provider-owned and shared-operator stores in every persistence path, including the candidate event store and the profile move. A private ATProto space on the user's own PDS is allowed like a pod, with the same consent and `server_allowed` label, and a public ATProto repo is never allowed. A manifest that declares `publiclyReadable: true` is refused on the same paths. The library has no spaces adapter and cannot verify what an adapter writes (see `local-first-state-placement.md`, which links the two ATProto posts on spaces and states what they do and do not say).
+- Requirement on integrations: a server that answers these checks should not store the queries or any profile data past serving them. The library can only control what it builds. It cannot see what you put in a URL or cursor yourself, and it cannot enforce what a server does afterwards.
+
 ## Residual limits
 
 State after the limit-reduction work, with what each item does and does not cover.
 
 1. **No proof is verified by default.** Candidate lifecycle events and the consent and provenance inside plans are caller-supplied. Nothing in the repository verifies the protocol proofs behind them (see "What is and is not verified today"). The optional `evidenceVerifier` hook (see "Evidence verification") lets the application reject evidence, and a rejection or failure blocks the report or assessment. Without a verifier, results say `evidenceVerification: "unverified"`, and a consistent fabrication of plan evidence is not detectable. Plan assessment also rejects malformed provenance, identity fields and timestamps, but a well-formed forgery passes. Evidence can only make a plan less usable, with or without a verifier.
 2. **Reported events are lost on restart: fixed when a store is configured, opt-in.** With `candidateEvents: { store }` events are kept (see "Persisted candidate events"). With no store, only the cache invalidation they cause is durable, as before.
-3. **Write interleaving: fixed in process per engine, cross-process remains.** Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). The ledger raises its conflict as a plain `TypeError` and has no dedicated error class, so a `TypeError` is only treated as a conflict when the operation IDs in the history changed since it was read. An unrelated ledger error is returned on the first failure; a validation `TypeError` that coincides with an outside write costs at most the 5 attempts before it is returned. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call. There is no cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
+3. **Write interleaving: fixed in process per engine, cross-process remains.** Writes for one subject are serialized in process, and every lifecycle built on the same engine object shares that queue, so two lifecycle instances cannot interleave their read-then-write steps. The engine and derived orchestrators keep their own queues, so a direct `derived.process` or engine call is not in this queue, and neither is another process. If such a writer slips in between the lifecycle's history read and its write, the ledger may reject the write with a conflict error. The lifecycle then re-reads the history and plans again, up to 5 attempts with exponential backoff and jitter (5 ms base, 100 ms cap). The ledger raises its conflict as a plain `TypeError` and has no dedicated error class, so a `TypeError` is only treated as a conflict when the operation IDs in the history changed since it was read. An unrelated ledger error is returned on the first failure; a validation `TypeError` that coincides with an outside write costs at most the 5 attempts before it is returned. If the outside write raised no conflict (for example it added a signal the lifecycle was about to withdraw), nothing is detected and the outside write stays until the next lifecycle call. There is no cross-process lock. An application that runs several processes against one subject's ledger must route all of that subject's writes through one process or hold its own per-subject lock (a database advisory lock or a lease), which the optional `subjectLock` hook can call for it (see "The `subjectLock` hook"), and must not write onboarding-shaped events (`onboarding:v1:` source IDs) outside the lifecycle.
 4. **Set-level events needing candidate IDs: fixed.** Set events exclude by source ID on refresh (see decision 4).
 
 Gaps that remain by design or by scope:
 
 - The profile transition moves the profile record and, when both sides pass a `candidateEventStore`, reported candidate events. It does not move the engine's event-history store or derived caches. Each has its own placement, owned by the application.
-- A profile that holds `local_only` signals can be written to a user-owned store, the same as existing onboarding bootstrap with `storageTarget: "user_pod"`. The transition does not rewrite privacy boundaries.
+- Moving a profile relabels its interests for the destination. To a pod, `local_only` becomes `server_allowed`, which needs server-side consent and is checked before anything is written. Back to the device, `server_allowed` becomes `local_only`. The relabelled copy is written and read back before the source is deleted, so each store only ever holds its own label. Only the label changes, so the round trip returns the same profile. If a run stops after the copy, the pod holds the pod label and the device still holds the device label, and rerunning finishes. If the destination is already in place with the wrong label, which is what an older release left in a pod, the transition relabels it in place. Candidate events have no label and move unchanged. The onboarding bootstrap with `storageTarget: "user_pod"` labels `server_allowed` from the start, and a `privacyBoundary` that does not fit the target throws. Tests cover both directions, consent denial, crashes after the copy and retries.
+- Profiles that 0.2.0 and 0.3.0 left in a pod as `local_only` still load. They are accepted as stored and relabelled on the next write or transition. Reading alone does not rewrite them.
 - The deletion registry is per process. The orchestrator clears only event stores registered by a lifecycle built in the same process on the same orchestrator. Build the lifecycle before recovering or running pending deletion tasks at startup. A `candidate_cache` task that completes before that has nothing registered and leaves stored events in place. Apps that cannot guarantee the order should also give the orchestrator an invalidator built with `createRecommendationCandidateEventDeletionInvalidator`, which does not depend on registration order.
 - Deletion waits for an in-flight save only within one process and one store object (see the race note above).
 - Event stores that do not implement compare-and-set, or that fail `checkRecommendationCandidateEventStoreCompareAndSet`, stay single-writer. There is no lease or lock across processes (see "Several processes and scheduled refresh").
@@ -206,6 +245,54 @@ Gaps that remain by design or by scope:
 5. When a lock attempt fails, wait with exponential backoff and jitter (for example 1s, 2s, 4s up to a cap, each scaled by a random factor between 0.5 and 1) before trying again, and give up after a handful of attempts.
 
 Treat the lock as an efficiency measure only. Refresh stays safe without it, because every stored write is still guarded by compare-and-set when the store supports it.
+
+### The `subjectLock` hook
+
+If you want the lifecycle to hold your lock around its writes instead of wrapping every call yourself, pass `subjectLock`:
+
+```ts
+createRecommendationOnboardingLifecycle({
+  derived, engine,
+  subjectLock: {
+    acquire: async (subjectId, { signal }) => /* take the lock, resolve to a function that frees it */,
+    timeoutMs: 5000,        // longest wait for acquire, and for a release (default 5000, at most 60000)
+    maxHoldMs: 60000,       // longest the work may run under the lock (default 60000, at most 300000)
+    onHoldExceeded: (error) => alerts.warn(error.reason), // told once when that deadline passes
+    signal: shutdown.signal, // optional: aborting stops every wait
+    onReleaseError: (error) => log.warn(error.reason)
+  }
+});
+```
+
+**The library itself provides no cross-process guarantee.** There is no default lock. Leave the option out and nothing changes. With a lock you supply, `applySelection`, `withdrawSelections`, `reportCandidateEvents`, `assessPlan` (it can delete events when consent is denied) and `refresh` run inside it. `listReportedCandidateEvents` only reads and does not take it. The library adds no lease, no expiry and no clock beyond a bounded wait, so what the lock guarantees is whatever your lock guarantees.
+
+- **Ordering.** The call joins the in-process per-subject queue first, then takes your lock, then does its work (the candidate event store has its own queue inside that). It never takes them in the other order, so a call that holds your lock is never waiting for the queue, and two calls in one process never both wait on your lock for the same subject. Locks for different subjects are independent.
+- **Fail closed.** If `acquire` throws, rejects, times out or is aborted, the call rejects with `RecommendationSubjectLockError` (`reason`: `acquire_failed`, `acquire_timeout` or `aborted`) before anything is read or written. A hold that ran past its deadline is `hold_exceeded`, covered below. The error message never contains the subject ID, and the underlying error is on `cause`. If `acquire` resolves to something that is not a function the call fails with `invalid_release`. If the lock is granted after the library gave up waiting, it is released at once.
+- **Abort.** `acquire` gets an `AbortSignal` that fires on timeout and when the lifecycle's own `signal` aborts. Pass it on to your lock (see the Web Locks recipe). An already aborted `signal` fails the call without calling `acquire`.
+- **Release.** The release function runs once, in a `finally`, and waits at most `timeoutMs`. A throwing, rejecting or hanging release never changes the result or the error of the write. It is reported to `onReleaseError` as a `RecommendationSubjectLockError` (`release_failed` or `release_timeout`), and errors thrown by that callback are ignored. Without the callback a release failure is not visible, so set it.
+- **How long it is held.** The lock is held for the whole call, and that includes the evidence verifier, and for `refresh` the first-session call and its source reads. `timeoutMs` only bounds the wait for `acquire` and for the release. The work itself is bounded by `maxHoldMs` (default 60000 ms, at most 300000 ms, a whole number of at least 1). If your lock can expire (a lease, a database session timeout), make it longer than `maxHoldMs`, or expect it to be gone before the write finishes, and pass its fencing token to your store so a write that outlives its lease is refused.
+- **The hold deadline never releases early.** When `maxHoldMs` passes, the library does four things. It aborts the signal that the work runs under. It calls `onHoldExceeded` once with a `RecommendationSubjectLockError` (`hold_exceeded`), and errors thrown or rejected there are ignored. It then keeps holding your lock and the in-process queues until the work has actually settled. Only after that does it release, and the call rejects with `RecommendationSubjectLockError` (`hold_exceeded`), whether the work returned or threw. Releasing at the deadline would let a second writer start while a write was still in flight, which is the overlap the lock exists to prevent. The error has no `cause`, because the work's own error may name the subject, and its message never contains the subject ID. `hold_exceeded` means "stopped on purpose, state unknown": some of the work may have been written, so read the state again before retrying. A call that finishes in time clears the timer and nothing fires.
+- **What the abort reaches.** The signal is passed to the evidence verifier (as `context.signal`, and the library stops waiting for it), to `firstSession.execute` as `request.signal` (combined with the caller's own signal if there is one), and to the candidate event store retry loops, which stop retrying once it aborts. The library also checks the signal between steps, so no new step starts after the deadline: no event store save, no `derived.process` call, no cache invalidation and no first-session call. A step already in flight cannot be cancelled, because the engine, derived-state and event store ports take no signal. Deleting stored events when consent is revoked is deliberately not abortable, so a revocation is not left half done. Make your own verifier and sources honor their signals, or the deadline can only take effect when they return.
+- **Work that never settles.** If a port ignores the abort and never returns, the library does not free the lock. The subject's in-process queue stays busy and other callers for that subject fail with `acquire_timeout`. That is deliberate, because the alternative is a second writer next to a write that may still land. `onHoldExceeded` is how your app finds out: alert, log it, or ask the user to reload. A Web Lock is released by the browser when the tab closes, and a database session lock is dropped when its connection dies, so a restart clears it. A lease expires on its own, which is when your fencing token matters.
+
+**Web Locks (browser or service worker).** `navigator.locks.request` holds the lock until the callback's promise settles, so resolve a promise when the library releases:
+
+```ts
+acquire: (subjectId, { signal }) => new Promise((resolveAcquire, rejectAcquire) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  navigator.locks.request(`oic:${subjectId}`, { signal }, () => {
+    resolveAcquire(() => release());
+    return held;
+  }).catch(rejectAcquire);
+})
+```
+
+The `signal` makes a queued request stop waiting when it aborts, and the request rejects with an `AbortError`, which the lifecycle reports as `acquire_failed` or `acquire_timeout` depending on what fired first. Web Locks are shared by one origin in one browser profile. They do not span devices.
+
+**A database lock.** Take a transaction-scoped or session advisory lock on a key derived from the subject ID (for example `pg_advisory_lock(hashtextextended($1, 0))` on a dedicated connection). Resolve with a function that unlocks and returns the connection to the pool. Use `pg_try_advisory_lock` in a short backoff loop that checks `signal.aborted`, because a plain blocking `pg_advisory_lock` cannot be cancelled by the signal. A session lock is dropped by the database if the connection dies, which covers a crashed holder.
+
+**Conditional writes (`If-Match`).** Where the store can refuse a stale write, you do not need a lock. This is what `supportsCompareAndSet` and `expectedDigest` already do for the candidate event store, and it protects stored events only. For other state, read the resource, remember its `ETag`, and send `If-Match` with the write, retrying from the read on a `412`. A `subjectLock` is for the case where the store cannot do that.
 
 ## Evidence verification
 
@@ -243,7 +330,7 @@ Each protocol already has its own way to prove who said what, and the evidence v
 - **ActivityPub and Mastodon.** Authenticity is the HTTPS origin plus an authenticated fetch, and sometimes HTTP signatures or object proofs. A Mastodon 4.6.0 Collection REST read has no per-item signature.
 - **Solid and ActivityPods.** The WebID identifies the owner, and the ACL decides who may read or write.
 
-The intended shape is that an adapter verifies the protocol proof at fetch time, while it still holds the commit, signature or response. It then attaches an attestation to what it hands to the engine, recording how it was checked. The attestation should use the same authority ordering as `docs/recommendation-provider-discovery.md`, with `provider_probe` weakest and `explicit_integration` strongest. The evidence verifier then checks the attestation against the subject and kind, and applies replay rules. The attestation shape exists (see below), but no adapter issues one yet. Until they do, a verifier cannot tell protocol-verified data from data the adapter merely parsed.
+The intended shape is that an adapter verifies the protocol proof at fetch time, while it still holds the commit, signature or response. It then attaches an attestation to what it hands to the engine, recording how it was checked. The attestation should use the same authority ordering as `docs/recommendation-provider-discovery.md`, with `provider_probe` weakest and `explicit_integration` strongest. The evidence verifier then checks the attestation against the subject and kind, and applies replay rules. The attestation shape exists (see below). The only issuer so far is `createRecommendationAtprotoLabelAttestation`, for ATProto label signatures. Until they do, a verifier cannot tell protocol-verified data from data the adapter merely parsed.
 
 Application-owned signatures are a narrow case. They make sense only for evidence the application creates itself, such as a consent receipt or an imported event it signs on its own device or server. For that, a detached Ed25519 signature over canonical JSON (for example RFC 8785) of `{ subjectId, eventId, kind, payload, issuedAt, expiresAt, nonce }`, checked against a key the application controls, is reasonable. It is not a way to vouch for provider evidence. The library ships no keys and issues none, and no maintainer or app owner is positioned to sign what a remote provider said.
 
@@ -260,9 +347,18 @@ Residual limit, exactly: the library checks that evidence is well formed, bounde
 - has a `verifiedAt` that is not in the future and is no older than `maxAgeMs` (default 15 minutes, at most 7 days),
 - has the required proof class (`origin` or `signature`) and at least the minimum authority.
 
-Anything else, including a lookup that throws or hangs, is rejected by the hook's normal fail-closed rules. The mechanisms are `https_origin` and `authenticated_fetch` (proof class `origin`) and `protocol_signature` and `application_signature` (proof class `signature`). The class is derived from the mechanism and cannot be passed in. Origin mechanisms cannot claim more than `protocol_native` authority. A Mastodon Collection read over REST is therefore an `https_origin` or `authenticated_fetch` attestation, and a verifier configured with `requiredProof: "signature"` refuses it.
+Anything else, including a lookup that throws or hangs, is rejected by the hook's normal fail-closed rules. The mechanisms are `https_origin` and `authenticated_fetch` (proof class `origin`) and `protocol_signature`, `application_signature` and `atproto_label_signature` (proof class `signature`). The class is derived from the mechanism and cannot be passed in. Origin mechanisms cannot claim more than `protocol_native` authority. A Mastodon Collection read over REST is therefore an `https_origin` or `authenticated_fetch` attestation, and a verifier configured with `requiredProof: "signature"` refuses it.
 
-An attestation is not bound to the evidence content. It covers the subject, kind and source ids, so any evidence naming the same three passes with the same attestation until it ages out. Keep `maxAgeMs` short, and look attestations up per report. A content digest in the attestation would close this and should be added before an adapter starts issuing them.
+**Content binding (mandatory).** Every attestation carries a `contentDigest`: `sha256:` plus the hash of a canonical encoding of the evidence that was checked (`recommendationEvidenceContentDigest`; plain data only, sorted keys, bytes as `bytes("<base64>")`, which a plain object cannot produce; getters, class instances, cycles and anything over 32 levels, 100,000 values or 1 MiB are refused). This holds for every mechanism and strength, including `https_origin`. The rules are:
+
+- `createRecommendationEvidenceAttestation` throws without a well formed digest, so an attestation with no digest cannot exist.
+- The verifier always hashes the evidence the hook receives and compares it with the attestation's digest. A different digest gives `digest_mismatch`. Evidence that cannot be hashed (not plain data) is rejected too. `evaluateRecommendationEvidenceAttestation` throws if the requirement has no `contentDigest`, so the check cannot be skipped by leaving it out.
+- `bindContent` no longer exists. Passing it to `createRecommendationAttestationEvidenceVerifier` throws, so old configuration fails loudly and does not look like it still does something.
+- An optional `expiresAt` ends the attestation early. The label attestation uses the label's own `exp`.
+
+**Computing the digest for an HTTPS origin read.** The adapter that fetches, for example, a Mastodon Collection or a curated set from the owner's origin decides which evidence object it hands to the lifecycle, and it digests exactly that object. Normalize the response into the plain data you will pass as evidence (parsed JSON with only the fields you rely on, no class instances, no `undefined`, no timestamps you generated differently on each read), then call `recommendationEvidenceContentDigest(evidence)`. That function is the JSON canonicalization: keys are sorted and there is no whitespace, so the same data always gives the same digest, whatever order the server sent the keys in. Issue the attestation with that digest and pass the same object to the lifecycle. Do not hash the raw response body or a re-serialized copy, because the verifier hashes the evidence object it is given. If you hash something different, the check fails closed.
+
+The digest covers the evidence content only. Subject, kind and source ids are still matched separately, so one attestation does not carry across subjects or sources. Keep `maxAgeMs` short and look attestations up per report. What the digest cannot tell you is whether the evidence you hash was really derived from what was checked. For `createRecommendationAtprotoLabelAttestation` that holds when the evidence is the label itself. If you pass a separate `evidence` value, you are vouching that it came from the verified label.
 
 What this does not do: it verifies no signature. The issuing function is public, so whoever calls it is vouching that the check happened. It stops forged or copied data and mix-ups between subjects and sources. It does not make an unchecked claim true. No crypto or CBOR dependency was added.
 

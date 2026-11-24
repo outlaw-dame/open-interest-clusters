@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   RecommendationConsentDeniedError,
+  readRecommendationProfileStoreRecordSafely,
+  writeRecommendationProfileStoreRecordSafely,
   RecommendationProfilePersistenceError,
   RecommendationProfilePersistenceTransitionError,
   createRecommendationProfileStoreRecord,
@@ -22,8 +24,8 @@ const POD: RecommendationStateStorageAdapterManifest = { ...LOCAL, adapterId: "p
 const PROVIDER: RecommendationStateStorageAdapterManifest = { ...POD, adapterId: "provider", authority: "provider_owned" };
 const POLICY: RecommendationConsentPolicy = { subjectId: SUBJECT, allowedDataUses: ["local_personalization"], privateDataUses: ["local_personalization"], serverSideDataUses: ["local_personalization"] };
 
-function profile(updatedAt = "2026-10-01T00:00:00.000Z", key = "books.fiction"): RecommendationProfileSnapshot {
-  const entry = { target: { kind: "canonical_interest" as const, key }, score: 0.75, confidence: 0.8, signalCount: 1, positiveSignalCount: 1, negativeSignalCount: 0, neutralSignalCount: 0, privacyBoundaries: ["local_only" as const], protocols: ["app_local" as const], sourceVisibilities: ["local_only" as const], updatedAt };
+function profile(updatedAt = "2026-10-01T00:00:00.000Z", key = "books.fiction", boundary: "local_only" | "server_allowed" = "local_only"): RecommendationProfileSnapshot {
+  const entry = { target: { kind: "canonical_interest" as const, key }, score: 0.75, confidence: 0.8, signalCount: 1, positiveSignalCount: 1, negativeSignalCount: 0, neutralSignalCount: 0, privacyBoundaries: [boundary], protocols: ["app_local" as const], sourceVisibilities: ["local_only" as const], updatedAt };
   return { schemaVersion: "recommendation-profile.v1", updatedAt, signalCount: 1, entries: [entry] };
 }
 function record(subjectId = SUBJECT, snapshot = profile()): RecommendationProfileStoreRecord {
@@ -68,7 +70,7 @@ test("local to user-owned storage copies, verifies by reading back, then deletes
   const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW });
   assert.deepEqual(result, { outcome: "moved", from: "local_app", to: "user_pod" });
   assert.equal(local.records.has(key), false);
-  assert.deepEqual((pod.records.get(key) as RecommendationProfileStoreRecord).profile, profile());
+  assert.deepEqual((pod.records.get(key) as RecommendationProfileStoreRecord).profile, profile(undefined, undefined, "server_allowed"));
   assert.equal((pod.records.get(key) as RecommendationProfileStoreRecord).writtenAt, "2026-10-01T00:00:01.000Z");
   const writeAt = order.indexOf("pod:write");
   assert.ok(writeAt >= 0 && order.indexOf("pod:read", writeAt) > writeAt, "write is read back");
@@ -226,7 +228,7 @@ test("a source that cannot be deleted is reported as pending, and rerunning fini
 
 test("a destination that already holds a newer profile is kept, and only the stale source is removed", async () => {
   const { local, pod, key, loc } = setup();
-  const newer = record(SUBJECT, profile("2026-10-01T05:00:00.000Z", "music.jazz"));
+  const newer = record(SUBJECT, profile("2026-10-01T05:00:00.000Z", "music.jazz", "server_allowed"));
   pod.records.set(key, newer);
   const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW });
   assert.equal(result.outcome, "kept_newer_destination");
@@ -237,10 +239,10 @@ test("a destination that already holds a newer profile is kept, and only the sta
 
 test("an older destination copy is replaced by the source", async () => {
   const { local, pod, key, loc } = setup();
-  pod.records.set(key, record(SUBJECT, profile("2026-09-01T00:00:00.000Z", "music.jazz")));
+  pod.records.set(key, record(SUBJECT, profile("2026-09-01T00:00:00.000Z", "music.jazz", "server_allowed")));
   const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW });
   assert.equal(result.outcome, "moved");
-  assert.deepEqual((pod.records.get(key) as RecommendationProfileStoreRecord).profile, profile());
+  assert.deepEqual((pod.records.get(key) as RecommendationProfileStoreRecord).profile, profile(undefined, undefined, "server_allowed"));
 });
 
 test("nothing to move is an error, not a silent success", async () => {
@@ -327,4 +329,189 @@ test("a time just inside the skew window still moves the profile", async () => {
   const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now });
   assert.equal(result.outcome, "moved");
   assert.equal(local.records.has(key), false);
+});
+
+// What the interests are labelled depends on where they are processed: local_only on the device,
+// server_allowed in the user's pod. These tests cover every way the label can end up wrong after a crash.
+
+function boundariesIn(adapter: MemoryAdapter, key: string): string[] {
+  const stored = adapter.records.get(key) as RecommendationProfileStoreRecord;
+  return [...new Set(stored.profile.entries.flatMap((entry) => entry.privacyBoundaries))];
+}
+function mixedProfile(): RecommendationProfileSnapshot {
+  const base = profile();
+  return { ...base, entries: [{ ...base.entries[0]!, privacyBoundaries: ["local_only", "server_allowed"] }] };
+}
+
+test("moving to the pod relabels the interests server_allowed and moving back relabels them local_only", async () => {
+  const { local, pod, key, loc, retry } = setup();
+  const original = (local.records.get(key) as RecommendationProfileStoreRecord).profile;
+  const up = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: retry([]) });
+  assert.equal(up.outcome, "moved");
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  assert.equal(local.records.has(key), false);
+
+  const down = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(pod, "user_pod"), to: loc(local, "local_app"), policy: null, now: NOW, retry: retry([]) });
+  assert.equal(down.outcome, "moved");
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+  assert.deepEqual((local.records.get(key) as RecommendationProfileStoreRecord).profile, original, "only the label changed, so the round trip returns the same profile");
+  assert.equal(pod.records.has(key), false);
+});
+
+test("an entry carrying both labels ends up with exactly the label of its new home", async () => {
+  const { local, pod, key, loc } = setup("none");
+  local.records.set(key, createRecommendationProfileStoreRecord({ subjectId: SUBJECT, profile: mixedProfile(), writtenAt: "2026-10-01T00:00:01.000Z" }));
+  await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW });
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(pod, "user_pod"), to: loc(local, "local_app"), policy: null, now: NOW });
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+});
+
+test("the pod is never written, and nothing is relabelled, without server-side consent", async () => {
+  for (const policy of [null, undefined, { ...POLICY, serverSideDataUses: [] }, { ...POLICY, revokedAt: "2026-10-01T12:00:00.000Z" }, { ...POLICY, deleteDerivedDataRequestedAt: "2026-10-01T12:00:00.000Z" }, { ...POLICY, subjectId: "someone-else" }] as const) {
+    const { local, pod, key, loc, retry } = setup();
+    const before = local.records.get(key);
+    await assert.rejects(transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy, now: NOW, retry: retry([]) }));
+    assert.equal(pod.log.includes("write"), false);
+    assert.equal(local.records.get(key), before);
+    assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+  }
+});
+
+test("a boundary choice that does not fit the destination is refused and the source stays as it was", async () => {
+  const up = setup();
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: up.loc(up.local, "local_app"), to: up.loc(up.pod, "user_pod"), policy: POLICY, now: NOW, privacyBoundary: "local_only", retry: up.retry([]) }),
+    /user_pod.*server_allowed/u
+  );
+  assert.equal(up.pod.records.size, 0);
+  assert.deepEqual(boundariesIn(up.local, up.key), ["local_only"]);
+  const down = setup("none");
+  down.pod.records.set(down.key, record(SUBJECT, profile(undefined, undefined, "server_allowed")));
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: down.loc(down.pod, "user_pod"), to: down.loc(down.local, "local_app"), policy: null, now: NOW, privacyBoundary: "server_allowed", retry: down.retry([]) }),
+    /local_app.*local_only/u
+  );
+  assert.equal(down.local.records.size, 0);
+  assert.deepEqual(boundariesIn(down.pod, down.key), ["server_allowed"]);
+});
+
+test("a crash after the copy leaves each store with its own label, and rerunning finishes without another write", async () => {
+  const { local, pod, key, loc, retry } = setup();
+  local.failDeletes = 99;
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: { ...retry([]), maxAttempts: 2 } }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceTransitionError && error.reason === "transition.error.source_cleanup_pending"
+  );
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+  local.failDeletes = 0;
+  const writesBefore = pod.log.filter((entry) => entry === "write").length;
+  const finished = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: retry([]) });
+  assert.equal(finished.outcome, "moved");
+  assert.equal(local.records.has(key), false);
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  assert.equal(pod.log.filter((entry) => entry === "write").length, writesBefore + 1, "the copy is simply written again with the same content");
+  const again = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: retry([]) });
+  assert.equal(again.outcome, "already_moved");
+  assert.equal(pod.log.filter((entry) => entry === "write").length, writesBefore + 1, "an already healthy destination is not rewritten");
+});
+
+test("the same crash on the way back leaves the pod copy labelled for the pod and the device copy for the device", async () => {
+  const { local, pod, key, loc, retry } = setup("none");
+  pod.records.set(key, record(SUBJECT, profile(undefined, undefined, "server_allowed")));
+  pod.failDeletes = 99;
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(pod, "user_pod"), to: loc(local, "local_app"), policy: null, now: NOW, retry: { ...retry([]), maxAttempts: 2 } }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceTransitionError && error.reason === "transition.error.source_cleanup_pending"
+  );
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  pod.failDeletes = 0;
+  assert.equal((await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(pod, "user_pod"), to: loc(local, "local_app"), policy: null, now: NOW, retry: retry([]) })).outcome, "moved");
+  assert.equal(pod.records.has(key), false);
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
+});
+
+test("a flaky write while relabelling is retried, and a dropped write never leaves a half-labelled destination", async () => {
+  const flaky = setup();
+  flaky.pod.failWrites = 2;
+  const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: flaky.loc(flaky.local, "local_app"), to: flaky.loc(flaky.pod, "user_pod"), policy: POLICY, now: NOW, retry: flaky.retry([]) });
+  assert.equal(result.outcome, "moved");
+  assert.deepEqual(boundariesIn(flaky.pod, flaky.key), ["server_allowed"]);
+
+  const dropped = setup();
+  dropped.pod.dropWrites = true;
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: dropped.loc(dropped.local, "local_app"), to: dropped.loc(dropped.pod, "user_pod"), policy: POLICY, now: NOW, retry: { ...dropped.retry([]), maxAttempts: 2 } }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceError && error.reason === "persistence.error.write_verification_failed"
+  );
+  assert.equal(dropped.pod.records.size, 0);
+  assert.deepEqual(boundariesIn(dropped.local, dropped.key), ["local_only"]);
+});
+
+test("a pod record that an older release stored as local_only still loads, and the next write heals it", async () => {
+  const { pod, key } = setup("none");
+  const legacy = record(SUBJECT, profile());
+  pod.records.set(key, legacy);
+  const read = await readRecommendationProfileStoreRecordSafely(pod, { subjectId: SUBJECT, storageTarget: "user_pod" });
+  assert.ok(read);
+  assert.deepEqual(read.profile.entries[0]!.privacyBoundaries, ["local_only"], "accepted as it is stored");
+
+  const written = await writeRecommendationProfileStoreRecordSafely(pod, { subjectId: SUBJECT, profile: read.profile, writtenAt: read.writtenAt, storageTarget: "user_pod", policy: POLICY, verifyWrite: true });
+  assert.deepEqual(written.record.profile.entries[0]!.privacyBoundaries, ["server_allowed"]);
+  assert.equal(written.verified, true);
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  const healed = await readRecommendationProfileStoreRecordSafely(pod, { subjectId: SUBJECT, storageTarget: "user_pod" });
+  assert.deepEqual(healed?.profile.entries[0]!.privacyBoundaries, ["server_allowed"]);
+});
+
+test("a write to the pod without server-side consent leaves a legacy local_only record untouched", async () => {
+  const { pod, key } = setup("none");
+  pod.records.set(key, record(SUBJECT, profile()));
+  await assert.rejects(
+    writeRecommendationProfileStoreRecordSafely(pod, { subjectId: SUBJECT, profile: profile(), writtenAt: NOW, storageTarget: "user_pod", policy: { ...POLICY, serverSideDataUses: [] } }),
+    RecommendationConsentDeniedError
+  );
+  assert.deepEqual(boundariesIn(pod, key), ["local_only"]);
+  assert.equal(pod.log.includes("write"), false);
+});
+
+test("a write refuses a privacy boundary that does not fit the storage target, in both directions", async () => {
+  const { local, pod } = setup("none");
+  await assert.rejects(writeRecommendationProfileStoreRecordSafely(pod, { subjectId: SUBJECT, profile: profile(), writtenAt: NOW, storageTarget: "user_pod", policy: POLICY, privacyBoundary: "local_only" }), /user_pod.*server_allowed/u);
+  await assert.rejects(writeRecommendationProfileStoreRecordSafely(local, { subjectId: SUBJECT, profile: profile(), writtenAt: NOW, storageTarget: "local_app", policy: POLICY, privacyBoundary: "server_allowed" }), /local_app.*local_only/u);
+  assert.equal(pod.records.size + local.records.size, 0);
+  assert.equal(pod.log.length + local.log.length, 0);
+});
+
+test("a legacy pod copy is healed when the transition keeps it because it is newer than the source", async () => {
+  const { local, pod, key, loc, retry } = setup();
+  pod.records.set(key, record(SUBJECT, profile("2026-10-01T05:00:00.000Z", "music.jazz")));
+  const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: retry([]) });
+  assert.equal(result.outcome, "kept_newer_destination");
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+  assert.equal((pod.records.get(key) as RecommendationProfileStoreRecord).profile.entries[0]!.target.key, "music.jazz", "the newer content is kept, only the label changed");
+  assert.equal(local.records.has(key), false);
+});
+
+test("a legacy pod copy is healed when the transition finds the source already gone, and healing needs consent", async () => {
+  const { local, pod, key, loc, retry } = setup("none");
+  pod.records.set(key, record(SUBJECT, profile()));
+  await assert.rejects(
+    transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: null, now: NOW, retry: retry([]) }),
+    (error: unknown) => error instanceof RecommendationProfilePersistenceError && error.reason === "persistence.deny.server_consent_required"
+  );
+  assert.deepEqual(boundariesIn(pod, key), ["local_only"], "no consent, no change");
+  const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(local, "local_app"), to: loc(pod, "user_pod"), policy: POLICY, now: NOW, retry: retry([]) });
+  assert.equal(result.outcome, "already_moved");
+  assert.deepEqual(boundariesIn(pod, key), ["server_allowed"]);
+});
+
+test("a device copy left with the pod's label by an interrupted move back is healed on rerun", async () => {
+  const { local, pod, key, loc, retry } = setup("none");
+  local.records.set(key, record(SUBJECT, profile(undefined, undefined, "server_allowed")));
+  const result = await transitionRecommendationProfilePersistence({ subjectId: SUBJECT, from: loc(pod, "user_pod"), to: loc(local, "local_app"), policy: null, now: NOW, retry: retry([]) });
+  assert.equal(result.outcome, "already_moved");
+  assert.deepEqual(boundariesIn(local, key), ["local_only"]);
 });

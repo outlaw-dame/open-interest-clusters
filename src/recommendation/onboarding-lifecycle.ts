@@ -60,6 +60,26 @@ import type {
   RecommendationSignalRetractionReason
 } from "./signal-ledger.js";
 import { normalizeStrictRfc3339Timestamp } from "./strict-rfc3339.js";
+import {
+  RecommendationSubjectLockError,
+  normalizeRecommendationSubjectLockOptions,
+  withRecommendationSubjectLock,
+  type RecommendationSubjectLockOptions
+} from "./subject-lock.js";
+
+/** Stands in for the hold signal when no subject lock is configured, so the same code path runs either way. */
+const NEVER_ABORTED: AbortSignal = new AbortController().signal;
+
+/**
+ * The signal for the first session. The caller's own signal still counts, so either one stops it. With
+ * no lock the hold signal never aborts and is not passed on. Combining with it would leave a new
+ * entry on that one long-lived signal for every refresh, which Node does not release promptly, and it
+ * would hand the first session a signal where it got none before.
+ */
+function firstSessionSignal(caller: AbortSignal | undefined, hold: AbortSignal): { signal?: AbortSignal } {
+  if (hold === NEVER_ABORTED) return caller === undefined ? {} : { signal: caller };
+  return { signal: caller === undefined ? hold : AbortSignal.any([caller, hold]) };
+}
 
 /** Reasons a caller may give when withdrawing every onboarding selection at once. */
 export const RECOMMENDATION_ONBOARDING_WITHDRAWAL_REASONS = ["source_retracted", "consent_revoked"] as const;
@@ -152,6 +172,17 @@ export interface RecommendationOnboardingLifecycleOptions {
   engine: object & Partial<RecommendationEngineEventHistoryReader>;
   firstSession?: Pick<RecommendationFirstSessionOrchestrator, "execute">;
   now?: () => string;
+  /**
+   * Optional lock the application provides (Web Locks, a database advisory lock, and so on) so
+   * writes for one subject do not overlap across processes or devices. The library has none of its
+   * own and gives no cross-process guarantee without it. When set, `applySelection`,
+   * `withdrawSelections`, `reportCandidateEvents`, `assessPlan` and `refresh` take it after the
+   * in-process queue and hold it until the call finishes, including any verifier, source or
+   * first-session call made inside. Acquire failure, timeout or abort rejects with a
+   * `RecommendationSubjectLockError` before anything is written. The lock also has a hold deadline
+   * (`maxHoldMs`): past it the work is told to stop (see `RecommendationSubjectLockOptions`).
+   */
+  subjectLock?: RecommendationSubjectLockOptions;
   /**
    * Optional check that reported events and plan consent and provenance are real. Without it they are
    * used as supplied and results say `unverified`. With it, evidence the verifier does not accept
@@ -363,6 +394,21 @@ export function createRecommendationOnboardingLifecycle(
   const clock = options.now ?? (() => new Date().toISOString());
   // Keyed by the engine, so every lifecycle built on one engine queues per subject in one line.
   const serializer = getSharedRecommendationKeyedSerializer(options.engine);
+  const subjectLock = options.subjectLock === undefined ? undefined : normalizeRecommendationSubjectLockOptions(options.subjectLock);
+  // Order is always: engine queue, then the application's lock, then the store queue. Nothing takes them the other way round.
+  // The work gets a signal that aborts when the lock's hold deadline passes. Without a lock it never aborts.
+  function locked<T>(subjectId: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return serializer.run(subjectId, subjectLock === undefined ? () => work(NEVER_ABORTED) : () => withRecommendationSubjectLock(subjectLock, subjectId, work));
+  }
+
+  /**
+   * Called between steps. Nothing new starts after the deadline, so the work winds down on its own
+   * and the lock is freed as soon as the step already running finishes. The ports (engine, derived
+   * state, event store) take no signal, so a step already in flight cannot be interrupted.
+   */
+  function checkpoint(signal: AbortSignal): void {
+    if (signal.aborted) throw new RecommendationSubjectLockError("hold_exceeded");
+  }
 
   const evidenceVerifier: NormalizedRecommendationEvidenceVerifier | undefined =
     options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerifierOptions(options.evidenceVerifier);
@@ -382,9 +428,10 @@ export function createRecommendationOnboardingLifecycle(
   const eventRetry: RetryPolicyOptions = { ...CANDIDATE_EVENT_STORE_RETRY, ...options.candidateEvents?.retry };
 
   /** Store calls fail closed: they retry with backoff, then surface the last error. */
-  function storeIo<T>(work: (store: RecommendationCandidateEventStore) => Promise<T>): Promise<T> {
+  function storeIo<T>(work: (store: RecommendationCandidateEventStore) => Promise<T>, signal: AbortSignal = NEVER_ABORTED): Promise<T> {
     // A conflict means the record is stale, so repeating the same save cannot help. persistEvents reloads instead.
-    return executeWithRetry(() => work(eventStore!), { ...eventRetry, shouldRetry: ({ error }) => !(error instanceof RecommendationCandidateEventConflictError) });
+    // Past the hold deadline nothing is retried, so a failing store does not keep the lock busy through the backoff.
+    return executeWithRetry(() => work(eventStore!), { ...eventRetry, shouldRetry: ({ error }) => !signal.aborted && !(error instanceof RecommendationCandidateEventConflictError) });
   }
 
   async function readStoredEntries(subjectId: string, now: string) {
@@ -416,21 +463,24 @@ export function createRecommendationOnboardingLifecycle(
    * declare support, or declares it but fails the conformance check, is treated as single-writer:
    * writes from this process are still serialized per subject, but another process can overwrite.
    */
-  async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string): Promise<void> {
+  async function persistEvents(subjectId: string, events: readonly RecommendationCandidateLifecycleEvent[], now: string, signal: AbortSignal): Promise<void> {
     const retry: RetryPolicyOptions = {
       ...CANDIDATE_EVENT_CONFLICT_RETRY,
       ...(eventRetry.random === undefined ? {} : { random: eventRetry.random }),
       ...(eventRetry.retrySleeper === undefined ? {} : { retrySleeper: eventRetry.retrySleeper }),
-      shouldRetry: ({ error }) => error instanceof RecommendationCandidateEventConflictError
+      shouldRetry: ({ error }) => !signal.aborted && error instanceof RecommendationCandidateEventConflictError
     };
+    checkpoint(signal);
     const useCompareAndSet = await storeHonorsCompareAndSet();
     await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
-      const raw = await storeIo((store) => store.load(subjectId));
+      checkpoint(signal);
+      const raw = await storeIo((store) => store.load(subjectId), signal);
       const merged = mergeRecommendationCandidateEventEntries(readRecommendationCandidateEventRecord(raw, subjectId, eventLimits!, now), events, eventLimits!, now);
       if (!merged.changed) return;
       const record = buildRecommendationCandidateEventRecord(subjectId, merged.entries, now);
+      checkpoint(signal);
       const expected = useCompareAndSet ? { expectedDigest: recommendationCandidateEventRecordDigest(raw) } : undefined;
-      await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected));
+      await storeIo((store) => expected === undefined ? store.save(subjectId, record) : store.save(subjectId, record, expected), signal);
     }, retry));
   }
 
@@ -493,13 +543,14 @@ export function createRecommendationOnboardingLifecycle(
     subjectId: string,
     now: string,
     desired: ReadonlyMap<string, { signal: RecommendationInterestSignal; digest: string }>,
-    withdrawalReason: RecommendationSignalRetractionReason
+    withdrawalReason: RecommendationSignalRetractionReason,
+    signal: AbortSignal
   ): Promise<RecommendationOnboardingSelectionChangeResult> {
     return executeWithRetry(
-      () => reconcileOnce(subjectId, now, desired, withdrawalReason),
+      () => reconcileOnce(subjectId, now, desired, withdrawalReason, signal),
       {
         ...STALE_PLAN_RETRY,
-        shouldRetry: ({ error }) => error instanceof StalePlanError
+        shouldRetry: ({ error }) => !signal.aborted && error instanceof StalePlanError
       }
     ).catch((error: unknown) => { throw error instanceof StalePlanError ? error.original : error; });
   }
@@ -508,8 +559,10 @@ export function createRecommendationOnboardingLifecycle(
     subjectId: string,
     now: string,
     desired: ReadonlyMap<string, { signal: RecommendationInterestSignal; digest: string }>,
-    withdrawalReason: RecommendationSignalRetractionReason
+    withdrawalReason: RecommendationSignalRetractionReason,
+    signal: AbortSignal
   ): Promise<RecommendationOnboardingSelectionChangeResult> {
+    checkpoint(signal);
     const history = await readHistoryOrThrow(subjectId);
     const view = readHistory(history, Date.parse(now));
     const added: string[] = [];
@@ -540,6 +593,7 @@ export function createRecommendationOnboardingLifecycle(
     // Always go through `process`, even with no events, so a pending invalidation from an earlier
     // crash is finished and the profile checkpoint is brought up to date.
     let processing: RecommendationDerivedStateProcessResult;
+    checkpoint(signal);
     try {
       processing = await options.derived.process({ subjectId, events, now });
     } catch (error) {
@@ -567,6 +621,7 @@ export function createRecommendationOnboardingLifecycle(
     subjectId: string,
     rawEvents: readonly RecommendationCandidateLifecycleEvent[],
     now: string,
+    signal: AbortSignal,
     policy?: RecommendationConsentPolicy
   ): Promise<RecommendationOnboardingCandidateReportResultWithEvidence> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
@@ -584,12 +639,13 @@ export function createRecommendationOnboardingLifecycle(
       fresh = selectNewRecommendationCandidateEvents(await readStoredEntries(subjectId, now), events);
     }
     const verification = combineRecommendationEvidenceVerification(
-      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now)],
+      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now, signal)],
       events.length - fresh.length
     );
     // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is safe
     // because an event that is already stored is not stored twice and not verified twice.
-    if (eventStore !== undefined) await persistEvents(subjectId, events, now);
+    if (eventStore !== undefined) await persistEvents(subjectId, events, now, signal);
+    checkpoint(signal);
     const propagation = await invalidate({ subjectId, occurredAt: now });
     return Object.freeze({
       subjectId,
@@ -609,7 +665,7 @@ export function createRecommendationOnboardingLifecycle(
       if ("profileStore" in input) throw new TypeError("Recommendation onboarding selection changes cannot take a profile store.");
       const { now: rawNow, ...seedInput } = input;
       const now = timestamp(rawNow);
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async (signal) => {
         // The seed does the catalog, sensitivity and consent checks. Consent is enforced on every
         // call, so a policy that no longer allows personalization stops the change before any write.
         let seed;
@@ -625,7 +681,7 @@ export function createRecommendationOnboardingLifecycle(
           if (desired.has(hash)) throw new TypeError("Recommendation onboarding selection produced a duplicate target.");
           desired.set(hash, { signal, digest: contentDigest(signal) });
         }
-        return reconcile(input.subjectId, now, desired, "source_retracted");
+        return reconcile(input.subjectId, now, desired, "source_retracted", signal);
       });
     },
 
@@ -635,9 +691,9 @@ export function createRecommendationOnboardingLifecycle(
       }
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async (signal) => {
         if (input.reason === "consent_revoked") await clearStoredEvents(input.subjectId);
-        return reconcile(input.subjectId, now, new Map(), input.reason);
+        return reconcile(input.subjectId, now, new Map(), input.reason, signal);
       });
     },
 
@@ -645,7 +701,7 @@ export function createRecommendationOnboardingLifecycle(
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding candidate report.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return serializer.run(input.subjectId, () => report(input.subjectId, input.events, now, input.policy));
+      return locked(input.subjectId, (signal) => report(input.subjectId, input.events, now, signal, input.policy));
     },
 
     async listReportedCandidateEvents(input: { subjectId: string; now?: string }) {
@@ -662,9 +718,10 @@ export function createRecommendationOnboardingLifecycle(
       if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
       const now = timestamp(input.now);
       const policy: RecommendationConsentPolicy | undefined = input.policy as RecommendationConsentPolicy | undefined;
-      return serializer.run(input.subjectId, async () => {
+      return locked(input.subjectId, async (signal) => {
         if (policy !== undefined) await requireStoreConsent(input.subjectId, policy);
         const stored = await readStoredEvents(input.subjectId, now);
+        checkpoint(signal);
         return assessRecommendationCandidateActionPlanWithEvidence(input.plan, input.events ?? [], {
           now,
           subjectId: input.subjectId,
@@ -684,14 +741,14 @@ export function createRecommendationOnboardingLifecycle(
       assertValidRecommendationProfileSubjectId(subjectId);
       const now = timestamp(input.now);
       const firstSession = options.firstSession;
-      return serializer.run(subjectId, async () => {
+      return locked(subjectId, async (signal) => {
         const events = input.candidateEvents === undefined
           ? undefined
           : normalizeRecommendationCandidateLifecycleEvents(input.candidateEvents, { now });
         // Finish whatever an earlier crash left behind before deciding what to serve.
         const propagation = events === undefined || events.length === 0
           ? await options.derived.repair(subjectId)
-          : (await report(subjectId, events, now, input.policy)).propagation!;
+          : (await report(subjectId, events, now, signal, input.policy)).propagation!;
         if (eventStore !== undefined && (events === undefined || events.length === 0) && input.policy !== undefined) {
           await requireStoreConsent(subjectId, input.policy);
         }
@@ -708,8 +765,10 @@ export function createRecommendationOnboardingLifecycle(
         if (excludedCandidateIds.length > MAX_EXCLUSION_IDS || excludedSetSourceIds.length > MAX_EXCLUSION_IDS) {
           throw new TypeError("Too many recommendation exclusions for one refresh.");
         }
+        checkpoint(signal);
         const result = await firstSession.execute({
           ...input.request,
+          ...firstSessionSignal(input.request.signal, signal),
           excludeCandidateIds: excludedCandidateIds,
           excludeSourceIds: excludedSetSourceIds
         });

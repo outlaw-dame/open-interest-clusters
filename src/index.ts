@@ -33,8 +33,20 @@ export * from "./recommendation/candidate-lifecycle.js";
 export * from "./recommendation/evidence-verifier.js";
 export * from "./recommendation/evidence-attestation.js";
 export * from "./recommendation/onboarding-lifecycle.js";
+export {
+  RECOMMENDATION_SUBJECT_LOCK_DEFAULT_TIMEOUT_MS,
+  RECOMMENDATION_SUBJECT_LOCK_MAX_TIMEOUT_MS,
+  RECOMMENDATION_SUBJECT_LOCK_DEFAULT_HOLD_MS,
+  RECOMMENDATION_SUBJECT_LOCK_MAX_HOLD_MS,
+  RecommendationSubjectLockError,
+  type RecommendationSubjectLock,
+  type RecommendationSubjectLockFailureReason,
+  type RecommendationSubjectLockOptions,
+  type RecommendationSubjectLockRelease
+} from "./recommendation/subject-lock.js";
 export * from "./recommendation/profile-persistence-transition.js";
 export * from "./recommendation/curated-account-set-candidate-source.js";
+export * from "./recommendation/curated-account-set-change-diff.js";
 export * from "./recommendation/candidate-eligibility.js";
 export * from "./recommendation/protocol-source-contexts.js";
 export * from "./recommendation/protocol-source-normalizers.js";
@@ -61,6 +73,8 @@ export * from "./recommendation/profile-feature-capabilities.js";
 export * from "./recommendation/provider-discovery.js";
 export * from "./recommendation/profile-pinned-interest-signals.js";
 export * from "./recommendation/atproto-labels.js";
+export * from "./recommendation/atproto-label-verification.js";
+export * from "./recommendation/atproto-label-attestation.js";
 export * from "./recommendation/atproto-query-labels-client.js";
 export * from "./recommendation/atproto-subscribe-labels-client.js";
 export * from "./recommendation/atproto-viewer-safety.js";

@@ -288,3 +288,62 @@ test("onboarding bootstrap can persist to a user-controlled Pod with explicit se
   assert.equal(result.persistence?.verificationConsistency, "eventual");
   assert.equal(adapter.records.size, 1);
 });
+
+function boundariesOf(profile: RecommendationProfileSnapshot): string[] {
+  return [...new Set(profile.entries.flatMap((entry) => entry.privacyBoundaries))];
+}
+
+test("onboarding bootstrap labels signals server_allowed in a user pod and local_only on the device", async () => {
+  const pod = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
+  const device = new MemoryProfilePersistenceAdapter();
+  const common = { subjectId: SUBJECT_ID, catalog: RECOMMENDATION_GLOBAL_CATALOG_V1, selectedTopicIds: ["gaming"], selectedAt: SELECTED_AT, policy: serverPersonalizationPolicy() };
+
+  const inPod = await bootstrapRecommendationProfileFromOnboarding({ ...common, storageTarget: "user_pod", persistence: { adapter: pod } });
+  const onDevice = await bootstrapRecommendationProfileFromOnboarding({ ...common, persistence: { adapter: device } });
+
+  assert.ok(inPod.profile.entries.length > 0);
+  assert.deepEqual(boundariesOf(inPod.profile), ["server_allowed"]);
+  assert.deepEqual(boundariesOf(onDevice.profile), ["local_only"]);
+  const stored = [...pod.records.values()] as RecommendationProfileStoreRecord[];
+  assert.deepEqual(boundariesOf(stored[0]!.profile), ["server_allowed"]);
+});
+
+test("onboarding bootstrap refuses a privacy boundary that does not fit the storage target instead of rewriting it", async () => {
+  const pod = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
+  const device = new MemoryProfilePersistenceAdapter();
+  const common = { subjectId: SUBJECT_ID, catalog: RECOMMENDATION_GLOBAL_CATALOG_V1, selectedTopicIds: ["gaming"], selectedAt: SELECTED_AT, policy: serverPersonalizationPolicy() };
+
+  await assert.rejects(
+    bootstrapRecommendationProfileFromOnboarding({ ...common, storageTarget: "user_pod", privacyBoundary: "local_only", persistence: { adapter: pod } }),
+    /user_pod.*server_allowed/u
+  );
+  await assert.rejects(
+    bootstrapRecommendationProfileFromOnboarding({ ...common, storageTarget: "local_app", privacyBoundary: "server_allowed", persistence: { adapter: device } }),
+    /local_app.*local_only/u
+  );
+  assert.equal(pod.records.size, 0);
+  assert.equal(device.records.size, 0);
+});
+
+test("a pod bootstrap fails closed when server-side consent is missing, revoked, deleted or for another subject", async () => {
+  const policies: Array<[string, RecommendationConsentPolicy | null | undefined]> = [
+    ["missing", undefined],
+    ["null", null],
+    ["local only consent", localPersonalizationPolicy()],
+    ["revoked", { ...serverPersonalizationPolicy(), revokedAt: "2026-05-21T00:00:00.000Z" }],
+    ["deleted", { ...serverPersonalizationPolicy(), deleteDerivedDataRequestedAt: "2026-05-21T00:00:00.000Z" }],
+    ["other subject", serverPersonalizationPolicy("someone-else")]
+  ];
+  for (const [label, policy] of policies) {
+    const adapter = new MemoryProfilePersistenceAdapter(POD_MANIFEST);
+    await assert.rejects(
+      bootstrapRecommendationProfileFromOnboarding({
+        subjectId: SUBJECT_ID, storageTarget: "user_pod", catalog: RECOMMENDATION_GLOBAL_CATALOG_V1,
+        selectedTopicIds: ["gaming"], selectedAt: SELECTED_AT, policy, persistence: { adapter }
+      }),
+      (error: unknown) => error instanceof RecommendationConsentDeniedError,
+      label
+    );
+    assert.equal(adapter.records.size, 0, label);
+  }
+});

@@ -182,6 +182,16 @@ function normalizeTimestamp(value: unknown, label: string): string {
   return timestamp;
 }
 
+/** True when the value is a well-formed RFC 3339 timestamp by the same rules label intake uses. */
+export function isRecommendationAtprotoLabelTimestamp(value: unknown): value is string {
+  try {
+    normalizeTimestamp(value, "timestamp");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeOptionalTimestamp(value: unknown, label: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   return normalizeTimestamp(value, label);

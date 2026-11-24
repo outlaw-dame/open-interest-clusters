@@ -35,6 +35,7 @@ export const RECOMMENDATION_STATE_PLACEMENT_REASONS = [
   "state.deny.storage_authority",
   "state.deny.personal_state_provider_controlled",
   "state.deny.aggregate_domain_mismatch",
+  "state.deny.publicly_readable_store",
   "state.deny.local_adapter_requires_network",
   "state.deny.local_adapter_not_offline_capable",
   "state.deny.persistent_state_not_user_deletable",
@@ -55,6 +56,7 @@ export interface RecommendationStateStorageAdapterManifest {
   adapterId: string;
   domains: readonly RecommendationStateDomain[];
   authority: RecommendationStorageAuthority;
+  /** Where this adapter runs (device or user-owned remote), not how the stored interests are labelled. */
   processingBoundary: RecommendationProcessingBoundary;
   persistence: RecommendationStatePersistenceMode;
   requiresNetwork: boolean;
@@ -62,6 +64,13 @@ export interface RecommendationStateStorageAdapterManifest {
   userExportable: boolean;
   userDeletable: boolean;
   encryptedAtRest: boolean;
+  /**
+   * Optional. A remote user-owned store declares here whether anyone can read it without the user's
+   * permission, for example a public ATProto repository. `true` is refused for subject-level state
+   * and a non-boolean value is rejected. Leaving it out changes nothing. The library cannot check
+   * this against the real store: it is the integrator's statement, and `false` is not a guarantee.
+   */
+  publiclyReadable?: boolean;
 }
 
 export interface RecommendationStatePlacementEvaluation {
@@ -143,7 +152,8 @@ export function normalizeRecommendationStateStorageAdapterManifest(
     typeof input.supportsOffline !== "boolean" ||
     typeof input.userExportable !== "boolean" ||
     typeof input.userDeletable !== "boolean" ||
-    typeof input.encryptedAtRest !== "boolean"
+    typeof input.encryptedAtRest !== "boolean" ||
+    (input.publiclyReadable !== undefined && typeof input.publiclyReadable !== "boolean")
   ) {
     throw new TypeError("Invalid recommendation state storage adapter manifest.");
   }
@@ -158,7 +168,8 @@ export function normalizeRecommendationStateStorageAdapterManifest(
     supportsOffline: input.supportsOffline,
     userExportable: input.userExportable,
     userDeletable: input.userDeletable,
-    encryptedAtRest: input.encryptedAtRest
+    encryptedAtRest: input.encryptedAtRest,
+    ...(input.publiclyReadable === undefined ? {} : { publiclyReadable: input.publiclyReadable })
   });
 }
 
@@ -186,6 +197,10 @@ export function evaluateRecommendationStatePlacement(
         : "state.deny.storage_authority",
       authorityReason: authority.reason
     });
+  }
+
+  if (metadata.subjectLevel && manifest.publiclyReadable === true) {
+    return Object.freeze({ domain: domainInput, decision: "deny", reason: "state.deny.publicly_readable_store", authorityReason: authority.reason });
   }
 
   if (domainInput === "aggregate_statistics") {

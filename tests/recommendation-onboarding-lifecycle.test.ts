@@ -675,3 +675,45 @@ test("an invalid verifier configuration is refused when the lifecycle is created
     assert.throws(() => harness({ evidenceVerifier: bad as never }), TypeError);
   }
 });
+
+test("without a subject lock the first session gets exactly the caller's signal, or none", async () => {
+  const { engine, derived } = harness();
+  const seen: unknown[] = [];
+  const firstSession = { async execute(request: { signal?: AbortSignal }) { seen.push("signal" in request ? request.signal : "absent"); return { recommendations: [] } as never; } };
+  const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine, firstSession: firstSession as never, now: () => lifecycleClock });
+  await lifecycle.applySelection(change(["gaming"]));
+
+  // Same as before the hold deadline existed: no caller signal means the field is not there at all.
+  await lifecycle.refresh({ request: REQUEST, now: T1 });
+  const mine = new AbortController();
+  await lifecycle.refresh({ request: { ...REQUEST, requestId: "refresh-2", signal: mine.signal }, now: T1 });
+  assert.deepEqual(seen, ["absent", mine.signal]);
+});
+
+test("many refreshes without a lock do not pile up on one shared signal", async () => {
+  // Node keeps a reference to every signal combined with AbortSignal.any on each source signal. A
+  // shared, never-aborting source would keep growing. The refresh must not combine with it.
+  const { engine, derived } = harness();
+  const combined: AbortSignal[] = [];
+  const original = AbortSignal.any;
+  AbortSignal.any = (signals: AbortSignal[]) => { const result = original.call(AbortSignal, signals); combined.push(result); return result; };
+  try {
+    const lifecycle = createRecommendationOnboardingLifecycle({ derived, engine, firstSession: { async execute() { return { recommendations: [] } as never; } } as never, now: () => lifecycleClock });
+    await lifecycle.applySelection(change(["gaming"]));
+    const caller = new AbortController();
+    for (let index = 0; index < 5; index += 1) await lifecycle.refresh({ request: { ...REQUEST, requestId: `r-${index}`, signal: caller.signal }, now: T1 });
+    assert.equal(combined.length, 0);
+  } finally {
+    AbortSignal.any = original;
+  }
+});
+
+test("applySelection refuses an explicit server_allowed label for a device selection even with server-side consent", async () => {
+  const { lifecycle, engine } = harness();
+  const serverPolicy: RecommendationConsentPolicy = { ...POLICY, serverSideDataUses: ["local_personalization"] };
+  await assert.rejects(
+    lifecycle.applySelection(change(["gaming"], T0, { policy: serverPolicy, privacyBoundary: "server_allowed" })),
+    /local_app storage target must use the local_only privacy boundary/u
+  );
+  assert.deepEqual((await engine.readLedgerSnapshot({ subjectId: SUBJECT, now: T0 })).activeSignals, []);
+});

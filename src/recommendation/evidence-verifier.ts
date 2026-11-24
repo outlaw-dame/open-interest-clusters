@@ -178,19 +178,25 @@ export async function verifyRecommendationEvidence(
   items: readonly unknown[],
   kind: RecommendationEvidenceKind,
   subjectId: string,
-  now: string
+  now: string,
+  signal?: AbortSignal
 ): Promise<RecommendationEvidenceVerification> {
   if (configured === undefined || items.length === 0) return RECOMMENDATION_EVIDENCE_UNVERIFIED;
   const deadline = Date.now() + configured.totalTimeoutMs;
   let next = 0;
   let failed = false;
   const callController = new AbortController();
+  // An outside abort (the caller's hold deadline) fails the call and aborts every verifier still running.
+  const onOutsideAbort = () => callController.abort();
+  if (signal?.aborted === true) callController.abort();
+  else signal?.addEventListener("abort", onOutsideAbort, { once: true });
   const worker = async (): Promise<void> => {
     while (!failed && next < items.length) {
       const item = items[next++];
       const remaining = deadline - Date.now();
       try {
         if (remaining <= 0) throw new RecommendationEvidenceVerificationError(kind, "timeout");
+        if (callController.signal.aborted) throw new RecommendationEvidenceVerificationError(kind, "error");
         await verifyOne(configured, item, kind, subjectId, now, Math.min(configured.timeoutMs, remaining), callController.signal);
       } catch (error) {
         failed = true;
@@ -199,7 +205,11 @@ export async function verifyRecommendationEvidence(
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(configured.maxConcurrency, items.length) }, worker));
+  try {
+    await Promise.all(Array.from({ length: Math.min(configured.maxConcurrency, items.length) }, worker));
+  } finally {
+    signal?.removeEventListener("abort", onOutsideAbort);
+  }
   return Object.freeze({
     evidenceVerification: "verified" as const,
     verifierId: configured.verifier.id,

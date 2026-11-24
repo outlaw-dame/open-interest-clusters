@@ -86,7 +86,8 @@ export interface RecommendationOnboardingProfileBootstrapResult {
 }
 
 const DEFAULT_DATA_USE: RecommendationDataUse = "local_personalization";
-const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_only";
+const DEVICE_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_only";
+const USER_POD_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "server_allowed";
 const DEFAULT_STORAGE_TARGET: RecommendationProfilePersistenceStorageTarget = "local_app";
 const BOOTSTRAP_PROTOCOL: RecommendationProtocol = "app_local";
 const BOOTSTRAP_VISIBILITY: RecommendationSourceVisibility = "local_only";
@@ -118,6 +119,26 @@ function normalizeStorageTarget(value: unknown): RecommendationProfilePersistenc
   }
 
   return value as RecommendationProfilePersistenceStorageTarget;
+}
+
+/**
+ * The label says where the interests are processed: `local_only` on the device, `server_allowed` in
+ * the user's own pod. No choice means the label that fits the target. A choice that does not fit is an
+ * error, never quietly replaced. Other targets keep the device label and are refused at persistence.
+ */
+function privacyBoundaryForStorageTarget(
+  storageTarget: RecommendationProfilePersistenceStorageTarget,
+  explicit: RecommendationInterestPrivacyBoundary | undefined
+): RecommendationInterestPrivacyBoundary {
+  const fitting = storageTarget === "user_pod" ? USER_POD_PRIVACY_BOUNDARY : DEVICE_PRIVACY_BOUNDARY;
+  if (explicit === undefined) return fitting;
+  const checked = storageTarget === "user_pod" || storageTarget === "local_app" || storageTarget === "ephemeral_session";
+  if (checked && explicit !== "aggregate_only" && explicit !== fitting) {
+    throw new TypeError(
+      `Recommendation onboarding profile bootstrap for the ${storageTarget} storage target must use the ${fitting} privacy boundary.`
+    );
+  }
+  return explicit;
 }
 
 function preferenceTargetForPersistenceTarget(
@@ -242,7 +263,7 @@ export async function bootstrapRecommendationProfileFromOnboarding(
 
   const storageTarget = normalizeStorageTarget(input.storageTarget);
   const dataUse = input.dataUse ?? DEFAULT_DATA_USE;
-  const privacyBoundary = input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY;
+  const privacyBoundary = privacyBoundaryForStorageTarget(storageTarget, input.privacyBoundary);
   const catalogIndex = catalogIndexForInput(input);
   const selectedAt = selectedAtForInput(input);
   const selection = createRecommendationOnboardingSelection({

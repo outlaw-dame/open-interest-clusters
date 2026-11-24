@@ -72,6 +72,11 @@ const DEFAULT_PRIVACY_BOUNDARY: RecommendationInterestPrivacyBoundary = "local_o
 const ONBOARDING_EVIDENCE_PROTOCOL: RecommendationProtocol = "app_local";
 const ONBOARDING_EVIDENCE_VISIBILITY: RecommendationSourceVisibility = "local_only";
 const ONBOARDING_TRUST_BOUNDARY: RecommendationSourceTrustBoundary = "user_owned";
+const USER_OWNED_POD_PREFERENCE_TARGETS: ReadonlySet<string> = new Set(["activitypods_pod", "solid_pod"]);
+/** A private space on the user's own PDS. There is deliberately no target for a public repo. */
+const USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET = "atproto_private_space";
+/** The selection target for interests kept on the user's own device. */
+const DEVICE_PREFERENCE_TARGET = "local_app";
 const MAX_SUBJECT_ID_LENGTH = 512;
 const MAX_SIGNAL_COUNT = 10_000;
 
@@ -128,7 +133,63 @@ function assertSubjectLevelPrivacyBoundary(privacyBoundary: RecommendationIntere
   }
 }
 
-function createOnboardingEvidence(observedAt: string): RecommendationInterestEvidence {
+function isUserOwnedServerTarget(storageTarget: string): boolean {
+  return USER_OWNED_POD_PREFERENCE_TARGETS.has(storageTarget) || storageTarget === USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET;
+}
+
+/**
+ * With no explicit choice, a selection kept in the user's own pod is labelled `server_allowed` and
+ * anything else `local_only`. An explicit `local_only` for a pod selection and an explicit
+ * `server_allowed` for a device selection are refused rather than rewritten: the label has to say where
+ * the interests are processed. Other targets (encrypted sync, provider storage) are not checked here and
+ * the signal policy refuses server-side labels for them.
+ */
+function resolvePrivacyBoundary(
+  explicit: RecommendationInterestPrivacyBoundary | undefined,
+  selection: RecommendationOnboardingSelectionRecord
+): RecommendationInterestPrivacyBoundary {
+  const inUserPod = isUserOwnedServerTarget(selection.storageTarget);
+  if (explicit === undefined) return inUserPod ? "server_allowed" : DEFAULT_PRIVACY_BOUNDARY;
+  if (inUserPod && explicit === "local_only") {
+    throw new TypeError("Recommendation onboarding profile seed for a user-owned pod or space must use the server_allowed privacy boundary.");
+  }
+  if (selection.storageTarget === DEVICE_PREFERENCE_TARGET && explicit === "server_allowed") {
+    throw new TypeError("Recommendation onboarding profile seed for the local_app storage target must use the local_only privacy boundary.");
+  }
+  return explicit;
+}
+
+/**
+ * Where the selection is kept decides what the evidence says. A selection kept on the device is app-local
+ * owner evidence. A selection kept in the user's own pod is evidence read from that pod under the user's
+ * own access control (a private ATProto space on the user's PDS gets the matching ATProto evidence), which is the only server-side evidence the signal policy accepts for
+ * `server_allowed` interests. Any other pairing keeps the app-local evidence, so the policy refuses it.
+ */
+function createOnboardingEvidence(
+  observedAt: string,
+  privacyBoundary: RecommendationInterestPrivacyBoundary,
+  selection: RecommendationOnboardingSelectionRecord
+): RecommendationInterestEvidence {
+  if (privacyBoundary === "server_allowed" && selection.storageTarget === USER_OWNED_ATPROTO_SPACE_PREFERENCE_TARGET) {
+    return Object.freeze({
+      sourceItemKind: "collection",
+      protocol: "atproto",
+      sourceVisibility: "atproto_private_space",
+      accessBasis: "atproto_space_authority",
+      trustBoundary: ONBOARDING_TRUST_BOUNDARY,
+      observedAt
+    });
+  }
+  if (privacyBoundary === "server_allowed" && USER_OWNED_POD_PREFERENCE_TARGETS.has(selection.storageTarget)) {
+    return Object.freeze({
+      sourceItemKind: "collection",
+      protocol: "activitypods",
+      sourceVisibility: "acl_controlled",
+      accessBasis: "solid_acl_control",
+      trustBoundary: ONBOARDING_TRUST_BOUNDARY,
+      observedAt
+    });
+  }
   return Object.freeze({
     sourceItemKind: "collection",
     protocol: ONBOARDING_EVIDENCE_PROTOCOL,
@@ -257,13 +318,12 @@ function appendCanonicalInterestSignals(
   accumulator: OnboardingSignalAccumulator,
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord,
-  observedAt: string,
+  evidence: RecommendationInterestEvidence,
   privacyBoundary: RecommendationInterestPrivacyBoundary,
   dataUse: RecommendationDataUse,
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
 ): void {
-  const evidence = createOnboardingEvidence(observedAt);
   const selectedTopics = new Set(selection.selectedTopicIds);
   const selectedTags = new Set(selection.selectedCanonicalTagIds);
   const emittedTargets = new Set<string>();
@@ -318,13 +378,12 @@ function appendHashtagSignals(
   accumulator: OnboardingSignalAccumulator,
   catalogIndex: RecommendationCatalogIndex,
   selection: RecommendationOnboardingSelectionRecord,
-  observedAt: string,
+  evidence: RecommendationInterestEvidence,
   privacyBoundary: RecommendationInterestPrivacyBoundary,
   dataUse: RecommendationDataUse,
   consent: PrivacySafeRecommendationConsentEvent,
   expiresAt: string | undefined
 ): void {
-  const evidence = createOnboardingEvidence(observedAt);
   const seenHashtags = new Set<string>();
 
   for (const tagId of selection.expandedCanonicalTagIds) {
@@ -377,7 +436,7 @@ export async function buildRecommendationOnboardingSignals(
   const catalogIndex = input.catalogIndex;
   const selection = selectionForCatalogIndex(catalogIndex, input.selection);
   const dataUse = input.dataUse ?? DEFAULT_DATA_USE;
-  const privacyBoundary = input.privacyBoundary ?? DEFAULT_PRIVACY_BOUNDARY;
+  const privacyBoundary = resolvePrivacyBoundary(input.privacyBoundary, selection);
   assertSubjectLevelPrivacyBoundary(privacyBoundary);
   if (input.allowSensitiveSelections !== true) {
     assertSensitiveSelectionAllowed(
@@ -387,14 +446,15 @@ export async function buildRecommendationOnboardingSignals(
   }
   const observedAt = optionalTimestamp(input.observedAt, selection.selectedAt, "Invalid recommendation onboarding profile seed timestamp.");
   const expiresAt = assertExpiresAt(input.expiresAt, observedAt);
+  const evidence = createOnboardingEvidence(observedAt, privacyBoundary, selection);
   const consentEvaluation = await requireRecommendationConsent(
     input.policy,
     Object.freeze({
       subjectId: input.subjectId,
       dataUse,
-      protocol: ONBOARDING_EVIDENCE_PROTOCOL,
-      sourceVisibility: ONBOARDING_EVIDENCE_VISIBILITY,
-      accessBasis: "owner",
+      protocol: evidence.protocol,
+      sourceVisibility: evidence.sourceVisibility,
+      accessBasis: evidence.accessBasis,
       containsPrivateData: true,
       containsThirdPartyData: false,
       serverSideProcessing: privacyBoundary !== "local_only"
@@ -407,7 +467,7 @@ export async function buildRecommendationOnboardingSignals(
     accumulator,
     catalogIndex,
     selection,
-    observedAt,
+    evidence,
     privacyBoundary,
     dataUse,
     consent,
@@ -417,7 +477,7 @@ export async function buildRecommendationOnboardingSignals(
     accumulator,
     catalogIndex,
     selection,
-    observedAt,
+    evidence,
     privacyBoundary,
     dataUse,
     consent,

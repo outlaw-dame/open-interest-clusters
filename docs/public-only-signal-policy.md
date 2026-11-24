@@ -8,8 +8,8 @@ The engine distinguishes **where processing occurs** from **who controls persist
 
 The legacy `privacyBoundary` values remain supported as processing-location and disclosure boundaries:
 
-- `local_only`: processing and subject-level state remain on the current device;
-- `server_allowed`: remote processing or persistence is technically possible;
+- `local_only`: the interest is processed on the user's device and not sent to any server, including one the user owns (see `privacy-model.md`, "Signal label versus store manifest");
+- `server_allowed`: a server processes the interest. For subject-level interests only a user-owned server qualifies, with the user's server-side consent;
 - `aggregate_only`: only aggregate, non-subject-level state is permitted.
 
 `server_allowed` is not itself permission to persist user preference state. Authority is evaluated separately:
@@ -19,7 +19,7 @@ The legacy `privacyBoundary` values remain supported as processing-location and 
 - `provider_owned`: state controlled by the application, server, AppView, instance, or service operator;
 - `shared_operator`: aggregate infrastructure controlled by one or more operators rather than an individual user.
 
-Legacy records without explicit authority are interpreted fail closed: `local_only` maps to `device_owned`, `server_allowed` maps to `provider_owned`, and `aggregate_only` maps to `shared_operator`. A narrowly verified ActivityPods/Solid control path is recognized as `user_owned`.
+Legacy records without explicit authority are interpreted fail closed: `local_only` maps to `device_owned`, `server_allowed` maps to `provider_owned`, and `aggregate_only` maps to `shared_operator`. A narrowly verified ActivityPods/Solid control path, or a private ATProto space on the user's own PDS, is recognized as `user_owned`.
 
 ## Allowed affinity evidence
 

@@ -6,7 +6,7 @@ Open Interest Clusters is designed for privacy-preserving discovery and recommen
 
 - Deny by default when consent, authorization, or a privacy boundary is ambiguous.
 - Process only data required for an explicitly allowed recommendation use.
-- Keep user-private personalization local-first unless another boundary is explicitly permitted.
+- Keep user-private personalization local-first unless another boundary is explicitly permitted. Interests are labelled `local_only` while they are processed on the user's device and `server_allowed` when the profile is kept in a user-owned server store such as a pod.
 - Separate public/shared semantic intelligence from subject-level profile state.
 - Do not copy raw subject identifiers into signals, profile snapshots, audit events, errors, or telemetry.
 - Treat consent revocation and deletion as lifecycle events that propagate to derived data.
@@ -25,11 +25,53 @@ Interest signals and profile state carry an explicit privacy boundary.
 
 ### `local_only`
 
-The default for user-private personalization. Processing and storage are expected to remain on the user's device or in user-controlled local storage.
+The default for user-private personalization. On a signal or profile entry it says the interest is processed on the user's own device and nowhere else. It is not handed to providers, servers, AppViews or other apps, and it is not sent to any server, including a server the user owns. A `local_only` profile is kept in a device-owned store.
 
 ### `server_allowed`
 
-Server-side profile processing or persistence is permitted only when consent explicitly allows the requested server-side use.
+On a signal or profile entry it says a server processes the interest. The only server that may hold subject-level interests is one the user owns, such as an ActivityPods or Solid pod, or a private ATProto space on the user's own PDS. A user-controlled server is still a server, so the label is `server_allowed` there, and it requires the user's explicit server-side consent for the requested use. Missing, revoked, deleted or mismatched consent refuses the write. `server_allowed` is not permission for an app or provider to read the interests, and provider-owned and shared-operator stores are refused for subject-level state under every label.
+
+### `aggregate_only`
+
+Statistics that identify nobody. Never used for subject-level interests.
+
+### Signal label versus store manifest
+
+The same words appear in two places, and they have to agree.
+
+| Where | Field | What it says |
+| --- | --- | --- |
+| Signal or profile entry | `privacyBoundary` | Where the interest is processed. |
+| Store manifest | `processingBoundary` | Where the store runs, and whose it is. |
+
+| Placement | Manifest | Interests are labelled |
+| --- | --- | --- |
+| Device-owned store | `device_owned` + `local_only` | `local_only` |
+| User-owned server store (ActivityPods or Solid pod, or a private ATProto space on the user's own PDS) | `user_owned` + `server_allowed` | `server_allowed` |
+| Provider-owned or shared-operator store | refused for subject-level state | not applicable |
+
+Writing a profile to a pod labels its interests `server_allowed`. Onboarding with `storageTarget: "user_pod"` does this by default, and the device default stays `local_only`. Asking for a label that does not fit the target (`local_only` for a pod, `server_allowed` for the device) throws instead of being rewritten. Moving a profile between the two relabels it, see the lifecycle doc.
+
+A public ATProto repo is never a placement for subject-level interests, because repos are published data. A private ATProto space gives access control, not confidentiality: per the ATProto team's [alpha announcement](https://atproto.com/blog/atproto-spaces-alpha), its data is not encrypted and is readable by any user or application with access. The post does not say whether the PDS host can read it, and we assume it can. That post also warns that the alpha code had no careful security review and not to upload sensitive information. The [public beta post](https://atproto.com/blog/getting-ready-for-the-spaces-public-beta) says spaces moves to public beta with the December 1 reference PDS release, so check the current status before relying on it. The library expects the user's own DID to be the space authority but cannot check it, so your adapter has to. The library ships no spaces adapter and cannot check what an adapter writes. An optional `publiclyReadable: true` on a store manifest is refused for subject-level state, but the library cannot verify that declaration. See `local-first-state-placement.md`.
+
+Releases 0.2.0 and 0.3.0 stored onboarding profiles in a pod with `local_only` labels. Those records still load. They are accepted as stored, and the next write to the pod or the next transition relabels them `server_allowed`. A stale `local_only` label is the stricter one, so reading it grants nothing extra.
+
+### Matching happens against the local profile
+
+Interests are matched on the user's side. A remote app or server is asked to check candidates, or to report what changed since the last check, and it is not sent the profile, the signals or the interests behind them.
+
+What the library does:
+
+- A remote candidate source receives a redacted query: candidate kinds, limit, cursor and a hashed request ID. Interests and language preferences are dropped before the call (`readRecommendationCandidateSourceAdapter`). Only an adapter declared `local` receives them.
+- The curated account-set clients send a fixed public URL and nothing about the user. The ATProto label query sends URI patterns, sources, limit and cursor, and never the subject ID.
+- Remote sources must declare public discovery data only. A source that declares private data is refused.
+- Tests send marker strings through each of these and check that none reaches the request.
+
+What the library does not control:
+
+- What an integration puts into a URL, a URI pattern or a cursor that it builds itself. A query like "accounts tagged gaming" tells the server about the interest even when no profile is sent. Keep requests to public identifiers and fetch broad sets that are narrowed locally.
+- What a server does with the requests it gets. Requirement for integrations: servers that answer these checks should not keep queries or profile data beyond serving the request, and should not build per-user histories from them. The library cannot enforce that and does not claim to.
+- The network layer. Request timing, IP address and the client's choice of endpoint still reach the server.
 
 ### `aggregate_only`
 

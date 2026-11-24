@@ -41,7 +41,10 @@ type _LifecycleKeys = Assert<Equal<keyof RecommendationOnboardingLifecycle,
 type _LifecycleWithCandidateEventsKeys = Assert<Equal<keyof RecommendationOnboardingLifecycleWithCandidateEvents,
   "applySelection" | "withdrawSelections" | "reportCandidateEvents" | "listReportedCandidateEvents" | "assessPlan" | "refresh">>;
 type _LifecycleOptionKeys = Assert<Equal<keyof RecommendationOnboardingLifecycleOptions,
-  "derived" | "engine" | "firstSession" | "now" | "evidenceVerifier" | "candidateEvents">>;
+  "derived" | "engine" | "firstSession" | "now" | "evidenceVerifier" | "candidateEvents" | "subjectLock">>;
+type _SubjectLockKeys = Assert<Equal<keyof api.RecommendationSubjectLockOptions, "acquire" | "timeoutMs" | "signal" | "onReleaseError" | "maxHoldMs" | "onHoldExceeded">>;
+type _SubjectLockReasons = Assert<Equal<api.RecommendationSubjectLockFailureReason,
+  "acquire_failed" | "acquire_timeout" | "aborted" | "hold_exceeded" | "invalid_release" | "release_failed" | "release_timeout">>;
 type _EventStoreKeys = Assert<Equal<keyof RecommendationCandidateEventStore,
   "manifest" | "supportsCompareAndSet" | "load" | "save" | "delete">>;
 type _VerifierKeys = Assert<Equal<keyof RecommendationEvidenceVerifier, "id" | "verify">>;
