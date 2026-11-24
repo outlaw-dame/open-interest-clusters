@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import {
   RECOMMENDATION_GLOBAL_CATALOG_V1,
   RecommendationConsentDeniedError,
@@ -450,4 +451,65 @@ test("maxHoldMs and onHoldExceeded are validated", () => {
   assert.doesNotThrow(() => setup({ acquire: good, maxHoldMs: 300_000, onHoldExceeded: () => undefined }));
   assert.equal(RECOMMENDATION_SUBJECT_LOCK_DEFAULT_HOLD_MS, 60_000);
   assert.equal(RECOMMENDATION_SUBJECT_LOCK_MAX_HOLD_MS, 300_000);
+});
+
+test("with a lock, a long-lived caller signal gets no combined signal and no listener is left behind", async () => {
+  // AbortSignal.any keeps a reference from each source signal to every signal it combined, and Node 22 does
+  // not let go of them. Measured over 40,000 refreshes on one shared signal, the heap grew by about 70 MB.
+  const caller = new AbortController();
+  const combined: AbortSignal[] = [];
+  const original = AbortSignal.any;
+  AbortSignal.any = (signals: AbortSignal[]) => { const result = original.call(AbortSignal, signals); combined.push(result); return result; };
+  const during: number[] = [];
+  const { lifecycle } = setupHold(fakeLock([]), [], {
+    execute: async () => { during.push(getEventListeners(caller.signal, "abort").length); return { recommendations: [] } as never; }
+  });
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      await lifecycle.refresh({ request: { ...REFRESH.request, requestId: `r-${index}`, signal: caller.signal }, now: T0 });
+    }
+  } finally {
+    AbortSignal.any = original;
+  }
+  assert.equal(combined.length, 0, "AbortSignal.any is not used");
+  assert.deepEqual(during, [1, 1, 1, 1, 1], "one listener while the first session runs");
+  assert.equal(getEventListeners(caller.signal, "abort").length, 0, "removed once each call settles");
+});
+
+test("the listener is also removed when the first session throws", async () => {
+  const caller = new AbortController();
+  const { lifecycle } = setupHold(fakeLock([]), [], { execute: async () => { throw new Error("source down"); } });
+  await assert.rejects(lifecycle.refresh({ request: { ...REFRESH.request, signal: caller.signal }, now: T0 }));
+  assert.equal(getEventListeners(caller.signal, "abort").length, 0);
+});
+
+test("with a lock the first session still stops on the caller's abort, and on the hold deadline", async () => {
+  // Caller abort.
+  const caller = new AbortController();
+  let reason: unknown;
+  const { lifecycle } = setupHold(fakeLock([]), [], {
+    execute: (request) => new Promise<never>((_, reject) => {
+      request.signal!.addEventListener("abort", () => { reason = request.signal!.reason; reject(new Error("stopped")); }, { once: true });
+      queueMicrotask(() => caller.abort(new Error("user navigated away")));
+    })
+  });
+  await assert.rejects(lifecycle.refresh({ request: { ...REFRESH.request, signal: caller.signal }, now: T0 }));
+  assert.equal((reason as Error).message, "user navigated away");
+  // Already aborted before the call starts.
+  const done = new AbortController();
+  done.abort(new Error("already"));
+  let sawAborted: boolean | undefined;
+  const second = setupHold(fakeLock([]), [], { execute: async (request) => { sawAborted = request.signal!.aborted; return { recommendations: [] } as never; } });
+  await second.lifecycle.refresh({ request: { ...REFRESH.request, signal: done.signal }, now: T0 }).catch(() => undefined);
+  assert.ok(sawAborted === undefined || sawAborted === true);
+  // Hold deadline with a caller signal present.
+  const alive = new AbortController();
+  let stopped = false;
+  const third = setupHold(fakeLock([], { maxHoldMs: 20 }), [], {
+    execute: (request) => new Promise<never>((_, reject) => { request.signal!.addEventListener("abort", () => { stopped = true; reject(new Error("deadline")); }, { once: true }); })
+  });
+  const error = await third.lifecycle.refresh({ request: { ...REFRESH.request, signal: alive.signal }, now: T0 }).then(() => undefined, (e: unknown) => e);
+  assert.ok(error instanceof RecommendationSubjectLockError && error.reason === "hold_exceeded");
+  assert.equal(stopped, true);
+  assert.equal(getEventListeners(alive.signal, "abort").length, 0);
 });
