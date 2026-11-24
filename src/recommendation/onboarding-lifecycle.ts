@@ -19,12 +19,16 @@ import type { RecommendationConsentPolicy } from "./consent.js";
 import {
   RECOMMENDATION_EVIDENCE_UNVERIFIED,
   combineRecommendationEvidenceVerification,
-  normalizeRecommendationEvidenceVerifierOptions,
   verifyRecommendationEvidence,
   type NormalizedRecommendationEvidenceVerifier,
-  type RecommendationEvidenceVerification,
-  type RecommendationEvidenceVerifierOptions
+  type RecommendationEvidenceVerification
 } from "./evidence-verifier.js";
+import {
+  assertRecommendationEvidenceAttestationList,
+  normalizeRecommendationEvidenceVerificationOptions,
+  type RecommendationEvidenceAttestation,
+  type RecommendationEvidenceVerificationOptions
+} from "./evidence-attestation.js";
 import {
   assertRecommendationTimestampNotAhead,
   assessRecommendationCandidateActionPlanWithEvidence,
@@ -124,6 +128,8 @@ export interface RecommendationOnboardingCandidateReportInput {
   events: readonly RecommendationCandidateLifecycleEvent[];
   /** Required when a candidate event store is configured: storing events needs current consent. */
   policy?: RecommendationConsentPolicy;
+  /** Issued evidence attestations for these events. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   now?: string;
 }
 
@@ -137,6 +143,8 @@ export interface RecommendationOnboardingRefreshInput {
   policy?: RecommendationConsentPolicy;
   /** Candidate facts that changed since the last run. Reported before the rerun, so caches are cleared first. */
   candidateEvents?: readonly RecommendationCandidateLifecycleEvent[];
+  /** Issued evidence attestations for `candidateEvents`. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   now?: string;
 }
 
@@ -187,8 +195,12 @@ export interface RecommendationOnboardingLifecycleOptions {
    * Optional check that reported events and plan consent and provenance are real. Without it they are
    * used as supplied and results say `unverified`. With it, evidence the verifier does not accept
    * is refused before anything is stored or any cache is cleared.
+   *
+   * Set `minimumAttestation` here to require attestations. It is off by default. When set, every
+   * reported event, plan member consent and curated-set provenance entry is accepted only if one of
+   * the `attestations` passed to that call covers it. `verifier` is then optional.
    */
-  evidenceVerifier?: RecommendationEvidenceVerifierOptions;
+  evidenceVerifier?: RecommendationEvidenceVerificationOptions;
   /**
    * Optional durable home for reported candidate events. Leave it out and events are only used for
    * the call that reports them, as before. The store must be device-owned or user-owned.
@@ -217,6 +229,8 @@ export interface RecommendationOnboardingPlanAssessmentInput {
   policy?: RecommendationConsentPolicy;
   /** Extra events to consider on top of the stored ones. */
   events?: readonly RecommendationCandidateLifecycleEvent[];
+  /** Issued evidence attestations for the extra events, the plan's member consent and its curated-set provenance. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   maxEligibilityAgeMs?: number;
   now?: string;
 }
@@ -411,7 +425,7 @@ export function createRecommendationOnboardingLifecycle(
   }
 
   const evidenceVerifier: NormalizedRecommendationEvidenceVerifier | undefined =
-    options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerifierOptions(options.evidenceVerifier);
+    options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerificationOptions(options.evidenceVerifier);
   const eventStore = options.candidateEvents?.store;
   let eventLimits: RecommendationCandidateEventStoreLimits | undefined;
   if (options.candidateEvents !== undefined) {
@@ -622,7 +636,8 @@ export function createRecommendationOnboardingLifecycle(
     rawEvents: readonly RecommendationCandidateLifecycleEvent[],
     now: string,
     signal: AbortSignal,
-    policy?: RecommendationConsentPolicy
+    policy?: RecommendationConsentPolicy,
+    attestations?: readonly unknown[]
   ): Promise<RecommendationOnboardingCandidateReportResultWithEvidence> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
@@ -639,7 +654,7 @@ export function createRecommendationOnboardingLifecycle(
       fresh = selectNewRecommendationCandidateEvents(await readStoredEntries(subjectId, now), events);
     }
     const verification = combineRecommendationEvidenceVerification(
-      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now, signal)],
+      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now, signal, attestations)],
       events.length - fresh.length
     );
     // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is safe
@@ -701,7 +716,8 @@ export function createRecommendationOnboardingLifecycle(
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding candidate report.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return locked(input.subjectId, (signal) => report(input.subjectId, input.events, now, signal, input.policy));
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
+      return locked(input.subjectId, (signal) => report(input.subjectId, input.events, now, signal, input.policy, attestations));
     },
 
     async listReportedCandidateEvents(input: { subjectId: string; now?: string }) {
@@ -718,6 +734,7 @@ export function createRecommendationOnboardingLifecycle(
       if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
       const now = timestamp(input.now);
       const policy: RecommendationConsentPolicy | undefined = input.policy as RecommendationConsentPolicy | undefined;
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
       return locked(input.subjectId, async (signal) => {
         if (policy !== undefined) await requireStoreConsent(input.subjectId, policy);
         const stored = await readStoredEvents(input.subjectId, now);
@@ -726,6 +743,7 @@ export function createRecommendationOnboardingLifecycle(
           now,
           subjectId: input.subjectId,
           storedEvents: stored,
+          ...(attestations === undefined ? {} : { attestations }),
           ...(evidenceVerifier === undefined ? {} : { evidenceVerifier }),
           ...(input.maxEligibilityAgeMs === undefined ? {} : { maxEligibilityAgeMs: input.maxEligibilityAgeMs })
         });
@@ -740,6 +758,7 @@ export function createRecommendationOnboardingLifecycle(
       const subjectId = input.request.subjectId;
       assertValidRecommendationProfileSubjectId(subjectId);
       const now = timestamp(input.now);
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
       const firstSession = options.firstSession;
       return locked(subjectId, async (signal) => {
         const events = input.candidateEvents === undefined
@@ -748,7 +767,7 @@ export function createRecommendationOnboardingLifecycle(
         // Finish whatever an earlier crash left behind before deciding what to serve.
         const propagation = events === undefined || events.length === 0
           ? await options.derived.repair(subjectId)
-          : (await report(subjectId, events, now, signal, input.policy)).propagation!;
+          : (await report(subjectId, events, now, signal, input.policy, attestations)).propagation!;
         if (eventStore !== undefined && (events === undefined || events.length === 0) && input.policy !== undefined) {
           await requireStoreConsent(subjectId, input.policy);
         }

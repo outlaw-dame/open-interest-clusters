@@ -25,6 +25,11 @@ export interface RecommendationEvidenceVerifierContext {
   readonly now: string;
   /** Aborted when the verifier runs past its time limit, or when another item in the same call fails. Stop any work that honors it. */
   readonly signal: AbortSignal;
+  /**
+   * Attestations the caller handed in with this call, when there were any. Only present if the
+   * lifecycle was given some. Treat them as untrusted input: a verifier must check each one.
+   */
+  readonly attestations?: readonly unknown[];
 }
 
 /**
@@ -127,7 +132,8 @@ async function verifyOne(
   subjectId: string,
   now: string,
   timeoutMs: number,
-  callSignal: AbortSignal
+  callSignal: AbortSignal,
+  attestations: readonly unknown[] | undefined
 ): Promise<void> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -148,7 +154,7 @@ async function verifyOne(
   });
   let result: unknown;
   try {
-    const call = (async () => configured.verifier.verify(evidence, Object.freeze({ subjectId, kind, now, signal: controller.signal })))();
+    const call = (async () => configured.verifier.verify(evidence, Object.freeze({ subjectId, kind, now, signal: controller.signal, ...(attestations === undefined ? {} : { attestations }) })))();
     // If the timeout wins, a later failure of the verifier call must not surface as unhandled.
     call.catch(() => undefined);
     result = await Promise.race([call, timeout]);
@@ -179,7 +185,8 @@ export async function verifyRecommendationEvidence(
   kind: RecommendationEvidenceKind,
   subjectId: string,
   now: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  attestations?: readonly unknown[]
 ): Promise<RecommendationEvidenceVerification> {
   if (configured === undefined || items.length === 0) return RECOMMENDATION_EVIDENCE_UNVERIFIED;
   const deadline = Date.now() + configured.totalTimeoutMs;
@@ -197,7 +204,7 @@ export async function verifyRecommendationEvidence(
       try {
         if (remaining <= 0) throw new RecommendationEvidenceVerificationError(kind, "timeout");
         if (callController.signal.aborted) throw new RecommendationEvidenceVerificationError(kind, "error");
-        await verifyOne(configured, item, kind, subjectId, now, Math.min(configured.timeoutMs, remaining), callController.signal);
+        await verifyOne(configured, item, kind, subjectId, now, Math.min(configured.timeoutMs, remaining), callController.signal, attestations);
       } catch (error) {
         failed = true;
         callController.abort();

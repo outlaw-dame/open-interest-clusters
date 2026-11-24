@@ -2,9 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { hasUnsafeControlCharacter } from "./control-characters.js";
 import {
   RECOMMENDATION_EVIDENCE_KINDS,
+  normalizeRecommendationEvidenceVerifierOptions,
+  type NormalizedRecommendationEvidenceVerifier,
   type RecommendationEvidenceKind,
   type RecommendationEvidenceVerifier,
-  type RecommendationEvidenceVerifierContext
+  type RecommendationEvidenceVerifierContext,
+  type RecommendationEvidenceVerifierOptions
 } from "./evidence-verifier.js";
 import {
   RECOMMENDATION_PROVIDER_DISCOVERY_AUTHORITIES,
@@ -348,4 +351,129 @@ export function createRecommendationAttestationEvidenceVerifier(options: Recomme
       return { verified: result.verified };
     }
   });
+}
+
+/** Most attestations one call may carry. A longer list is refused outright so a caller cannot make every item scan an unbounded list. */
+export const MAX_RECOMMENDATION_EVIDENCE_ATTESTATIONS_PER_CALL = 4_096;
+
+const ATTESTATION_POLICY_VERIFIER_ID = "attestation-policy";
+const EVENT_SOURCE_FIELDS = ["setSourceId", "sourceId", "candidateId", "accountUri", "providerId"] as const;
+
+/**
+ * The source ids an attestation has to list for an item of evidence, read from the evidence itself.
+ * Issuers of attestations for the lifecycle use the same function so both sides agree.
+ *
+ * - `lifecycle_event`: every one of `setSourceId`, `sourceId`, `candidateId`, `accountUri` and `providerId` the event has.
+ * - `starter_pack_consent` (a plan member): its `consentSetSourceId` and `accountUri`.
+ * - `starter_pack_provenance` (a provenance entry): its `sourceId`.
+ *
+ * Throws `TypeError` when the evidence has none, so evidence that names no source cannot be attested.
+ */
+export function recommendationEvidenceAttestationSourceIds(kind: RecommendationEvidenceKind, evidence: unknown): readonly string[] {
+  if (evidence === null || typeof evidence !== "object" || Array.isArray(evidence)) throw new TypeError("Evidence names no source.");
+  const record = evidence as Record<string, unknown>;
+  const fields: readonly string[] = kind === "lifecycle_event" ? EVENT_SOURCE_FIELDS
+    : kind === "starter_pack_consent" ? ["consentSetSourceId", "accountUri"]
+      : ["sourceId"];
+  const ids = fields.flatMap((field) => (typeof record[field] === "string" ? [record[field] as string] : []));
+  if (ids.length === 0) throw new TypeError("Evidence names no source.");
+  return Object.freeze([...new Set(ids)].sort());
+}
+
+export interface RecommendationEvidenceAttestationPolicyOptions {
+  /**
+   * Turns the policy on. `signature` accepts only attestations whose mechanism verified a signature.
+   * `origin` also accepts an attestation that only says the data came from the right origin. Leave it
+   * out and nothing about evidence changes: it is used as supplied and results say `unverified`.
+   */
+  minimumAttestation: RecommendationEvidenceAttestationProof;
+  /** Weakest authority an attestation may claim. Default `protocol_native`. */
+  minimumAttestationAuthority?: RecommendationProviderDiscoveryAuthority;
+  /** How old an attestation may be. Default 15 minutes, at most 7 days. */
+  attestationMaxAgeMs?: number;
+}
+
+/**
+ * The `evidenceVerifier` option of the onboarding lifecycle. Without `minimumAttestation` it is the
+ * plain verifier options and behaves as before. With it, `verifier` becomes optional: every item of
+ * evidence must first be covered by a valid attestation passed in the call's `attestations`, and a
+ * `verifier`, if one is also given, must accept it too.
+ */
+export type RecommendationEvidenceVerificationOptions =
+  | RecommendationEvidenceVerifierOptions
+  | (Omit<RecommendationEvidenceVerifierOptions, "verifier"> & Partial<Pick<RecommendationEvidenceVerifierOptions, "verifier">> & RecommendationEvidenceAttestationPolicyOptions);
+
+function attestationCovers(
+  evidence: unknown,
+  context: RecommendationEvidenceVerifierContext,
+  policy: { minimumAttestation: RecommendationEvidenceAttestationProof; minimumAuthority: RecommendationProviderDiscoveryAuthority; maxAgeMs?: number }
+): boolean {
+  const attestations = context.attestations;
+  if (!Array.isArray(attestations) || attestations.length === 0) return false;
+  let requirement: RecommendationEvidenceAttestationRequirement;
+  try {
+    requirement = {
+      subjectId: context.subjectId,
+      sourceIds: recommendationEvidenceAttestationSourceIds(context.kind, evidence),
+      kind: context.kind,
+      now: context.now,
+      requiredProof: policy.minimumAttestation,
+      minimumAuthority: policy.minimumAuthority,
+      contentDigest: recommendationEvidenceContentDigest(evidence),
+      ...(policy.maxAgeMs === undefined ? {} : { maxAgeMs: policy.maxAgeMs })
+    };
+  } catch {
+    // Evidence that cannot be hashed or names no source cannot be attested.
+    return false;
+  }
+  for (const candidate of attestations) {
+    if (!isIssuedRecommendationEvidenceAttestation(candidate) || candidate.contentDigest !== requirement.contentDigest) continue;
+    try {
+      if (evaluateRecommendationEvidenceAttestation(candidate, requirement).verified) return true;
+    } catch {
+      // A requirement that cannot be evaluated counts as not covered.
+    }
+  }
+  return false;
+}
+
+/**
+ * Normalizes the lifecycle's `evidenceVerifier` option. Without `minimumAttestation` this is exactly
+ * `normalizeRecommendationEvidenceVerifierOptions`. With it, the returned verifier refuses every item
+ * that no attestation in the call covers, with the hook's ordinary fixed `rejected` failure (no
+ * subject id or evidence content in the message), then asks the application's own verifier if there is one.
+ */
+export function normalizeRecommendationEvidenceVerificationOptions(options: unknown): NormalizedRecommendationEvidenceVerifier {
+  if (options === null || typeof options !== "object" || Array.isArray(options) || !("minimumAttestation" in options)) {
+    return normalizeRecommendationEvidenceVerifierOptions(options);
+  }
+  const { minimumAttestation, minimumAttestationAuthority, attestationMaxAgeMs, verifier, ...rest } = options as Partial<RecommendationEvidenceAttestationPolicyOptions> & Partial<RecommendationEvidenceVerifierOptions>;
+  if (minimumAttestation !== "origin" && minimumAttestation !== "signature") throw new TypeError("Invalid recommendation attestation policy.");
+  const minimumAuthority = minimumAttestationAuthority ?? "protocol_native";
+  // Same checks as a per-item requirement, so a bad setting fails now and not on the first item.
+  evaluateRecommendationEvidenceAttestation(undefined, {
+    subjectId: "check", sourceIds: ["check"], kind: "lifecycle_event", now: "2026-01-01T00:00:00.000Z",
+    requiredProof: minimumAttestation, minimumAuthority, contentDigest: `sha256:${"0".repeat(64)}`,
+    ...(attestationMaxAgeMs === undefined ? {} : { maxAgeMs: attestationMaxAgeMs })
+  });
+  if (verifier !== undefined) {
+    // Validate the application's verifier the usual way before wrapping it.
+    normalizeRecommendationEvidenceVerifierOptions({ ...rest, verifier });
+  }
+  const policy = { minimumAttestation, minimumAuthority, ...(attestationMaxAgeMs === undefined ? {} : { maxAgeMs: attestationMaxAgeMs }) };
+  const combined: RecommendationEvidenceVerifier = Object.freeze({
+    id: verifier?.id ?? ATTESTATION_POLICY_VERIFIER_ID,
+    verify(evidence: unknown, context: RecommendationEvidenceVerifierContext) {
+      if (!attestationCovers(evidence, context, policy)) return { verified: false };
+      return verifier === undefined ? { verified: true } : verifier.verify(evidence, context);
+    }
+  });
+  return normalizeRecommendationEvidenceVerifierOptions({ ...rest, verifier: combined });
+}
+
+/** Bounds the attestation list a caller hands to a lifecycle call. Returns it unchanged, or throws `TypeError`. */
+export function assertRecommendationEvidenceAttestationList(value: unknown): readonly unknown[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_RECOMMENDATION_EVIDENCE_ATTESTATIONS_PER_CALL) throw new TypeError("Invalid recommendation evidence attestations.");
+  return value;
 }
