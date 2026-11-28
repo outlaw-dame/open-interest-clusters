@@ -239,6 +239,9 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
     return { action: plan.action, providerId, candidateIds: members.map((member) => member.candidateId), targets: members.map((member) => member.accountUri) };
   }
 
+  // The provider id is used exactly as the plan carries it. The library has no public provider-id normalizer,
+  // and `revalidate` compares the id to the descriptor byte for byte, so lowercasing here could merge two
+  // ids the rest of the flow treats as different.
   const requestKey = (request: ReferenceProviderMutation): string => JSON.stringify([request.action, request.providerId, [...request.candidateIds].sort()]);
 
   async function carryOut(plan: RecommendationCandidateActionPlan, request: ReferenceProviderMutation): Promise<ReferenceConfirmationResult> {

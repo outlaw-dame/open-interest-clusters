@@ -2,7 +2,7 @@
 
 This document is the authoritative architectural summary of the current repository state.
 
-**Last reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127.**
+**Last fully reconciled against `main` through commit d66c76b (Phase 6) on 2026-09-28. Phases 4, 5 and 6 landed as PRs #125, #126 and #127. The Phase 7 and Phase 8 rows were updated afterwards: Phase 7 landed in PRs #128 to #140, the 0.4.0 release bump is PR #141, and Phase 8 landed in PR #142.**
 
 For the concise phase ledger, see [`current-roadmap-status.md`](current-roadmap-status.md). For detailed candidate/onboarding acceptance criteria, see [`candidate-cold-start-onboarding-roadmap.md`](candidate-cold-start-onboarding-roadmap.md) and its normative [`candidate-roadmap-safety-amendments.md`](candidate-roadmap-safety-amendments.md).
 
@@ -55,8 +55,8 @@ Subject-level recommendation state is permitted by policy only in device-owned l
 | Cold-start scoring-input builder | **Implemented** (PR #125) |
 | First-session recommendation orchestration | **Implemented** (PR #126); see [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md) |
 | Generalized recommendation action-plan contracts | **Implemented** (d66c76b); non-executable, gated on eligibility and verified provider capability. The onboarding hashtag-follow plan remains separate. See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) |
-| Onboarding lifecycle/refresh composition | **Implemented** (merged in PRs #128 to #140, released in 0.4.0); see [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) |
-| Reference onboarding integration/UX examples | **Implemented on branch** `feat/phase8-reference-onboarding` (pending merge): runnable examples with in-memory stores and fake providers, plus tests. UX copy, accessibility and IndexedDB/SQLite shape are guidance only. Real provider adapters, real device persistence backends, ATProto spaces adapters, repo/MST proofs and HTTP signature verification are not done. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md) |
+| Onboarding lifecycle/refresh composition | **Implemented** (merged in PRs #128 to #140, released in 0.4.0 through the bump in PR #141); see [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) |
+| Reference onboarding integration/UX examples | **Implemented** (PR #142): runnable examples with in-memory stores and fake providers, plus tests. UX copy, accessibility and IndexedDB/SQLite shape are guidance only. Real provider adapters, real device persistence backends, ATProto spaces adapters, repo/MST proofs and HTTP signature verification are not done. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md) |
 | Turnkey operator service | Not implemented and not required for local-first use |
 
 ## Implemented pipeline
@@ -277,7 +277,7 @@ See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledge
 
 1. **Phase 7 — Onboarding lifecycle and refresh** (merged, released in 0.4.0)
    - edit/retract/rerun/expire/refresh/resume using the existing ledger/invalidation/recovery machinery. See [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
-2. **Phase 8 — Reference onboarding integration and UX examples** (implemented on branch, pending merge)
+2. **Phase 8 — Reference onboarding integration and UX examples** (landed in PR #142)
    - `examples/` demonstrates the stable engine contracts with in-memory stores and fake providers, and `tests/phase8-reference-*.test.ts` runs it. UI/framework choices stay outside the core. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md).
 
 ## Other remaining hardening/integration work

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RecommendationConsentDeniedError, createRecommendationCuratedAccountSetSourceId } from "../src/index.js";
+import { RecommendationConsentDeniedError, createRecommendationCandidateId, createRecommendationCuratedAccountSetSourceId } from "../src/index.js";
 import { ReferenceConfirmationError } from "../examples/onboarding-flow.js";
 import { createFakeProviderDescriptor } from "../examples/fakes.js";
 import { DAY_MS, HOUR_MS, T0, collection, setup } from "./phase8-reference-fixtures.js";
@@ -209,6 +209,38 @@ test("a re-planned or copied plan for the same request is refused after the firs
   await assert.rejects(onboarding.confirm(structuredClone(plan), { confirmed: true }), reasonIs("already_confirmed"));
   assert.equal(provider.requests.length, 1);
   assert.equal(provider.mutationCount, 1);
+});
+
+test("a withdrawal does not release a claimed request", async () => {
+  const { onboarding, provider } = setup();
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items.find((item) => item.recommendation.candidate.nativeId.endsWith("/dana"))?.recommendation.candidate;
+  assert.ok(candidate);
+  const { plan } = await onboarding.plan(candidate);
+  await onboarding.confirm(plan, { confirmed: true });
+  await onboarding.withdraw("source_retracted");
+  await assert.rejects(onboarding.confirm(plan, { confirmed: true }), reasonIs("already_confirmed"));
+  assert.equal(provider.requests.length, 1);
+});
+
+test("the same account at another provider is a different request and can be confirmed", async () => {
+  let providerId = "social.example";
+  const { onboarding, provider } = setup({ extra: { describeProvider: () => createFakeProviderDescriptor(new Date(Date.parse(T0) - HOUR_MS).toISOString(), new Date(Date.parse(T0) + DAY_MS).toISOString(), providerId) } });
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items.find((item) => item.recommendation.candidate.nativeId.endsWith("/dana"))?.recommendation.candidate;
+  assert.ok(candidate);
+  const first = (await onboarding.plan(candidate)).plan;
+  await onboarding.confirm(first, { confirmed: true });
+
+  providerId = "other.example";
+  // The candidate id is a hash that includes the provider, so the same account at another provider has its own id.
+  const candidateId = createRecommendationCandidateId({ kind: candidate.kind, protocol: candidate.protocol, nativeId: candidate.nativeId, provider: providerId });
+  const second = (await onboarding.plan({ ...candidate, candidateId, provider: providerId })).plan;
+  assert.notEqual(second.candidate.provider, first.candidate.provider);
+  await onboarding.confirm(second, { confirmed: true });
+  assert.deepEqual(provider.requests.map((request) => (request as { providerId: string }).providerId), ["social.example", "other.example"]);
+  await assert.rejects(onboarding.confirm(second, { confirmed: true }), reasonIs("already_confirmed"));
+  assert.equal(provider.requests.length, 2);
 });
 
 test("a starter pack confirmed with a different set of members is a different request, the same set is not", async () => {

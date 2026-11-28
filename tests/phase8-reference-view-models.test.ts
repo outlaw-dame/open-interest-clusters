@@ -49,11 +49,11 @@ test("a curator is named when there is no matching pick", () => {
 });
 
 test("only checked evidence earns a badge", () => {
-  const checked = describeCandidateEvidence(createFakeAccountCandidate("dana", T0, []));
+  const checked = describeCandidateEvidence(createFakeAccountCandidate("dana", T0, []), { appVouched: false });
   assert.deepEqual([checked.showVerifiedBadge, checked.state], [true, "authority_verified"]);
   for (const state of ["unverified_hint", "source_asserted"] as const) {
     const candidate = { ...createFakeAccountCandidate("x", T0, []), verification: { state } };
-    const view = describeCandidateEvidence(candidate);
+    const view = describeCandidateEvidence(candidate, { appVouched: false });
     assert.equal(view.showVerifiedBadge, false, state);
     assert.match(view.text, /Not checked/u);
     assert.equal(view.level, "not_checked", state);
@@ -72,8 +72,24 @@ test("a candidate the app vouches for never gets the badge, even when its state 
   assert.equal(view.level, "app_vouched");
   assert.equal(view.text, EVIDENCE_COPY.app_vouched);
   assert.doesNotMatch(view.text, /Confirmed|Not checked/u);
-  // Without the flag the same candidate is shown as checked, so the flag is what changes the answer.
-  assert.equal(describeCandidateEvidence(stamped).level, "checked");
+  // Only an explicit "not vouched" gives the same candidate the badge, so the flag is what changes the answer.
+  assert.equal(describeCandidateEvidence(stamped, { appVouched: false }).level, "checked");
+});
+
+test("a candidate stamped authority_verified never gets a badge unless the caller says it was not app-vouched", () => {
+  const stamped = createFakeAccountCandidate("alice", T0, []);
+  assert.equal(stamped.verification.state, "authority_verified");
+  const canonical = { ...stamped, verification: { state: "canonical" as const } };
+  // The type requires the option. These calls are what plain JavaScript or a forgotten field would send.
+  const omitted = describeCandidateEvidence(stamped, undefined as never);
+  const empty = describeCandidateEvidence(stamped, {} as never);
+  const wrongType = describeCandidateEvidence(stamped, { appVouched: "no" as never });
+  for (const view of [omitted, empty, wrongType, describeCandidateEvidence(canonical, {} as never)]) {
+    assert.equal(view.showVerifiedBadge, false);
+    assert.equal(view.level, "not_checked");
+    assert.equal(view.text, EVIDENCE_COPY.unverified);
+  }
+  assert.equal(describeCandidateEvidence(canonical, { appVouched: false }).showVerifiedBadge, true);
 });
 
 test("a plan view always asks for confirmation and shows why a plan is blocked", async () => {
