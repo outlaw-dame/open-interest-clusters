@@ -277,8 +277,8 @@ See [`current-roadmap-status.md`](current-roadmap-status.md) for the phase ledge
 
 1. **Phase 7 — Onboarding lifecycle and refresh** (implemented, pending merge)
    - edit/retract/rerun/expire/refresh/resume using the existing ledger/invalidation/recovery machinery. See [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
-2. **Phase 8 — Reference onboarding integration and UX examples**
-   - demonstrate stable engine contracts while keeping UI/framework choices outside the core.
+2. **Phase 8 — Reference onboarding integration and UX examples** (implemented, pending merge)
+   - `examples/` demonstrates the stable engine contracts with in-memory stores and fake providers, and `tests/phase8-reference-*.test.ts` runs it. UI/framework choices stay outside the core. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md).
 
 ## Other remaining hardening/integration work
 

@@ -4,8 +4,7 @@ Phase 8 shows how an application wires the engine contracts that already exist i
 
 Each section is tagged so you can tell what is real:
 
-- **Code** means it exists in `src/` today and I checked it there.
-- **Planned** means the Phase 8 implementation will add it, following the decisions below.
+- **Code** means it exists in `src/` or `examples/` and I checked it there.
 - **Guidance** means advice with no code behind it. The library will not enforce it.
 
 Nothing in this page changes the public API, so `tests/fixtures/public-api-surface.json` stays as it is.
@@ -37,13 +36,13 @@ The flow the examples cover, in order:
 
 **Decision.** Add `examples/**/*.ts` to the tsconfig `include` list. `pnpm lint:types` and `pnpm build` then check them under the same strict flags as `src/` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`). Each example exports functions, and a top-level `tests/phase8-reference-onboarding*.test.ts` imports and runs them. `pnpm test` only runs `dist/tests/*.test.js`, so an example that nothing in `tests/` calls would never execute. The test is what keeps an example from rotting.
 
-**Consequence.** `rootDir` is `.`, so the build also emits `dist/examples/`. `dist/` is tracked in git, so those files get committed like the rest of `dist`. That is a known cost and is the same as for `dist/tests/`.
+**Consequence.** `rootDir` is `.`, so the build also emits `dist/examples/`. `.gitignore` covers `dist/`, and only a few older files in it are tracked, so the new compiled files are not committed. Nothing in the diff but source.
 
 ### 3. Examples stay out of the npm tarball
 
 **Decision.** Add `"!dist/examples"` to the `files` list in `package.json`. The source folder `examples/` is already outside the list, so only the compiled copy needs excluding.
 
-**Why.** `files` contains `"dist"`, which would otherwise pull `dist/examples/*.js` and `*.d.ts` into the package. Consumers do not need example code, and shipping it makes it look supported. I checked the mechanism in a scratch package: with `"files": ["dist", "!dist/examples", ...]`, `npm pack --dry-run` listed `dist/src/*` and omitted `dist/examples/*`. The Phase 8 implementation must repeat that check with `pnpm pack --dry-run`, since that is what CI runs. If pnpm does not honor the negation, the fallback is a `.npmignore`, and the test should assert on the pack output either way.
+**Why.** `files` contains `"dist"`, which would otherwise pull `dist/examples/*.js` and `*.d.ts` into the package. Consumers do not need example code, and shipping it makes it look supported. I checked the mechanism in a scratch package with `npm pack --dry-run`, then again with `pnpm pack --dry-run`, which is what CI runs: `dist/src/*` is listed and `dist/examples/*` is not. `tests/phase8-reference-boundaries.test.ts` asserts both the `files` entry and the pack listing. Separately, `dist/tests/` already ships in the tarball today. That predates Phase 8 and is not changed here.
 
 This doc ships (the package includes `docs`). The examples do not. The doc should be written so it makes sense without the example files next to it.
 
@@ -70,7 +69,7 @@ Both are **Code**. The existing tests already build such adapters, for example `
 
 **Decision.** The pod example calls `transitionRecommendationProfilePersistence` (**Code**, `src/recommendation/profile-persistence-transition.ts`) between two in-memory adapters, one with the device manifest and one with the pod manifest. It does not use the ActivityPods adapter, because that needs a live pod and an authorization setup the examples should not fake.
 
-What the code does, and so what the example will show:
+What the code does, and what the example shows:
 
 - Order is read source, write destination (consent enforced and read-back verified), delete source last. A crash leaves at least one full copy and a rerun is safe.
 - Moving to the pod needs `policy` with `serverSideDataUses`. Moving back to the device does not.
@@ -110,7 +109,7 @@ The structured facts for a wording like the roadmap's examples are on `recommend
 - `candidate.metadata`: `displayName`, `summary`, `canonicalInterestIds`, `tags`, `languages`.
 - the candidate's verification state: `unverified_hint`, `source_asserted`, `authority_verified` or `canonical`.
 
-The application turns those into a sentence and localizes it. The library does not generate user-facing text, which matches the roadmap ("applications remain responsible for final wording and localization"). The reference will include a small `explain(recommendation, selection)` function that maps provenance kinds to copy keys, and it will keep the copy in a plain table so it is easy to replace.
+The application turns those into a sentence and localizes it. The library does not generate user-facing text, which matches the roadmap ("applications remain responsible for final wording and localization"). The reference has a small `explainRecommendation(recommendation, selection, catalog)` function (`examples/view-models.ts`) that maps provenance and the user's picks to a copy key, and keeps the copy in a plain table so it is easy to replace.
 
 ### Lifecycle (**Code**)
 
@@ -149,7 +148,7 @@ Evidence is `unverified` unless the application plugs in an `evidenceVerifier`. 
 | Local catalog and onboarding matches | Global catalog, onboarding seed | `topic`, `hashtag`, `account` | Not applicable | Provenance kind `onboarding_interest_match` or `local_catalog`. |
 | Third-party directories | Hint-level provenance | any | None | Provenance `third_party_directory_hint` keeps third-party trust and is never promoted. |
 
-Where the table says the library ships a client or adapter, the Phase 8 examples will not call it against a live service. They will use fake `RecommendationCandidateSourceAdapter` implementations that return fixed candidates.
+Where the table says the library ships a client or adapter, the Phase 8 examples will not call it against a live service. They use fake `RecommendationCandidateSourceAdapter` implementations that return fixed candidates.
 
 ## Storage placement summary (**Code**)
 
@@ -272,6 +271,23 @@ The reference has no UI, so this is advice for adopters, not something the examp
 ## Known gaps and risks
 
 - The explanation object does not carry the user's selected topic by name. The reference joins it from the selection record itself. If that proves clumsy, a richer explanation type would be a separate engine change and is not part of this phase.
-- `pnpm pack` may treat the `files` negation differently from `npm pack`. The checking step in the acceptance list exists for that reason.
-- Adding `examples/` to `include` grows the tracked `dist/`. Reviewers will see generated files in the diff.
+- `pnpm pack` and `npm pack` could treat the `files` negation differently. Both were checked, and a test runs `pnpm pack --dry-run` where `pnpm` is available.
 - The IndexedDB and SQLite notes are untested guidance. An adopter who follows them still has to test their own store, particularly compare-and-set and delete.
+
+## What was built, and what it showed about the public API
+
+The code is in `examples/` (`fakes.ts`, `view-models.ts`, `onboarding-flow.ts`, `device-to-pod.ts`, plus a README) and is run by `tests/phase8-reference-*.test.ts`. It needed no new export and no change to `tests/fixtures/public-api-surface.json`. Nothing blocked the work. These are the places where the public API was awkward, in the order an integrator would hit them. None is fixed here, because the briefing for this phase was to leave the engine alone.
+
+1. **Selection targets and transition targets are different lists.** `createRecommendationOnboardingSelection` takes `local_app`, `activitypods_pod`, `solid_pod` and others. `transitionRecommendationProfilePersistence` takes `local_app` and `user_pod`. An app has to map between them (`markMoved` in the reference does it by hand). Option: accept `user_pod` as an alias on the selection side, or export one mapping helper.
+2. **The engine's profile store refuses `server_allowed` labels unless it was created to allow them.** `createInMemoryRecommendationProfileSignalReplacementStore()` defaults to `local_only` only, so the first edit after a move to a pod fails with "privacy boundary is not allowed". The reference creates the store with both labels. Consent still decides whether a server label may be written. Option: say so in the lifecycle docs, or derive the allowed labels from the selection's target.
+3. **A curated-set source cannot return confirmed candidates.** Its authority is `curated_public`, which only allows `source_asserted`, and eligibility requires `authority_verified` for packs. The reference wraps the source and re-declares it as `provider_native` after the app's own decision that the provider confirmed the collection. That works, but it moves a trust decision into glue code that the library cannot check. Option: a documented helper for "this app vouches for these candidates".
+4. **Account eligibility treats `identityBindingVerified` as a caller-supplied boolean.** Together with the resolver lookup it makes an account eligible even when the candidate itself is only `source_asserted`. Only packs and labelers need `authority_verified` on the candidate. The evidence display therefore has to look at the candidate, not at the eligibility result, to avoid showing a badge that was never earned.
+5. **The transition reads the destination before it checks consent**, so a refused move to a pod still makes one read request to it. Nothing is written, sent or deleted. Also, a revoked policy passed for a move back to the device is refused. The reference passes `null` for that direction.
+6. **A `remote` candidate source must declare `serverSideProcessing: true`.** That is correct for the privacy model, but the name reads as if the source processes the user's data. The engine does redact the query it sends to a remote source: no interests, no languages, and a hashed request ID. The privacy test asserts this.
+7. **The generic explanation is unchanged** (see the first item under "Known gaps and risks"). Reasons come from provenance and the user's picks, and the engine's `summary` is not shown.
+
+Two other results are worth knowing:
+
+- The plan assessment already reports `capability_expired`, so a plan whose provider window ran out is `stale` before the reference's own revalidation sees it. The reference still asks the provider descriptor again on confirm, because a provider can drop a capability inside the window.
+- A failed provider mutation is not retried by the reference. A follow is usually idempotent, but the user should choose whether to try again, and a partial result needs to be shown as one.
+

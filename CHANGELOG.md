@@ -4,6 +4,10 @@ This project is pre-1.0, so a minor version can contain breaking changes. Each r
 
 ## Unreleased
 
+### Added
+
+- `examples/`: a runnable reference onboarding flow built only on the public entrypoint, with in-memory stores and fake providers. It covers explicit selections, first-session recommendations with reasons built from provenance, an evidence display that never claims a check that did not happen, frozen action plans (including a Mastodon Collection starter pack with member consent), confirm then revalidate then provider call, edits, withdrawal and refresh, set-change reports, consent revocation and deletion, and a device to pod move. `tests/phase8-reference-*.test.ts` runs all of it, including checks that fake providers never receive profile or signal content. The compiled examples are left out of the published package (`"!dist/examples"` in `files`). Nothing in the public API changed.
+
 ## 0.4.0
 
 Changes from PRs #138 to #140, on top of 0.3.0: the Phase 7 open items, their follow-ups, and the opt-in attestation policy.
