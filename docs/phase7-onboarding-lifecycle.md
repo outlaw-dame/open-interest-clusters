@@ -79,8 +79,8 @@ Adapter and verification failures are retried with exponential backoff and full 
 Stored candidate events move in the same call when both locations set `candidateEventStore`. They are the same kind of private, subject-level data, so the same rules apply:
 
 - Consent for a remote destination is checked before anything is touched, so a denial leaves the profile and the events where they were.
-- The source events are read and validated first. A record that names another subject, fails its digest or holds an invalid event stops the move with nothing written. Events are merged into whatever the destination already holds and keep their original recording times, so a move does not restart retention. Pass the same `candidateEventLimits` the lifecycle uses, otherwise set-level exclusions older than the default retention would be dropped on the way.
-- The destination is read back and checked against the digest of what was written. A compare-and-set store is written with `expectedDigest`, and a conflict is retried with the same backoff.
+- The source events are read and validated first. A record that names another subject, fails its digest or holds an invalid event stops the move with nothing written. Events are merged into whatever the destination already holds and keep their original recording times, so a move does not restart retention. The move reads and merges with the widest retention the lifecycle can be set to (90 days for events, 365 for set-level exclusions) unless you pass narrower `candidateEventLimits`, so a "never show this set" the lifecycle was still keeping is not dropped before the source is deleted. The lifecycle applies its own limits again on its next read.
+- The destination is read back and checked against the digest of what was written. A destination that claims compare-and-set is checked first with `checkRecommendationCandidateEventStoreCompareAndSet` (an empty record under a random probe subject, deleted afterwards). If it passes, the write carries `expectedDigest` and a conflict is retried with the same backoff. If it fails, the write is plain. If the check hits a store error, it is retried with backoff and then the move fails with the source left in place.
 - Source events are deleted after the destination is verified and before the source profile, so the profile stays as the marker for a rerun. If the delete fails the error is `source_cleanup_pending` and the same call finishes it without a second write.
 - With a store on only one side, events are left alone and the result carries `candidateEvents: "skipped_store_missing"`. Without any event store the field is absent.
 - If the destination store has no compare-and-set, the write is last-write-wins. The read-back check catches another process overwriting between the write and the check, and the move retries, but a write that lands after the check passes can still replace what was moved. Use a compare-and-set store for the destination, or keep other writers away from it during a move.
@@ -122,7 +122,7 @@ The same applies to the lifecycle and its results. The base types keep their 0.2
 - `RecommendationOnboardingLifecycle` is unchanged (`applySelection`, `withdrawSelections`, `reportCandidateEvents`, `refresh`). `createRecommendationOnboardingLifecycle` returns `RecommendationOnboardingLifecycleWithCandidateEvents`, which adds `listReportedCandidateEvents` and `assessPlan` and accepts the optional `policy` on event reports. A hand-written lifecycle double still compiles.
 - `RecommendationCandidatePlanAssessment` is unchanged. The assessment functions and `assessPlan` return `RecommendationCandidatePlanAssessmentWithEvidence`, which adds `evidenceVerification`, `verifierId`, `verifiedKinds` and `storedEventsNotChecked`.
 - `RecommendationOnboardingCandidateReportResult` is unchanged. `reportCandidateEvents` returns `RecommendationOnboardingCandidateReportResultWithEvidence` with the same four evidence fields.
-- `RecommendationOnboardingRefreshResult` is unchanged. `refresh` returns `RecommendationOnboardingRefreshResultWithSetExclusions`, which adds `excludedSetSourceIds`.
+- `RecommendationOnboardingRefreshResult` is unchanged. `refresh` returns `RecommendationOnboardingRefreshResultWithSetExclusions`, which adds `excludedSetSourceIds` and the same evidence label the report result has (`evidenceVerification`, `verifierId`, `verifiedKinds`, `storedEventsNotChecked`, all optional on the type). The label covers only what this call checked: events reported with the refresh, under the attestation policy if one is set. Stored events that were not reported in this call are counted in `storedEventsNotChecked`, so a refresh that reruns on stored exclusions alone says `unverified`, and one that checked new events while relying on stored ones says `partial`.
 
 `tests/public-api-surface.test.ts` holds a hand-written lifecycle and hand-built result values written against the 0.2.0 shapes, so they stop compiling if a required member is ever added to a base type again.
 
@@ -361,6 +361,35 @@ Anything else, including a lookup that throws or hangs, is rejected by the hook'
 The digest covers the evidence content only. Subject, kind and source ids are still matched separately, so one attestation does not carry across subjects or sources. Keep `maxAgeMs` short and look attestations up per report. What the digest cannot tell you is whether the evidence you hash was really derived from what was checked. For `createRecommendationAtprotoLabelAttestation` that holds when the evidence is the label itself. If you pass a separate `evidence` value, you are vouching that it came from the verified label.
 
 What this does not do: it verifies no signature. The issuing function is public, so whoever calls it is vouching that the check happened. It stops forged or copied data and mix-ups between subjects and sources. It does not make an unchecked claim true. No crypto or CBOR dependency was added.
+
+### Requiring attestations (opt-in, off by default)
+
+The attestation verifier above needs the application to write the lookup. There is also a built-in policy on the lifecycle, switched on with `minimumAttestation` inside the `evidenceVerifier` option:
+
+```ts
+const lifecycle = createRecommendationOnboardingLifecycle({
+  derived, engine,
+  evidenceVerifier: { minimumAttestation: "signature" } // or "origin"
+});
+
+await lifecycle.reportCandidateEvents({ subjectId, events, attestations, now });
+```
+
+**It is off by default, on purpose.** No adapter issues attestations yet, apart from `createRecommendationAtprotoLabelAttestation` for ATProto labels. If the library required them today, every report and plan assessment would be refused. Without `minimumAttestation` nothing changes: evidence is used as supplied, and results say `unverified`. The default is expected to flip once adapters issue attestations. Until then an application that already produces them can turn the policy on itself.
+
+When it is on, every item the lifecycle checks (reported events, each plan member's consent, each curated-set provenance entry) must be covered by one of the `attestations` passed to the same call. The attestations travel in an optional `attestations` field on `reportCandidateEvents`, `assessPlan` and `refresh` (for the events in `candidateEvents`). An item is covered only when an issued attestation:
+
+- has the same `contentDigest` as the item, so it cannot be reused for other content,
+- names the same subject as the call, so one subject's attestations are useless for another,
+- has the same kind and lists exactly the source ids that `recommendationEvidenceAttestationSourceIds(kind, evidence)` returns for the item (the ids are read from the evidence, not from the attestation),
+- is no older than `attestationMaxAgeMs` (default 15 minutes, at most 7 days) and has not passed its own `expiresAt`,
+- has at least the proof class in `minimumAttestation` (`signature` refuses `https_origin` and `authenticated_fetch`), and at least `minimumAttestationAuthority` (default `protocol_native`).
+
+Anything else is refused fail closed with the hook's usual `RecommendationEvidenceVerificationError` (failure `rejected`). The message is fixed text and carries only the evidence kind, never the subject, a source id or any evidence content. A refused report stores nothing and clears no cache. Nothing in the call lists which check failed.
+
+If you also give a `verifier`, it runs after the attestation check and must accept too, so replay detection can sit next to the policy. `verifier` is optional when `minimumAttestation` is set. The verifier receives the list as `context.attestations`, as untrusted input.
+
+Limits: the list may hold at most 4,096 attestations per call (`MAX_RECOMMENDATION_EVIDENCE_ATTESTATIONS_PER_CALL`), and a longer one is rejected with a `TypeError` before anything runs. Events that are already in the event store are not checked again on a retry, so they are not asked to carry attestations a second time. They count under `storedEventsNotChecked`, as before.
 
 Which adapter would issue which attestation, and what is left to build:
 

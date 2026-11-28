@@ -1,5 +1,6 @@
 import type { RecommendationInterestPrivacyBoundary } from "./interest-signal.js";
 import type { RecommendationProfileEntry, RecommendationProfileSnapshot } from "./profile-store.js";
+import type { RecommendationStateStorageAdapterManifest } from "./state-placement-policy.js";
 
 /** The storage targets whose placement decides the label on a profile's interests. */
 export type RecommendationProfilePrivacyLabelTarget = "local_app" | "user_pod";
@@ -35,4 +36,16 @@ export function relabelRecommendationProfileForTarget(
   const entries = profile.entries.map((entry) => relabelEntry(entry, from, to));
   if (entries.every((entry, index) => entry === profile.entries[index])) return profile;
   return Object.freeze({ ...profile, entries: Object.freeze(entries) });
+}
+
+/**
+ * The one placement rule for stores that hold a subject's private state (profiles and candidate
+ * events): device-owned and local-only for the app, user-owned and server-allowed for the pod. Any
+ * other target never fits. Profile writes and the profile move both ask this, so the rule cannot
+ * change in one place only.
+ */
+export function manifestFitsProfileTarget(manifest: RecommendationStateStorageAdapterManifest, target: string): boolean {
+  if (target === "local_app") return manifest.authority === "device_owned" && manifest.processingBoundary === "local_only";
+  if (target === "user_pod") return manifest.authority === "user_owned" && manifest.processingBoundary === "server_allowed";
+  return false;
 }

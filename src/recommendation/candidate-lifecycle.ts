@@ -414,6 +414,8 @@ export function assessRecommendationCandidateActionPlan(
 export interface RecommendationCandidatePlanEvidenceAssessmentOptions extends RecommendationCandidatePlanAssessmentOptions {
   subjectId: string;
   evidenceVerifier?: NormalizedRecommendationEvidenceVerifier;
+  /** Attestations the verifier may use for this call. They are handed to it as untrusted input. */
+  attestations?: readonly unknown[];
   /** Events read back from the candidate event store. They were checked when they were reported, so they are not checked again. */
   storedEvents?: readonly RecommendationCandidateLifecycleEvent[];
 }
@@ -431,16 +433,16 @@ export async function assessRecommendationCandidateActionPlanWithEvidence(
   options: RecommendationCandidatePlanEvidenceAssessmentOptions
 ): Promise<RecommendationCandidatePlanAssessmentWithEvidence> {
   if (!isRecord(options)) throw new TypeError("Invalid recommendation plan assessment options.");
-  const { subjectId, evidenceVerifier, storedEvents, ...assessOptions } = options;
+  const { subjectId, evidenceVerifier, storedEvents, attestations, ...assessOptions } = options;
   assertPlanShape(planInput);
   assertValidRecommendationProfileSubjectId(subjectId);
   const now = normalizeStrictRfc3339Timestamp(options.now, "Invalid recommendation plan assessment timestamp.");
   const events = normalizeRecommendationCandidateLifecycleEvents(eventsInput, { now });
   const provenance = planInput.candidate.provenance.filter((item) => item.kind === "curated_account_set");
   const verification = combineRecommendationEvidenceVerification([
-    await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now),
-    await verifyRecommendationEvidence(evidenceVerifier, planInput.members ?? [], "starter_pack_consent", subjectId, now),
-    await verifyRecommendationEvidence(evidenceVerifier, planInput.members === undefined ? [] : provenance, "starter_pack_provenance", subjectId, now)
+    await verifyRecommendationEvidence(evidenceVerifier, events, "lifecycle_event", subjectId, now, undefined, attestations),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members ?? [], "starter_pack_consent", subjectId, now, undefined, attestations),
+    await verifyRecommendationEvidence(evidenceVerifier, planInput.members === undefined ? [] : provenance, "starter_pack_provenance", subjectId, now, undefined, attestations)
   ], storedEvents?.length ?? 0);
   const assessment = assessRecommendationCandidateActionPlan(planInput, [...(storedEvents ?? []), ...events], assessOptions);
   return Object.freeze({ ...assessment, ...verification });

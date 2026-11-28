@@ -61,7 +61,7 @@ type _ReportResultWithEvidenceKeys = Assert<Equal<keyof RecommendationOnboarding
 type _RefreshResultKeys = Assert<Equal<keyof RecommendationOnboardingRefreshResult,
   "result" | "excludedCandidateIds" | "propagation">>;
 type _RefreshResultWithSetExclusionsKeys = Assert<Equal<keyof RecommendationOnboardingRefreshResultWithSetExclusions,
-  keyof RecommendationOnboardingRefreshResult | "excludedSetSourceIds">>;
+  keyof RecommendationOnboardingRefreshResult | "excludedSetSourceIds" | "evidenceVerification" | "verifierId" | "verifiedKinds" | "storedEventsNotChecked">>;
 // The extended types must stay assignable to the base types, or the factories would break old consumers.
 type _LifecycleExtends = Assert<RecommendationOnboardingLifecycleWithCandidateEvents extends RecommendationOnboardingLifecycle ? true : false>;
 type _AssessmentExtends = Assert<RecommendationCandidatePlanAssessmentWithEvidence extends RecommendationCandidatePlanAssessment ? true : false>;

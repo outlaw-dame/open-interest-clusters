@@ -19,12 +19,16 @@ import type { RecommendationConsentPolicy } from "./consent.js";
 import {
   RECOMMENDATION_EVIDENCE_UNVERIFIED,
   combineRecommendationEvidenceVerification,
-  normalizeRecommendationEvidenceVerifierOptions,
   verifyRecommendationEvidence,
   type NormalizedRecommendationEvidenceVerifier,
-  type RecommendationEvidenceVerification,
-  type RecommendationEvidenceVerifierOptions
+  type RecommendationEvidenceVerification
 } from "./evidence-verifier.js";
+import {
+  assertRecommendationEvidenceAttestationList,
+  normalizeRecommendationEvidenceVerificationOptions,
+  type RecommendationEvidenceAttestation,
+  type RecommendationEvidenceVerificationOptions
+} from "./evidence-attestation.js";
 import {
   assertRecommendationTimestampNotAhead,
   assessRecommendationCandidateActionPlanWithEvidence,
@@ -72,13 +76,27 @@ const NEVER_ABORTED: AbortSignal = new AbortController().signal;
 
 /**
  * The signal for the first session. The caller's own signal still counts, so either one stops it. With
- * no lock the hold signal never aborts and is not passed on. Combining with it would leave a new
- * entry on that one long-lived signal for every refresh, which Node does not release promptly, and it
- * would hand the first session a signal where it got none before.
+ * no lock the hold signal never aborts and is not passed on, which also keeps the first session from
+ * getting a signal where it got none before.
+ *
+ * With a lock and a caller signal the two are joined by hand rather than with `AbortSignal.any`. On
+ * Node 22 `any` keeps a reference from the caller's signal to every combined signal it ever made, and
+ * measured over 40,000 refreshes on one shared signal the heap grew about 70 MB and did not come back
+ * after a collection. Here the listener on the caller's signal is removed when the call settles, so a
+ * signal an app reuses for every refresh stays clean. Call `release` in a `finally`.
  */
-function firstSessionSignal(caller: AbortSignal | undefined, hold: AbortSignal): { signal?: AbortSignal } {
-  if (hold === NEVER_ABORTED) return caller === undefined ? {} : { signal: caller };
-  return { signal: caller === undefined ? hold : AbortSignal.any([caller, hold]) };
+function firstSessionSignal(caller: AbortSignal | undefined, hold: AbortSignal): { signal?: AbortSignal; release: () => void } {
+  const nothing = () => undefined;
+  if (hold === NEVER_ABORTED) return caller === undefined ? { release: nothing } : { signal: caller, release: nothing };
+  if (caller === undefined) return { signal: hold, release: nothing };
+  const joined = new AbortController();
+  const sources = [caller, hold];
+  const stop = (source: AbortSignal) => () => joined.abort(source.reason);
+  const listeners = sources.map((source) => [source, stop(source)] as const);
+  const already = sources.find((source) => source.aborted);
+  if (already !== undefined) joined.abort(already.reason);
+  else for (const [source, listener] of listeners) source.addEventListener("abort", listener, { once: true });
+  return { signal: joined.signal, release: () => { for (const [source, listener] of listeners) source.removeEventListener("abort", listener); } };
 }
 
 /** Reasons a caller may give when withdrawing every onboarding selection at once. */
@@ -124,6 +142,8 @@ export interface RecommendationOnboardingCandidateReportInput {
   events: readonly RecommendationCandidateLifecycleEvent[];
   /** Required when a candidate event store is configured: storing events needs current consent. */
   policy?: RecommendationConsentPolicy;
+  /** Issued evidence attestations for these events. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   now?: string;
 }
 
@@ -137,6 +157,8 @@ export interface RecommendationOnboardingRefreshInput {
   policy?: RecommendationConsentPolicy;
   /** Candidate facts that changed since the last run. Reported before the rerun, so caches are cleared first. */
   candidateEvents?: readonly RecommendationCandidateLifecycleEvent[];
+  /** Issued evidence attestations for `candidateEvents`. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   now?: string;
 }
 
@@ -151,6 +173,17 @@ export interface RecommendationOnboardingRefreshResult {
 export interface RecommendationOnboardingRefreshResultWithSetExclusions extends RecommendationOnboardingRefreshResult {
   /** Curated-set source IDs left out because a set-level event was reported for them. */
   excludedSetSourceIds: readonly string[];
+  /**
+   * What the evidence verifier (and the attestation policy, if `minimumAttestation` is set) checked
+   * during this refresh. Only events reported in this call can be checked. Stored events that were not
+   * reported in this call are counted in `storedEventsNotChecked`, and the state is `partial` when
+   * something was checked and some stored events were not. `unverified` means nothing was checked
+   * here. Optional so a result built before this field existed still fits the type.
+   */
+  evidenceVerification?: RecommendationEvidenceVerification["evidenceVerification"];
+  verifierId?: string;
+  verifiedKinds?: RecommendationEvidenceVerification["verifiedKinds"];
+  storedEventsNotChecked?: number;
 }
 
 export interface RecommendationOnboardingLifecycleOptions {
@@ -187,8 +220,12 @@ export interface RecommendationOnboardingLifecycleOptions {
    * Optional check that reported events and plan consent and provenance are real. Without it they are
    * used as supplied and results say `unverified`. With it, evidence the verifier does not accept
    * is refused before anything is stored or any cache is cleared.
+   *
+   * Set `minimumAttestation` here to require attestations. It is off by default. When set, every
+   * reported event, plan member consent and curated-set provenance entry is accepted only if one of
+   * the `attestations` passed to that call covers it. `verifier` is then optional.
    */
-  evidenceVerifier?: RecommendationEvidenceVerifierOptions;
+  evidenceVerifier?: RecommendationEvidenceVerificationOptions;
   /**
    * Optional durable home for reported candidate events. Leave it out and events are only used for
    * the call that reports them, as before. The store must be device-owned or user-owned.
@@ -217,6 +254,8 @@ export interface RecommendationOnboardingPlanAssessmentInput {
   policy?: RecommendationConsentPolicy;
   /** Extra events to consider on top of the stored ones. */
   events?: readonly RecommendationCandidateLifecycleEvent[];
+  /** Issued evidence attestations for the extra events, the plan's member consent and its curated-set provenance. Only read when the lifecycle has `evidenceVerifier.minimumAttestation`. */
+  attestations?: readonly RecommendationEvidenceAttestation[];
   maxEligibilityAgeMs?: number;
   now?: string;
 }
@@ -257,6 +296,14 @@ export interface RecommendationOnboardingLifecycleWithCandidateEvents extends Re
 
 /** A few quick replans with jittered backoff. A lost race normally settles on the first one. */
 const STALE_PLAN_RETRY = Object.freeze({ attempts: 5, initialDelayMs: 5, maxDelayMs: 100, jitterRatio: 0.5 });
+
+/** The store's compare-and-set claim could not be checked, so the write was not attempted. */
+class RecommendationCandidateEventCompareAndSetUnverifiedError extends Error {
+  constructor() {
+    super("The candidate event store's compare-and-set claim could not be verified, so nothing was written.");
+    this.name = "RecommendationCandidateEventCompareAndSetUnverifiedError";
+  }
+}
 
 const CANDIDATE_EVENT_STORE_RETRY = Object.freeze({ attempts: 4, initialDelayMs: 25, maxDelayMs: 400, jitterRatio: 0.5 });
 
@@ -411,7 +458,7 @@ export function createRecommendationOnboardingLifecycle(
   }
 
   const evidenceVerifier: NormalizedRecommendationEvidenceVerifier | undefined =
-    options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerifierOptions(options.evidenceVerifier);
+    options.evidenceVerifier === undefined ? undefined : normalizeRecommendationEvidenceVerificationOptions(options.evidenceVerifier);
   const eventStore = options.candidateEvents?.store;
   let eventLimits: RecommendationCandidateEventStoreLimits | undefined;
   if (options.candidateEvents !== undefined) {
@@ -442,17 +489,22 @@ export function createRecommendationOnboardingLifecycle(
     return (await readStoredEntries(subjectId, now)).map((entry) => entry.event);
   }
 
-  // A store that claims compare-and-set is checked once. Only a definite answer is remembered, so a
-  // store that was briefly down is checked again on the next write instead of being trusted or doubted for good.
+  // A store that claims compare-and-set is checked once. Only a definite answer is remembered. If the
+  // check itself cannot finish (the store threw), it is retried with the same backoff as other store
+  // calls, and if it still cannot finish the write fails. Sending the write without the guard on a
+  // guess could overwrite another device's events, so only a definite "failed" falls back to the
+  // per-subject queue.
   let casCheck: Promise<boolean> | undefined;
-  function storeHonorsCompareAndSet(): Promise<boolean> {
+  function storeHonorsCompareAndSet(signal: AbortSignal): Promise<boolean> {
     if (eventStore!.supportsCompareAndSet !== true) return Promise.resolve(false);
     if (casCheck !== undefined) return casCheck;
-    const attempt = checkRecommendationCandidateEventStoreCompareAndSet(eventStore!).then((result) => {
-      if (result.status === "inconclusive") casCheck = undefined;
+    const attempt = executeWithRetry(async () => {
+      const result = await checkRecommendationCandidateEventStoreCompareAndSet(eventStore!);
+      if (result.status === "inconclusive") throw new RecommendationCandidateEventCompareAndSetUnverifiedError();
       return result.status === "passed";
-    }, () => { casCheck = undefined; return false; });
+    }, { ...eventRetry, shouldRetry: ({ error }) => !signal.aborted && error instanceof RecommendationCandidateEventCompareAndSetUnverifiedError });
     casCheck = attempt;
+    attempt.catch(() => { if (casCheck === attempt) casCheck = undefined; });
     return attempt;
   }
 
@@ -471,7 +523,7 @@ export function createRecommendationOnboardingLifecycle(
       shouldRetry: ({ error }) => !signal.aborted && error instanceof RecommendationCandidateEventConflictError
     };
     checkpoint(signal);
-    const useCompareAndSet = await storeHonorsCompareAndSet();
+    const useCompareAndSet = await storeHonorsCompareAndSet(signal);
     await storeQueue!.run(subjectId, () => executeWithRetry(async () => {
       checkpoint(signal);
       const raw = await storeIo((store) => store.load(subjectId), signal);
@@ -622,11 +674,25 @@ export function createRecommendationOnboardingLifecycle(
     rawEvents: readonly RecommendationCandidateLifecycleEvent[],
     now: string,
     signal: AbortSignal,
-    policy?: RecommendationConsentPolicy
+    policy?: RecommendationConsentPolicy,
+    attestations?: readonly unknown[]
   ): Promise<RecommendationOnboardingCandidateReportResultWithEvidence> {
+    return (await reportChecked(subjectId, rawEvents, now, signal, policy, attestations)).result;
+  }
+
+  /** Also returns the events that went through the verifier in this call, so `refresh` can tell them from stored ones. */
+  async function reportChecked(
+    subjectId: string,
+    rawEvents: readonly RecommendationCandidateLifecycleEvent[],
+    now: string,
+    signal: AbortSignal,
+    policy?: RecommendationConsentPolicy,
+    attestations?: readonly unknown[]
+  ): Promise<{ result: RecommendationOnboardingCandidateReportResultWithEvidence; checked: readonly RecommendationCandidateLifecycleEvent[] }> {
     const events = normalizeRecommendationCandidateLifecycleEvents(rawEvents, { now });
     if (events.length === 0) {
-      return Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+      const result = Object.freeze({ subjectId, ...RECOMMENDATION_EVIDENCE_UNVERIFIED, acceptedEventCount: 0, excludedCandidateIds: Object.freeze([]), propagation: undefined });
+      return { result, checked: [] };
     }
     // With a store, consent comes first and events it already holds are not verified again. A replay
     // detecting verifier would reject the retry of a report whose save failed, and the held events
@@ -639,7 +705,7 @@ export function createRecommendationOnboardingLifecycle(
       fresh = selectNewRecommendationCandidateEvents(await readStoredEntries(subjectId, now), events);
     }
     const verification = combineRecommendationEvidenceVerification(
-      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now, signal)],
+      [await verifyRecommendationEvidence(evidenceVerifier, fresh, "lifecycle_event", subjectId, now, signal, attestations)],
       events.length - fresh.length
     );
     // Keep the facts before clearing caches. If keeping fails, nothing is claimed; a retry is safe
@@ -647,13 +713,14 @@ export function createRecommendationOnboardingLifecycle(
     if (eventStore !== undefined) await persistEvents(subjectId, events, now, signal);
     checkpoint(signal);
     const propagation = await invalidate({ subjectId, occurredAt: now });
-    return Object.freeze({
+    const result = Object.freeze({
       subjectId,
       ...verification,
       acceptedEventCount: events.length,
       excludedCandidateIds: listRecommendationLifecycleExcludedCandidateIds(events),
       propagation
     });
+    return { result, checked: fresh };
   }
 
   return Object.freeze({
@@ -701,7 +768,8 @@ export function createRecommendationOnboardingLifecycle(
       if (!isRecord(input)) throw new TypeError("Invalid recommendation onboarding candidate report.");
       assertValidRecommendationProfileSubjectId(input.subjectId);
       const now = timestamp(input.now);
-      return locked(input.subjectId, (signal) => report(input.subjectId, input.events, now, signal, input.policy));
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
+      return locked(input.subjectId, (signal) => report(input.subjectId, input.events, now, signal, input.policy, attestations));
     },
 
     async listReportedCandidateEvents(input: { subjectId: string; now?: string }) {
@@ -718,6 +786,7 @@ export function createRecommendationOnboardingLifecycle(
       if (eventStore === undefined) throw new TypeError("No recommendation candidate event store is configured.");
       const now = timestamp(input.now);
       const policy: RecommendationConsentPolicy | undefined = input.policy as RecommendationConsentPolicy | undefined;
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
       return locked(input.subjectId, async (signal) => {
         if (policy !== undefined) await requireStoreConsent(input.subjectId, policy);
         const stored = await readStoredEvents(input.subjectId, now);
@@ -726,6 +795,7 @@ export function createRecommendationOnboardingLifecycle(
           now,
           subjectId: input.subjectId,
           storedEvents: stored,
+          ...(attestations === undefined ? {} : { attestations }),
           ...(evidenceVerifier === undefined ? {} : { evidenceVerifier }),
           ...(input.maxEligibilityAgeMs === undefined ? {} : { maxEligibilityAgeMs: input.maxEligibilityAgeMs })
         });
@@ -740,20 +810,29 @@ export function createRecommendationOnboardingLifecycle(
       const subjectId = input.request.subjectId;
       assertValidRecommendationProfileSubjectId(subjectId);
       const now = timestamp(input.now);
+      const attestations = assertRecommendationEvidenceAttestationList(input.attestations);
       const firstSession = options.firstSession;
       return locked(subjectId, async (signal) => {
         const events = input.candidateEvents === undefined
           ? undefined
           : normalizeRecommendationCandidateLifecycleEvents(input.candidateEvents, { now });
         // Finish whatever an earlier crash left behind before deciding what to serve.
-        const propagation = events === undefined || events.length === 0
-          ? await options.derived.repair(subjectId)
-          : (await report(subjectId, events, now, signal, input.policy)).propagation!;
+        let reported: Awaited<ReturnType<typeof reportChecked>> | undefined;
+        if (events !== undefined && events.length > 0) reported = await reportChecked(subjectId, events, now, signal, input.policy, attestations);
+        const propagation = reported === undefined ? await options.derived.repair(subjectId) : reported.result.propagation!;
         if (eventStore !== undefined && (events === undefined || events.length === 0) && input.policy !== undefined) {
           await requireStoreConsent(subjectId, input.policy);
         }
         // Stored events keep excluding after a restart. They are read after the report, so they include it.
-        const known = eventStore === undefined ? (events ?? []) : [...(events ?? []), ...await readStoredEvents(subjectId, now)];
+        const stored = eventStore === undefined ? [] : await readStoredEvents(subjectId, now);
+        const known = [...(events ?? []), ...stored];
+        // Stored events were only verified if they went through the verifier in this very call. Anything else
+        // that still excludes candidates here was taken on trust from the store.
+        const checkedNow = new Set((reported?.checked ?? []).map((event) => JSON.stringify(event)));
+        const verification = combineRecommendationEvidenceVerification(
+          reported === undefined ? [] : [reported.result],
+          stored.filter((event) => !checkedNow.has(JSON.stringify(event))).length
+        );
         const excluded = new Set(input.request.excludeCandidateIds ?? []);
         for (const id of listRecommendationLifecycleExcludedCandidateIds(known)) excluded.add(id);
         const excludedCandidateIds = Object.freeze([...excluded].sort());
@@ -766,13 +845,19 @@ export function createRecommendationOnboardingLifecycle(
           throw new TypeError("Too many recommendation exclusions for one refresh.");
         }
         checkpoint(signal);
-        const result = await firstSession.execute({
-          ...input.request,
-          ...firstSessionSignal(input.request.signal, signal),
-          excludeCandidateIds: excludedCandidateIds,
-          excludeSourceIds: excludedSetSourceIds
-        });
-        return Object.freeze({ result: dropExcludedSetCandidates(result, excludedSetSourceIds), excludedCandidateIds, excludedSetSourceIds, propagation });
+        const { release, ...signalPart } = firstSessionSignal(input.request.signal, signal);
+        let result: RecommendationFirstSessionResult;
+        try {
+          result = await firstSession.execute({
+            ...input.request,
+            ...signalPart,
+            excludeCandidateIds: excludedCandidateIds,
+            excludeSourceIds: excludedSetSourceIds
+          });
+        } finally {
+          release();
+        }
+        return Object.freeze({ result: dropExcludedSetCandidates(result, excludedSetSourceIds), excludedCandidateIds, excludedSetSourceIds, propagation, ...verification });
       });
     }
   });
