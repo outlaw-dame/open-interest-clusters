@@ -75,7 +75,9 @@ test("the published file list leaves out the compiled examples", () => {
 test("pnpm pack lists the library and none of the compiled examples", (context) => {
   let listing: string;
   try {
-    listing = execFileSync("pnpm", ["pack", "--dry-run"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
+    // Scripts are skipped on purpose. package.json runs `pnpm build` on prepare, and tsc would rewrite dist/
+    // while node --test is loading other test files from it in parallel. That race broke CI once.
+    listing = execFileSync("pnpm", ["--config.ignore-scripts=true", "pack", "--dry-run"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") { context.skip("pnpm is not on the PATH here. CI runs the same check."); return; }
     throw error;
