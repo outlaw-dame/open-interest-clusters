@@ -125,7 +125,7 @@ The candidate/onboarding dependency chain is now:
 6. **Phase 4 — Cold-start scoring-input builder — COMPLETE** (`#125`)
 7. **Phase 5 — First-session recommendation orchestrator — COMPLETE** (`#126`)
 8. **Phase 6 — Generalized recommendation action-plan contracts — COMPLETE** (`d66c76b`; the onboarding hashtag-follow plan is unchanged)
-9. **Phase 7 — Onboarding lifecycle and refresh — COMPLETE** (`#128` to `#141`, released in 0.4.0; see [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md))
+9. **Phase 7 — Onboarding lifecycle and refresh — COMPLETE** (`#128` to `#140`, released in 0.4.0; see [`docs/phase7-onboarding-lifecycle.md`](docs/phase7-onboarding-lifecycle.md))
 10. **Phase 8 — Reference onboarding integration and UX examples — IMPLEMENTED ON BRANCH, PENDING MERGE** (reference flow, fakes, view models and tests are done; UX copy, accessibility and IndexedDB/SQLite shape are guidance only; real provider adapters, real device persistence backends, ATProto spaces adapters, repo/MST proofs, HTTP signature verification and a richer structured explanation type are not done; see [`examples/README.md`](examples/README.md) and [`docs/phase8-reference-onboarding.md`](docs/phase8-reference-onboarding.md))
 
 The idempotent signal ledger/retraction layer predates this sequence and is already implemented; it is not Phase 4.

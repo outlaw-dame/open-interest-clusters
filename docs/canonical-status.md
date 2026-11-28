@@ -55,7 +55,7 @@ Subject-level recommendation state is permitted by policy only in device-owned l
 | Cold-start scoring-input builder | **Implemented** (PR #125) |
 | First-session recommendation orchestration | **Implemented** (PR #126); see [`recommendation-first-session-orchestrator.md`](recommendation-first-session-orchestrator.md) |
 | Generalized recommendation action-plan contracts | **Implemented** (d66c76b); non-executable, gated on eligibility and verified provider capability. The onboarding hashtag-follow plan remains separate. See [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) |
-| Onboarding lifecycle/refresh composition | **Implemented** (merged in PRs #128 to #141, released in 0.4.0); see [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) |
+| Onboarding lifecycle/refresh composition | **Implemented** (merged in PRs #128 to #140, released in 0.4.0); see [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md) |
 | Reference onboarding integration/UX examples | **Implemented on branch** `feat/phase8-reference-onboarding` (pending merge): runnable examples with in-memory stores and fake providers, plus tests. UX copy, accessibility and IndexedDB/SQLite shape are guidance only. Real provider adapters, real device persistence backends, ATProto spaces adapters, repo/MST proofs and HTTP signature verification are not done. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md) |
 | Turnkey operator service | Not implemented and not required for local-first use |
 
