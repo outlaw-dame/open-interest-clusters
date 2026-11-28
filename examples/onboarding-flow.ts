@@ -58,6 +58,7 @@ export type ReferenceConfirmationFailure =
   | "capability_expired"
   | "eligibility_changed"
   | "no_consent"
+  | "already_confirmed"
   | "provider_failed";
 
 /** Thrown when a plan is not carried out. `reason` says why, and for everything but `provider_failed` nothing was sent. */
@@ -208,6 +209,28 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
     candidateEvents: { store: eventStore }
   });
 
+  /** Plans already carried out, or being carried out right now. */
+  const claimedPlans = new WeakSet<RecommendationCandidateActionPlan>();
+
+  async function carryOut(plan: RecommendationCandidateActionPlan, answer: { excludeMemberCandidateIds?: readonly string[] }): Promise<ReferenceConfirmationResult> {
+    if (policy.revokedAt !== undefined || policy.allowedDataUses.length === 0) throw new ReferenceConfirmationError("no_consent");
+    const assessment = await lifecycle.assessPlan({ subjectId, plan, policy, now: clock.now() });
+    if (assessment.state === "stale") throw new ReferenceConfirmationError("plan_stale");
+    if (assessment.state === "invalid") throw new ReferenceConfirmationError("plan_invalid");
+    await revalidate(plan);
+    const skipped = new Set(answer.excludeMemberCandidateIds ?? []);
+    const members = (plan.members ?? []).filter((member) => !skipped.has(member.candidateId));
+    const request = plan.members === undefined
+      ? { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: [plan.candidate.candidateId], targets: [plan.candidate.nativeId] }
+      : { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: members.map((member) => member.candidateId), targets: members.map((member) => member.accountUri) };
+    try {
+      const { applied } = await provider.mutate(request);
+      return { requested: request.targets, applied };
+    } catch (error) {
+      throw new ReferenceConfirmationError("provider_failed", { cause: error });
+    }
+  }
+
   async function revalidate(plan: RecommendationCandidateActionPlan): Promise<void> {
     if (Date.parse(plan.providerCapabilitiesExpireAt) <= Date.parse(clock.now())) throw new ReferenceConfirmationError("capability_expired");
     // Ask again what the provider can do now. The plan only remembers what it could do when it was made.
@@ -320,23 +343,18 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
      */
     async confirm(plan: RecommendationCandidateActionPlan, answer: { confirmed: boolean; excludeMemberCandidateIds?: readonly string[] }): Promise<ReferenceConfirmationResult> {
       if (answer.confirmed !== true) throw new ReferenceConfirmationError("not_confirmed");
-      if (policy.revokedAt !== undefined || policy.allowedDataUses.length === 0) throw new ReferenceConfirmationError("no_consent");
-      const assessment = await lifecycle.assessPlan({ subjectId, plan, policy, now: clock.now() });
-      if (assessment.state === "stale") throw new ReferenceConfirmationError("plan_stale");
-      if (assessment.state === "invalid") throw new ReferenceConfirmationError("plan_invalid");
-      await revalidate(plan);
-      const skipped = new Set(answer.excludeMemberCandidateIds ?? []);
-      const members = (plan.members ?? []).filter((member) => !skipped.has(member.candidateId));
-      const request = plan.members === undefined
-        ? { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: [plan.candidate.candidateId], targets: [plan.candidate.nativeId] }
-        : { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: members.map((member) => member.candidateId), targets: members.map((member) => member.accountUri) };
+      // A plan is carried out once. It is claimed before any await so a double tap cannot slip through,
+      // and released again if the attempt fails, so the user can choose to try again.
+      if (claimedPlans.has(plan)) throw new ReferenceConfirmationError("already_confirmed");
+      claimedPlans.add(plan);
       try {
-        const { applied } = await provider.mutate(request);
-        return { requested: request.targets, applied };
+        return await carryOut(plan, answer);
       } catch (error) {
-        throw new ReferenceConfirmationError("provider_failed", { cause: error });
+        claimedPlans.delete(plan);
+        throw error;
       }
     },
+
 
     /** Step 6: compare the set as last accepted with a fresh read, and report anything that got worse. */
     async reportSetChange(previous: RecommendationCuratedAccountSet, fresh: RecommendationCuratedAccountSetFreshRead) {

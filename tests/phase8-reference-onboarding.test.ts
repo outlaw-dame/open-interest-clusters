@@ -158,6 +158,33 @@ test("a failed provider call is reported as such and is not retried behind the u
   assert.equal(provider.mutationCount, 0);
 });
 
+test("a plan is carried out once, including when the button is pressed twice at the same time", async () => {
+  const { onboarding, provider } = setup();
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items[0]?.recommendation.candidate;
+  assert.ok(candidate);
+  const { plan } = await onboarding.plan(candidate);
+  const results = await Promise.allSettled([onboarding.confirm(plan, { confirmed: true }), onboarding.confirm(plan, { confirmed: true })]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected && rejected.status === "rejected" && rejected.reason instanceof ReferenceConfirmationError && rejected.reason.reason === "already_confirmed");
+  await assert.rejects(onboarding.confirm(plan, { confirmed: true }), (error: unknown) => error instanceof ReferenceConfirmationError && error.reason === "already_confirmed");
+  assert.equal(provider.requests.length, 1);
+  assert.equal(provider.mutationCount, 1);
+});
+
+test("a plan whose attempt failed can be confirmed again by the user", async () => {
+  const { onboarding, provider } = setup();
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items[0]?.recommendation.candidate;
+  assert.ok(candidate);
+  const { plan } = await onboarding.plan(candidate);
+  provider.failNextMutations = 1;
+  await assert.rejects(onboarding.confirm(plan, { confirmed: true }), (error: unknown) => error instanceof ReferenceConfirmationError && error.reason === "provider_failed");
+  await onboarding.confirm(plan, { confirmed: true });
+  assert.equal(provider.mutationCount, 1);
+});
+
 test("editing picks retracts what was removed, and refresh follows the new picks", async () => {
   const { onboarding } = setup();
   await onboarding.select(["gaming", "technology"]);
