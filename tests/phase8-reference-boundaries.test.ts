@@ -20,6 +20,29 @@ function specifiers(text: string): string[] {
   return found;
 }
 
+/** Ways to load code that the specifier check above cannot see. Empty when there are none. */
+function hiddenLoads(text: string): string[] {
+  const found: string[] = [];
+  if (/\brequire\s*\(|\bcreateRequire\b|\bmodule\.require\b/u.test(text)) found.push("require");
+  for (const match of text.matchAll(/\bimport\s*\(\s*([^)]*)\)/gu)) {
+    // import("x") is fine when it holds one plain string literal. A variable, template or built string is not.
+    if (!/^(["'])[^"'`$+]*\1\s*$/u.test(match[1] ?? "")) found.push(`import(${match[1]})`);
+  }
+  if (/\bprocess\.(?:env|binding|dlopen)|\bBun\.|\bDeno\./u.test(text)) found.push("host runtime");
+  return found;
+}
+
+test("examples use no require, no computed import specifier and no host runtime globals", () => {
+  for (const { file, text } of exampleSources()) assert.deepEqual(hiddenLoads(text), [], file);
+});
+
+test("the hidden-load check catches require, computed specifiers and runtime globals", () => {
+  for (const sample of ['const m = require("node:fs");', "await import(name);", 'await import("node:" + "fs");', "await import(`node:fs`);", "Bun.file(x)", "process.env.KEY"]) {
+    assert.notDeepEqual(hiddenLoads(sample), [], sample);
+  }
+  assert.deepEqual(hiddenLoads('const m = await import("./fakes.js");'), []);
+});
+
 test("examples import only the public entrypoint, other examples and node built-ins", () => {
   const sources = exampleSources();
   assert.ok(sources.length >= 4, "the examples are there to be checked");
