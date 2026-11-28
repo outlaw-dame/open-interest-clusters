@@ -17,7 +17,7 @@ The tests are `tests/phase8-reference-*.test.ts`. They run with `pnpm test`, whi
 
 - They import only `../src/index.js`, the same surface a package consumer gets. A test fails on any other import from `src/`.
 - They add no dependency and use no DOM or UI framework.
-- Nothing follows, subscribes or joins by itself. `confirm` is the only call that reaches a provider, it needs `confirmed: true`, and it checks the plan, the account and the provider's capabilities again first.
+- Nothing follows, subscribes or joins by itself. `confirm` is the only call that reaches a provider, it needs `confirmed: true`, and it checks the plan, the account and the provider's capabilities again first. An empty selection or a plan without a provider id is refused before that. The evidence label tells apart checked, app-vouched (no badge) and not checked.
 - No request to a provider carries profile or signal content. The privacy test records what the fakes receive and checks it.
 
 ## What is guidance only

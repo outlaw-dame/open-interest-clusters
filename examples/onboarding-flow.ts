@@ -39,7 +39,7 @@ import {
   type RecommendationProviderDescriptor,
   type RecommendationStarterPackMemberInput
 } from "../src/index.js";
-import type { ReferenceClock, ReferenceProviderService } from "./fakes.js";
+import type { ReferenceClock, ReferenceProviderMutation, ReferenceProviderService } from "./fakes.js";
 import {
   describeCandidateEvidence,
   describePlan,
@@ -55,6 +55,7 @@ export type ReferenceConfirmationFailure =
   | "not_confirmed"
   | "plan_stale"
   | "plan_invalid"
+  | "nothing_selected"
   | "capability_expired"
   | "eligibility_changed"
   | "no_consent"
@@ -154,6 +155,10 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
     invalidators: INVALIDATORS
   });
 
+  // Ids of the candidates the wrapper below vouched for. The evidence display reads this, so a vouched
+  // candidate is never shown as checked with the provider.
+  const appVouchedIds = new Set<string>();
+
   // Curated-set accounts and packs are read as `source_asserted`. Eligibility refuses those, so the app
   // marks them confirmed first. See `confirmedByProvider`. A curated source may not return confirmed
   // candidates, so the wrapper is declared as the provider's own source: that is the app vouching.
@@ -164,7 +169,14 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
     capabilities: [...curatedAdapter.capabilities, "returns_authority_verified_identity"],
     async read(query) {
       const read = await curatedAdapter.read(query);
-      return { ...read, candidates: read.candidates.map((candidate) => confirmedByProvider(candidate, clock.now())) };
+      return {
+        ...read,
+        candidates: read.candidates.map((candidate) => {
+          const vouched = confirmedByProvider(candidate, clock.now());
+          if (vouched !== candidate) appVouchedIds.add(vouched.candidateId);
+          return vouched;
+        })
+      };
     }
   };
 
@@ -209,20 +221,32 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
     candidateEvents: { store: eventStore }
   });
 
-  /** Plans already carried out, or being carried out right now. */
-  const claimedPlans = new WeakSet<RecommendationCandidateActionPlan>();
+  /**
+   * Requests already carried out, or being carried out right now. The key is the request itself (action,
+   * provider and the sorted candidate ids), not the plan object, so a second plan or a copy of a plan
+   * for the same request is refused too.
+   */
+  const claimedRequests = new Set<string>();
 
-  async function carryOut(plan: RecommendationCandidateActionPlan, answer: { excludeMemberCandidateIds?: readonly string[] }): Promise<ReferenceConfirmationResult> {
+  /** The request a plan stands for once the user's unticked members are removed. Nothing is sent here. */
+  function requestFor(plan: RecommendationCandidateActionPlan, answer: { excludeMemberCandidateIds?: readonly string[] }): ReferenceProviderMutation {
+    const providerId = plan.candidate.provider;
+    if (providerId === undefined || providerId.trim() === "") throw new ReferenceConfirmationError("plan_invalid");
+    if (plan.members === undefined) return { action: plan.action, providerId, candidateIds: [plan.candidate.candidateId], targets: [plan.candidate.nativeId] };
+    const skipped = new Set(answer.excludeMemberCandidateIds ?? []);
+    const members = plan.members.filter((member) => !skipped.has(member.candidateId));
+    if (members.length === 0) throw new ReferenceConfirmationError("nothing_selected");
+    return { action: plan.action, providerId, candidateIds: members.map((member) => member.candidateId), targets: members.map((member) => member.accountUri) };
+  }
+
+  const requestKey = (request: ReferenceProviderMutation): string => JSON.stringify([request.action, request.providerId, [...request.candidateIds].sort()]);
+
+  async function carryOut(plan: RecommendationCandidateActionPlan, request: ReferenceProviderMutation): Promise<ReferenceConfirmationResult> {
     if (policy.revokedAt !== undefined || policy.allowedDataUses.length === 0) throw new ReferenceConfirmationError("no_consent");
     const assessment = await lifecycle.assessPlan({ subjectId, plan, policy, now: clock.now() });
     if (assessment.state === "stale") throw new ReferenceConfirmationError("plan_stale");
     if (assessment.state === "invalid") throw new ReferenceConfirmationError("plan_invalid");
     await revalidate(plan);
-    const skipped = new Set(answer.excludeMemberCandidateIds ?? []);
-    const members = (plan.members ?? []).filter((member) => !skipped.has(member.candidateId));
-    const request = plan.members === undefined
-      ? { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: [plan.candidate.candidateId], targets: [plan.candidate.nativeId] }
-      : { action: plan.action, providerId: plan.candidate.provider ?? "", candidateIds: members.map((member) => member.candidateId), targets: members.map((member) => member.accountUri) };
     try {
       const { applied } = await provider.mutate(request);
       return { requested: request.targets, applied };
@@ -319,7 +343,7 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
       const items = refreshed.result.recommendations.map((recommendation) => ({
         recommendation,
         reason: explainRecommendation(recommendation, current ?? NO_SELECTION, catalog),
-        evidence: describeCandidateEvidence(recommendation.candidate)
+        evidence: describeCandidateEvidence(recommendation.candidate, { appVouched: appVouchedIds.has(recommendation.candidate.candidateId) })
       }));
       return { result: refreshed.result, session: describeSessionState(refreshed.result), items, excludedCandidateIds: refreshed.excludedCandidateIds, excludedSetSourceIds: refreshed.excludedSetSourceIds };
     },
@@ -343,14 +367,17 @@ export function createReferenceOnboarding(options: ReferenceOnboardingOptions) {
      */
     async confirm(plan: RecommendationCandidateActionPlan, answer: { confirmed: boolean; excludeMemberCandidateIds?: readonly string[] }): Promise<ReferenceConfirmationResult> {
       if (answer.confirmed !== true) throw new ReferenceConfirmationError("not_confirmed");
-      // A plan is carried out once. It is claimed before any await so a double tap cannot slip through,
-      // and released again if the attempt fails, so the user can choose to try again.
-      if (claimedPlans.has(plan)) throw new ReferenceConfirmationError("already_confirmed");
-      claimedPlans.add(plan);
+      // The request is built, and refused if it is empty or has no provider, before anything else runs.
+      // A request is carried out once. It is claimed before any await so a double tap cannot slip
+      // through, and released again if the attempt fails, so the user can choose to try again.
+      const request = requestFor(plan, answer);
+      const key = requestKey(request);
+      if (claimedRequests.has(key)) throw new ReferenceConfirmationError("already_confirmed");
+      claimedRequests.add(key);
       try {
-        return await carryOut(plan, answer);
+        return await carryOut(plan, request);
       } catch (error) {
-        claimedPlans.delete(plan);
+        claimedRequests.delete(key);
         throw error;
       }
     },

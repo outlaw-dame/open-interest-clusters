@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RECOMMENDATION_GLOBAL_CATALOG_V1, createRecommendationCatalogIndex, createRecommendationOnboardingSelection, type RecommendationFirstSessionResult } from "../src/index.js";
 import { createFakeAccountCandidate } from "../examples/fakes.js";
-import { describeCandidateEvidence, describeEventEvidence, describePlan, describeSessionState, explainRecommendation, PLAN_BLOCKED_COPY, REASON_COPY, SESSION_STATE_COPY } from "../examples/view-models.js";
+import { EVIDENCE_COPY, describeCandidateEvidence, describeEventEvidence, describePlan, describeSessionState, explainRecommendation, PLAN_BLOCKED_COPY, REASON_COPY, SESSION_STATE_COPY } from "../examples/view-models.js";
 import { T0, setup } from "./phase8-reference-fixtures.js";
 
 const CATALOG = createRecommendationCatalogIndex(RECOMMENDATION_GLOBAL_CATALOG_V1);
@@ -56,10 +56,24 @@ test("only checked evidence earns a badge", () => {
     const view = describeCandidateEvidence(candidate);
     assert.equal(view.showVerifiedBadge, false, state);
     assert.match(view.text, /Not checked/u);
+    assert.equal(view.level, "not_checked", state);
   }
+  assert.equal(checked.level, "checked");
   assert.equal(describeEventEvidence({ evidenceVerification: "unverified" }).showVerifiedBadge, false);
   assert.equal(describeEventEvidence({ evidenceVerification: "partial" }).showVerifiedBadge, false);
   assert.equal(describeEventEvidence({ evidenceVerification: "verified" }).showVerifiedBadge, true);
+});
+
+test("a candidate the app vouches for never gets the badge, even when its state says authority_verified", () => {
+  const stamped = createFakeAccountCandidate("alice", T0, []);
+  assert.equal(stamped.verification.state, "authority_verified");
+  const view = describeCandidateEvidence(stamped, { appVouched: true });
+  assert.equal(view.showVerifiedBadge, false);
+  assert.equal(view.level, "app_vouched");
+  assert.equal(view.text, EVIDENCE_COPY.app_vouched);
+  assert.doesNotMatch(view.text, /Confirmed|Not checked/u);
+  // Without the flag the same candidate is shown as checked, so the flag is what changes the answer.
+  assert.equal(describeCandidateEvidence(stamped).level, "checked");
 });
 
 test("a plan view always asks for confirmation and shows why a plan is blocked", async () => {

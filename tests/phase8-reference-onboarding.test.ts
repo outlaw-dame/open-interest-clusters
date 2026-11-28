@@ -51,6 +51,26 @@ test("each suggestion carries a reason built from the user's pick and its proven
   assert.ok(view.items.every((item) => !item.reason.text.includes(item.recommendation.explanation?.summary ?? "\u0000")));
 });
 
+test("curated accounts and the starter pack are shown as app-vouched, with no badge; the other levels stay as they were", async () => {
+  const { onboarding } = setup({ curatedSets: [collection("games", ["alice", "bob"])] });
+  await onboarding.select(["gaming"]);
+  const view = await onboarding.recommend("r1");
+  const byName = (name: string) => view.items.find((item) => item.recommendation.candidate.nativeId.endsWith(`/${name}`));
+  const pack = view.items.find((item) => item.recommendation.candidate.kind === "starter_pack");
+  assert.ok(pack && byName("alice") && byName("bob"));
+  for (const item of [pack, byName("alice"), byName("bob")]) {
+    assert.equal(item?.evidence.showVerifiedBadge, false, item?.recommendation.candidate.nativeId);
+    assert.equal(item?.evidence.level, "app_vouched");
+    assert.match(item?.evidence.text ?? "", /this app vouches for/u);
+    assert.doesNotMatch(item?.evidence.text ?? "", /Confirmed/u);
+  }
+  assert.equal(byName("dana")?.evidence.showVerifiedBadge, true);
+  assert.equal(byName("dana")?.evidence.level, "checked");
+  assert.match(byName("dana")?.evidence.text ?? "", /Confirmed with social\.example/u);
+  assert.equal(byName("frank")?.evidence.level, "not_checked");
+  assert.match(byName("frank")?.evidence.text ?? "", /Not checked/u);
+});
+
 test("a single-account plan is frozen and not executable, and confirming it is the only thing that contacts the provider", async () => {
   const { onboarding, provider } = setup();
   await onboarding.select(["gaming"]);
@@ -171,6 +191,69 @@ test("a plan is carried out once, including when the button is pressed twice at 
   await assert.rejects(onboarding.confirm(plan, { confirmed: true }), (error: unknown) => error instanceof ReferenceConfirmationError && error.reason === "already_confirmed");
   assert.equal(provider.requests.length, 1);
   assert.equal(provider.mutationCount, 1);
+});
+
+const reasonIs = (reason: string) => (error: unknown) => error instanceof ReferenceConfirmationError && error.reason === reason;
+
+test("a re-planned or copied plan for the same request is refused after the first one went through", async () => {
+  const { onboarding, provider } = setup();
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items.find((item) => item.recommendation.candidate.nativeId.endsWith("/dana"))?.recommendation.candidate;
+  assert.ok(candidate);
+  const { plan } = await onboarding.plan(candidate);
+  await onboarding.confirm(plan, { confirmed: true });
+
+  const again = (await onboarding.plan(candidate)).plan;
+  assert.notEqual(again, plan, "a new plan object");
+  await assert.rejects(onboarding.confirm(again, { confirmed: true }), reasonIs("already_confirmed"));
+  await assert.rejects(onboarding.confirm(structuredClone(plan), { confirmed: true }), reasonIs("already_confirmed"));
+  assert.equal(provider.requests.length, 1);
+  assert.equal(provider.mutationCount, 1);
+});
+
+test("a starter pack confirmed with a different set of members is a different request, the same set is not", async () => {
+  const { onboarding, provider } = setup({ curatedSets: [collection("games", ["alice", "bob"])] });
+  await onboarding.select(["gaming"]);
+  const pack = (await onboarding.recommend("r1")).items.find((item) => item.recommendation.candidate.kind === "starter_pack");
+  assert.ok(pack);
+  const { plan } = await onboarding.plan(pack.recommendation.candidate);
+  const bob = (plan.members ?? []).find((member) => member.accountUri.endsWith("/bob"))?.candidateId ?? "";
+  await onboarding.confirm(plan, { confirmed: true, excludeMemberCandidateIds: [bob] });
+  await assert.rejects(onboarding.confirm((await onboarding.plan(pack.recommendation.candidate)).plan, { confirmed: true, excludeMemberCandidateIds: [bob] }), reasonIs("already_confirmed"));
+  assert.equal(provider.requests.length, 1);
+  const rest = await onboarding.confirm(plan, { confirmed: true });
+  assert.deepEqual(rest.requested.length, 2);
+  assert.equal(provider.requests.length, 2);
+});
+
+test("unticking every starter-pack member is refused before the provider is contacted", async () => {
+  const { onboarding, provider } = setup({ curatedSets: [collection("games", ["alice", "bob"])] });
+  await onboarding.select(["gaming"]);
+  const pack = (await onboarding.recommend("r1")).items.find((item) => item.recommendation.candidate.kind === "starter_pack");
+  assert.ok(pack);
+  const { plan } = await onboarding.plan(pack.recommendation.candidate);
+  const everyone = (plan.members ?? []).map((member) => member.candidateId);
+  assert.equal(everyone.length, 2);
+  await assert.rejects(onboarding.confirm(plan, { confirmed: true, excludeMemberCandidateIds: everyone }), reasonIs("nothing_selected"));
+  assert.equal(provider.requests.length, 0, "the provider received nothing, not even an empty request");
+  // The refusal does not use up the plan.
+  const done = await onboarding.confirm(plan, { confirmed: true });
+  assert.equal(done.applied.length, 2);
+});
+
+test("a plan with no provider id is refused as invalid and sends nothing", async () => {
+  const { onboarding, provider, resolver } = setup();
+  await onboarding.select(["gaming"]);
+  const candidate = (await onboarding.recommend("r1")).items[0]?.recommendation.candidate;
+  assert.ok(candidate);
+  const { plan } = await onboarding.plan(candidate);
+  const lookups = resolver.requests.length;
+  for (const provider_ of [undefined, "", "   "]) {
+    const broken = { ...plan, candidate: { ...plan.candidate, provider: provider_ } } as typeof plan;
+    await assert.rejects(onboarding.confirm(broken, { confirmed: true }), reasonIs("plan_invalid"));
+  }
+  assert.equal(provider.requests.length, 0);
+  assert.equal(resolver.requests.length, lookups, "refused before any lookup");
 });
 
 test("a plan whose attempt failed can be confirmed again by the user", async () => {

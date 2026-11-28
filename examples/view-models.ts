@@ -70,25 +70,39 @@ export function explainRecommendation(
 
 export const EVIDENCE_COPY = Object.freeze({
   unverified: "Not checked. This comes from what the source told us.",
+  app_vouched: "Included from a collection this app vouches for. It was not independently checked.",
   authority_verified: "Confirmed with {authority}.",
   canonical: "Part of the built-in catalog."
 } as const);
 
+/**
+ * `checked`: the provider or the protocol confirmed it. `app_vouched`: the app itself stands behind it and
+ * nothing was checked independently. `not_checked`: only what the source said.
+ */
+export type EvidenceLevel = "checked" | "app_vouched" | "not_checked";
+
 export interface EvidenceDisplay {
   /** Only true when something was actually checked. A UI must not show a check mark when this is false. */
   showVerifiedBadge: boolean;
+  level: EvidenceLevel;
   state: RecommendationCandidate["verification"]["state"];
   text: string;
 }
 
-/** What to say about how much we know about a candidate. Default to the cautious wording. */
-export function describeCandidateEvidence(candidate: RecommendationCandidate): EvidenceDisplay {
+/**
+ * What to say about how much we know about a candidate. Default to the cautious wording.
+ * `appVouched` is for candidates the app itself marked as confirmed, such as the curated-set wrapper in
+ * the onboarding flow. The state on such a candidate says `authority_verified`, but nobody checked, so it
+ * never gets the badge, whatever its state says.
+ */
+export function describeCandidateEvidence(candidate: RecommendationCandidate, options: { appVouched?: boolean } = {}): EvidenceDisplay {
   const { state, authority } = candidate.verification;
+  if (options.appVouched === true) return Object.freeze({ showVerifiedBadge: false, level: "app_vouched" as const, state, text: EVIDENCE_COPY.app_vouched });
   if (state === "authority_verified" && authority !== undefined) {
-    return Object.freeze({ showVerifiedBadge: true, state, text: fill(EVIDENCE_COPY.authority_verified, { authority }) });
+    return Object.freeze({ showVerifiedBadge: true, level: "checked" as const, state, text: fill(EVIDENCE_COPY.authority_verified, { authority }) });
   }
-  if (state === "canonical") return Object.freeze({ showVerifiedBadge: true, state, text: EVIDENCE_COPY.canonical });
-  return Object.freeze({ showVerifiedBadge: false, state, text: EVIDENCE_COPY.unverified });
+  if (state === "canonical") return Object.freeze({ showVerifiedBadge: true, level: "checked" as const, state, text: EVIDENCE_COPY.canonical });
+  return Object.freeze({ showVerifiedBadge: false, level: "not_checked" as const, state, text: EVIDENCE_COPY.unverified });
 }
 
 export const EVENT_EVIDENCE_COPY = Object.freeze({
