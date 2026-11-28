@@ -434,6 +434,8 @@ Support dependency-correct behavior for:
 
 ## Phase 8 — Reference onboarding integration and UX examples
 
+> **Status:** implemented on branch `feat/phase8-reference-onboarding`, pending merge. Done: the reference flow, fakes, view models and tests (`examples/`, `tests/phase8-reference-*.test.ts`). Guidance only: UX copy, accessibility, and the IndexedDB/SQLite store shape. Not done: real provider adapters, real device persistence backends, ATProto spaces adapters, repo/MST proofs, HTTP signature verification, and a richer structured explanation type. Details are in [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md).
+
 ### Goal
 
 Demonstrate how applications can use the stable engine contracts without making UI design part of the recommendation core.

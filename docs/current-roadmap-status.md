@@ -41,8 +41,8 @@ The engine remains privacy-preserving, consent-respecting, opt-in, protocol-neut
 | Phase 4 — Cold-start scoring-input builder | **Complete** (PR #125) | Candidate-bound scoring bridge with stale-profile protection, bounded optional entity/graph/embedding enrichment, cancellation, and reversible scorer bindings |
 | Phase 5 — First-session recommendation orchestrator | **Complete** (PR #126) | `createRecommendationFirstSessionOrchestrator` composes profile read, cold-start discovery, injected eligibility evaluation, Phase 4 scoring input, and the existing execution orchestrator. See `recommendation-first-session-orchestrator.md` |
 | Phase 6 — Generalized recommendation action-plan contracts | **Complete** (commit d66c76b) | `createRecommendationCandidateActionPlan`: non-executable, candidate-bound plans gated on eligibility and verified provider capability. See `recommendation-candidate-action-plans.md`. The onboarding hashtag-follow plan is unchanged |
-| Phase 7 — Onboarding lifecycle and refresh | **Implemented** (branch `feat/phase7-onboarding-lifecycle`, not yet merged) | Selection edits and removals as ledger retractions, plan staleness assessment, candidate-cache invalidation, crash-safe persistence moves. See `phase7-onboarding-lifecycle.md` for limits |
-| Phase 8 — Reference onboarding integration and UX examples | **Next** | Depends on stable engine contracts |
+| Phase 7 — Onboarding lifecycle and refresh | **Complete** (merged in PRs #128 to #140, released in 0.4.0) | Selection edits and removals as ledger retractions, plan staleness assessment, candidate-cache invalidation, crash-safe persistence moves. See `phase7-onboarding-lifecycle.md` for limits |
+| Phase 8 — Reference onboarding integration and UX examples | **Implemented** (branch `feat/phase8-reference-onboarding`, not yet merged) | Runnable, dependency-free reference flow in `examples/`, tested from `tests/phase8-reference-*.test.ts`, kept out of the npm tarball. See [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md) |
 
 The idempotent signal ledger and retraction architecture is **not** Phase 4. It was implemented earlier and is a prerequisite already satisfied by the current repository.
 
@@ -174,13 +174,21 @@ explicit onboarding choices
 
 Implemented in `src/recommendation/candidate-action-plan.ts`; see [`recommendation-candidate-action-plans.md`](recommendation-candidate-action-plans.md) and [`phase6-review-checklist.md`](phase6-review-checklist.md). Plans also require fresh, verified provider capability evidence for the action. The design target was to extend the existing hashtag-follow plan into protocol-neutral, non-executable, candidate-bound plans for actions such as follow account, follow hashtag, subscribe feed/list/labeler, join/follow community, bounded starter-pack expansion, or open eligible instance signup. Every mutation remains application-executed and explicitly user-confirmed, with current identity/eligibility revalidation immediately before provider mutation.
 
-### Phase 7 — Onboarding lifecycle and refresh (implemented on `feat/phase7-onboarding-lifecycle`)
+### Phase 7 — Onboarding lifecycle and refresh (merged, released in 0.4.0)
 
 Editing and removing selections retract through the signal ledger. Reruns write nothing when nothing changed. Reported candidate facts (consent revoked, set deleted, account moved, verification lost, source gone) mark action plans stale or invalid and durably clear the candidate and explanation caches through the existing task journal. Profile records can move between device-owned and user-owned storage with copy, verify, then delete. Details, public API changes and residual limits are in [`phase7-onboarding-lifecycle.md`](phase7-onboarding-lifecycle.md).
 
-### Phase 8 — Reference onboarding integration and UX examples (next)
+### Phase 8 — Reference onboarding integration and UX examples (implemented on `feat/phase8-reference-onboarding`)
 
-Demonstrate the stable contracts without making a specific UI framework part of the engine. Local/device-owned persistence should remain the default; user-controlled ActivityPods/Solid persistence is the remote exception.
+Demonstrates the stable contracts without making a specific UI framework part of the engine. Local/device-owned persistence remains the default; user-controlled ActivityPods/Solid persistence is the remote exception. The examples use in-memory stores and fake providers, import only the public entrypoint, and are not shipped to npm users. Public API gaps found while writing it are listed in [`phase8-reference-onboarding.md`](phase8-reference-onboarding.md).
+
+Done on the branch: the reference flow, the in-memory fakes, the view models and the tests that run them.
+
+Guidance only, with no code behind it: UX copy, accessibility advice, and the IndexedDB/SQLite store shape.
+
+Not done: real provider adapters, real device persistence backends, ATProto spaces adapters, ATProto repo/MST proof checking, ActivityPub HTTP signature verification, and a richer structured explanation type (the explanation does not name the selected topic, so the reference joins it from the selection record).
+
+Merge state: this phase is on its branch and not yet merged. Flip this heading and the table row to "merged" once the PR lands.
 
 ## Other important work not to confuse with the candidate/onboarding dependency chain
 
