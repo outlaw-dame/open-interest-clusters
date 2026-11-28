@@ -123,7 +123,12 @@ test("reported candidate events travel with the profile when both places have an
   assert.equal(await onboarding.eventStore.load(REFERENCE_SUBJECT_ID), undefined, "the device copy of the events is gone");
 });
 
-test("provider-owned, shared-operator and publicly readable placements are refused", async () => {
+// The library refuses a bad placement with a TypeError and one fixed message. It carries no reason code, so
+// the codes are asserted on `checkPlacement`, which reports them, and the error type and message are
+// asserted where data would actually be written.
+const PLACEMENT_REFUSAL = (error: unknown) => error instanceof TypeError && error.message === "Recommendation state storage adapter violates placement policy.";
+
+test("provider-owned, shared-operator and publicly readable placements are refused, with the reason", async () => {
   const providerOwned = { ...POD_MANIFEST, adapterId: "provider", authority: "provider_owned" as const };
   const sharedOperator = { ...POD_MANIFEST, adapterId: "operator", authority: "shared_operator" as const };
   const publicRepo = { ...POD_MANIFEST, adapterId: "public-atproto-repo", publiclyReadable: true };
@@ -136,18 +141,19 @@ test("provider-owned, shared-operator and publicly readable placements are refus
   assert.equal(checkPlacement(DEVICE_MANIFEST).allowed, true);
   assert.equal(checkPlacement(POD_MANIFEST).allowed, true);
 
-  // The same refusals hold where data would actually be written.
+  // The same refusals hold where data would actually be written, including the public repository.
   const { onboarding, device } = await onDevice();
   onboarding.allowServerSideProcessing();
-  for (const manifest of [providerOwned, sharedOperator]) {
+  for (const manifest of [providerOwned, sharedOperator, publicRepo]) {
     const rogue = createInMemoryProfileAdapter(manifest);
-    await assert.rejects(onboarding.persistProfile(rogue));
-    await assert.rejects(moveProfileToPod({ onboarding, device: { adapter: device }, pod: { adapter: rogue }, retry: NO_WAIT }));
+    await assert.rejects(onboarding.persistProfile(rogue), PLACEMENT_REFUSAL, `${manifest.adapterId}: persistProfile`);
+    await assert.rejects(moveProfileToPod({ onboarding, device: { adapter: device }, pod: { adapter: rogue }, retry: NO_WAIT }), PLACEMENT_REFUSAL, `${manifest.adapterId}: move`);
     assert.equal(rogue.records.size, 0);
     assert.equal(rogue.log.includes("write"), false);
   }
   assert.ok(device.records.has(SUBJECT_KEY), "a refused move leaves the device copy");
   assert.throws(() => setup({ extra: { candidateEventStore: createInMemoryRecommendationCandidateEventStore(providerOwned) } }), "a provider-owned event store is refused");
+  assert.throws(() => setup({ extra: { candidateEventStore: createInMemoryRecommendationCandidateEventStore(publicRepo) } }), PLACEMENT_REFUSAL, "a publicly readable event store is refused");
 });
 
 test("deleting everything removes the profile from every adapter that holds it", async () => {

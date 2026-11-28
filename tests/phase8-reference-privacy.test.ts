@@ -18,6 +18,20 @@ const FORBIDDEN = [
   "Gaming"
 ];
 
+/** The only lookups the flow may make: the accounts in the fixtures, as full URIs. Nothing else, such as a topic id. */
+const ALLOWED_LOOKUPS = new Set(["alice", "bob", "dana", "erin", "frank"].map((name) => `https://social.example/users/${name}`));
+
+function assertOnlyAccountLookups(lookups: readonly string[]): void {
+  for (const lookup of lookups) assert.ok(ALLOWED_LOOKUPS.has(lookup), `an unexpected resolver lookup: ${JSON.stringify(lookup)}`);
+}
+
+test("the lookup check rejects anything that is not a known account URI, including a lowercase topic id", () => {
+  assertOnlyAccountLookups(["https://social.example/users/alice"]);
+  assert.throws(() => assertOnlyAccountLookups(["https://social.example/users/alice", "gaming"]), /unexpected resolver lookup/u);
+  assert.throws(() => assertOnlyAccountLookups(["https://social.example/users/gaming"]), /unexpected resolver lookup/u);
+  assert.throws(() => assertOnlyAccountLookups(["https://social.example/users/alice?topic=gaming"]), /unexpected resolver lookup/u);
+});
+
 test("nothing a fake provider, source or resolver receives contains profile or signal content", async () => {
   const set = collection("games", ["alice", "bob"]);
   const { onboarding, provider, resolver, directory, clock } = setup({ curatedSets: [set] });
@@ -43,6 +57,7 @@ test("nothing a fake provider, source or resolver receives contains profile or s
   assert.ok(directory.queries.length >= 2);
   assert.ok(resolver.requests.length > 0);
 
+  assertOnlyAccountLookups(resolver.requests);
   const seen = JSON.stringify({ provider: provider.requests, queries: directory.queries, lookups: resolver.requests });
   for (const word of FORBIDDEN) assert.equal(seen.includes(word), false, `a request contained "${word}"`);
 
